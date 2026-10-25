@@ -85,7 +85,7 @@ so recheck before relying on exact line numbers.
     The default directory is `~/.t3/worktrees`, and it can be changed in Settings → Storage
     ([project-settings.md L171-L176](https://github.com/pingdotgg/t3code/blob/5b35402623d7d1d88eaa472807272a6c2e78012a/docs/user/project-settings.md#L171-L176)).
     Submodules are initialized and a project setup script may run
-    ([ThreadLaunchService.ts L310-L325](https://github.com/pingdotgg/t3code/blob/5b35402623d7d1d88eaa472807272a6c2e78012a/apps/server/src/orchestration-v2/ThreadLaunchService.ts#L310-L325)).
+    ([GitVcsDriverCore.ts L3736-L3740](https://github.com/pingdotgg/t3code/blob/5b35402623d7d1d88eaa472807272a6c2e78012a/apps/server/src/vcs/GitVcsDriverCore.ts#L3736-L3740), [ThreadLaunchService.ts L310-L325](https://github.com/pingdotgg/t3code/blob/5b35402623d7d1d88eaa472807272a6c2e78012a/apps/server/src/orchestration-v2/ThreadLaunchService.ts#L310-L325)).
   - After creation, the temporary branch is renamed in the background using a model-generated
     name, which follows the branch naming settings. Other threads that share the worktree are
     updated to the new branch name
