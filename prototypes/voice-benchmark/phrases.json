@@ -1,0 +1,21 @@
+{
+  "turns": [
+    { "text": "Lance une tâche sur le projet t3code-voice : corrige le test flaky dans auth.spec.ts.", "terms": ["t3code-voice", "flaky", "auth.spec.ts"] },
+    { "text": "Merge la branche feature/push-notifications dans main après le rebase.", "terms": ["feature/push-notifications", "main", "rebase"] },
+    { "text": "Est-ce que le build de la CI GitHub Actions est passé ?", "terms": ["build", "CI", "GitHub Actions"] },
+    { "text": "Demande à Claude de faire un git stash puis un cherry-pick du dernier commit.", "terms": ["Claude", "git stash", "cherry-pick", "commit"] },
+    { "text": "ESLint remonte une erreur dans le useEffect, regarde le hook useSession.", "terms": ["ESLint", "useEffect", "useSession"] },
+    { "text": "Ouvre une pull request avec le label wayfinder et assigne-la à Thomas.", "terms": ["pull request", "wayfinder", "Thomas"] },
+    { "text": "Relance pnpm install puis pnpm test dans le package contracts.", "terms": ["pnpm install", "pnpm test", "contracts"] },
+    { "text": "Quel est le statut du worktree sur la branche fix/websocket-reconnect ?", "terms": ["worktree", "fix/websocket-reconnect"] },
+    { "text": "Accepte une fois la demande de permission pour exécuter npm run migrate.", "terms": ["npm run migrate"] },
+    { "text": "Interromps le run en cours sur le thread Supabase RLS.", "terms": ["run", "thread", "Supabase", "RLS"] },
+    { "text": "Le endpoint oauth token renvoie une 401 Unauthorized depuis le dernier deploy.", "terms": ["oauth", "token", "401", "Unauthorized", "deploy"] },
+    { "text": "Ajoute un retry avec exponential backoff dans le client APNs.", "terms": ["retry", "exponential backoff", "APNs"] }
+  ],
+  "announcements": [
+    "La tâche « Fix flaky auth.spec.ts » sur la branche feature/push-notifications est terminée : le build CI est vert et trois fichiers ont été modifiés.",
+    "Claude attend ta réponse sur le thread Supabase RLS : il demande la permission d'exécuter npm run migrate. Tu acceptes une fois ou tu refuses ?",
+    "Codex a ouvert une pull request sur t3code-voice : il a ajouté un retry avec exponential backoff dans le client APNs et mis à jour le useEffect du hook useSession."
+  ]
+}

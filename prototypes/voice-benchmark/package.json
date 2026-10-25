@@ -1,0 +1,14 @@
+{
+  "name": "voice-benchmark-prototype",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE — throwaway. Answers ticket #12 (French voice quality, latency and cost).",
+  "scripts": {
+    "synth": "node bench.mjs synth",
+    "turns": "node bench.mjs turns",
+    "idle": "node bench.mjs idle"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
