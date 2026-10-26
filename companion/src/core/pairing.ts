@@ -16,7 +16,7 @@ export const PAIRING_WINDOW_MS = 5 * 60_000;
  */
 const FAILED_ATTEMPTS = { limit: 10, windowMs: 10 * 60_000 };
 
-/** Opens a pairing window, replacing any open one, and returns its code (a secret). */
+/** Opens a new pairing window and returns its code (a secret). */
 export async function openPairingWindow(
   store: ConfigStore,
   now: number,
