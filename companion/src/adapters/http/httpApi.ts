@@ -63,15 +63,18 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
   };
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
-    // Counted before the token check, so guessing tokens is throttled too.
-    if (options.clientIpHeader === undefined && !warnedAboutProxy && isProxied(request)) {
+    const peer = request.socket.remoteAddress ?? "unknown";
+    const fromProxy = isLoopback(peer) && hasForwardingHeader(request);
+    if (options.clientIpHeader === undefined && fromProxy && !warnedAboutProxy) {
       warnedAboutProxy = true;
       log(
         't3-voice: requests come through a proxy, but "server.clientIpHeader" is not set, ' +
           "so every caller shares one per-IP limit. Set it (cf-connecting-ip behind Cloudflare).",
       );
     }
-    if (refused(response, perIp.take(rateKey(clientIp(request, options.clientIpHeader))))) return;
+    // Counted before the token check, so guessing tokens is throttled too.
+    const ip = clientIp(request, peer, options.clientIpHeader);
+    if (refused(response, perIp.take(rateKey(ip)))) return;
 
     const token = bearerToken(request);
     const device = token === null ? null : await options.auth.authenticate(token);
@@ -95,8 +98,7 @@ function refused(response: ServerResponse, decision: RateDecision): boolean {
   return true;
 }
 
-function clientIp(request: IncomingMessage, header: string | undefined): string {
-  const peer = request.socket.remoteAddress ?? "unknown";
+function clientIp(request: IncomingMessage, peer: string, header: string | undefined): string {
   // Only a local proxy (cloudflared) may say who the caller is; anyone else could lie.
   if (header === undefined || !isLoopback(peer)) return peer;
   const forwarded = request.headers[header.toLowerCase()];
@@ -122,13 +124,12 @@ function rateKey(ip: string): string {
     .join(":")}::/64`;
 }
 
-function isProxied(request: IncomingMessage): boolean {
+function hasForwardingHeader(request: IncomingMessage): boolean {
   const headers = request.headers;
   return (
-    isLoopback(request.socket.remoteAddress ?? "") &&
-    (headers["cf-connecting-ip"] !== undefined ||
-      headers["x-forwarded-for"] !== undefined ||
-      headers.forwarded !== undefined)
+    headers["cf-connecting-ip"] !== undefined ||
+    headers["x-forwarded-for"] !== undefined ||
+    headers.forwarded !== undefined
   );
 }
 

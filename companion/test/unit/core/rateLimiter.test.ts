@@ -49,21 +49,41 @@ describe("RateLimiter", () => {
     assert.equal(limiter.trackedKeys(), 1);
   });
 
-  test("refuses new keys once it tracks the maximum, so a flood of callers cannot fill memory", () => {
+  test("when it tracks the maximum, forgets the oldest caller rather than refuse a new one", () => {
     const clock = { now: 0 };
     const limiter = new RateLimiter({
-      limit: 5,
+      limit: 1,
       windowMs: 60_000,
       maxKeys: 2,
       now: () => clock.now,
     });
 
     limiter.take("ip:1");
+    clock.now = 1_000;
     limiter.take("ip:2");
-    assert.deepEqual(limiter.take("ip:3"), { allowed: false, retryAfterMs: 60_000 });
-    assert.deepEqual(limiter.take("ip:1"), { allowed: true });
-
-    clock.now = 60_000;
+    clock.now = 2_000;
     assert.deepEqual(limiter.take("ip:3"), { allowed: true });
+    assert.equal(limiter.trackedKeys(), 2);
+    assert.equal(limiter.take("ip:2").allowed, false);
+    assert.equal(limiter.take("ip:3").allowed, false);
+  });
+
+  test("a key whose window restarts counts as the newest", () => {
+    const clock = { now: 0 };
+    const limiter = new RateLimiter({
+      limit: 1,
+      windowMs: 60_000,
+      maxKeys: 2,
+      now: () => clock.now,
+    });
+
+    limiter.take("ip:1");
+    clock.now = 30_000;
+    limiter.take("ip:2");
+    clock.now = 60_000;
+    limiter.take("ip:1");
+    clock.now = 61_000;
+    limiter.take("ip:3");
+    assert.equal(limiter.take("ip:1").allowed, false, "ip:1 is still counted");
   });
 });

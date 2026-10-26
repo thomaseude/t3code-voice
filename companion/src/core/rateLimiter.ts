@@ -4,7 +4,7 @@ export interface RateLimiterOptions {
   /** Requests allowed per key in one window. */
   limit: number;
   windowMs: number;
-  /** Keys tracked at most; past it, new keys are refused until windows end. */
+  /** Keys tracked at most; past it, the oldest key is forgotten. */
   maxKeys?: number;
   /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
@@ -17,29 +17,30 @@ export class RateLimiter {
   private readonly windowMs: number;
   private readonly maxKeys: number;
   private readonly now: () => number;
-  /** Per key: when its window started and how many requests it counted. */
+  /**
+   * Per key: when its window started and how many requests it counted. A Map keeps
+   * insertion order, and a key is re-inserted when its window restarts, so the first
+   * entry is always the oldest window.
+   */
   private readonly windows = new Map<string, { start: number; count: number }>();
-  private lastSweep: number;
 
   constructor({ limit, windowMs, maxKeys = 10_000, now = Date.now }: RateLimiterOptions) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.maxKeys = maxKeys;
     this.now = now;
-    this.lastSweep = now();
   }
 
   /** Counts one request for the key and says whether it may go through. */
   take(key: string): RateDecision {
     const now = this.now();
-    this.sweep(now);
+    this.dropEndedWindows(now);
 
     let window = this.windows.get(key);
-    if (window === undefined && this.windows.size >= this.maxKeys) {
-      this.sweep(now, true);
-      if (this.windows.size >= this.maxKeys) return { allowed: false, retryAfterMs: this.windowMs };
-    }
-    if (window === undefined || now - window.start >= this.windowMs) {
+    if (window === undefined) {
+      // Full: forget the oldest caller. Refusing newcomers instead would let a flood of
+      // addresses lock everyone else out.
+      if (this.windows.size >= this.maxKeys) this.dropOldest();
       window = { start: now, count: 0 };
       this.windows.set(key, window);
     }
@@ -54,12 +55,16 @@ export class RateLimiter {
     return this.windows.size;
   }
 
-  /** Drops ended windows, at most once per window length unless forced. */
-  private sweep(now: number, force = false) {
-    if (!force && now - this.lastSweep < this.windowMs) return;
-    this.lastSweep = now;
+  /** Oldest windows come first, so this stops at the first one still running. */
+  private dropEndedWindows(now: number) {
     for (const [key, window] of this.windows) {
-      if (now - window.start >= this.windowMs) this.windows.delete(key);
+      if (now - window.start < this.windowMs) return;
+      this.windows.delete(key);
     }
+  }
+
+  private dropOldest() {
+    const oldest = this.windows.keys().next();
+    if (!oldest.done) this.windows.delete(oldest.value);
   }
 }
