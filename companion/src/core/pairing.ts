@@ -5,7 +5,7 @@
 import type { ConfigStore, PairingWindow } from "../ports/configStore.ts";
 import type { Device, DeviceAuth } from "../ports/deviceAuth.ts";
 import { RateLimiter } from "./rateLimiter.ts";
-import { randomSecret, sameHash, sha256 } from "./secrets.ts";
+import { randomSecret, sha256 } from "./secrets.ts";
 
 /** How long a pairing window stays open. */
 export const PAIRING_WINDOW_MS = 5 * 60_000;
@@ -71,11 +71,10 @@ export class DevicePairing {
     const limit = this.failures.check(FAILURES_KEY);
     if (!limit.allowed) return { status: "limited", retryAfterMs: limit.retryAfterMs };
 
-    const window = await this.store.loadPairingWindow();
+    const window = await this.store.loadPairingWindow(sha256(code));
     if (
       window === null ||
       !(this.now() < Date.parse(window.expiresAt)) ||
-      !sameHash(window.codeSha256, sha256(code)) ||
       (await this.codeWasUsed(window.codeSha256))
     ) {
       this.failures.take(FAILURES_KEY);

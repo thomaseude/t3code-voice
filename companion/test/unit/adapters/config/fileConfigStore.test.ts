@@ -299,7 +299,7 @@ describe("FileConfigStore", () => {
   });
 
   describe("revocations", () => {
-    test("are appended to a journal readable by the owner only; the first date counts", async () => {
+    test("are saved one file per device, readable by the owner only; the first date counts", async () => {
       const dir = await tempDir();
       const store = new FileConfigStore(dir);
       await store.updateDevices(() => [DEVICE, pairedDevice({ id: "d2" })]);
@@ -307,7 +307,8 @@ describe("FileConfigStore", () => {
       await store.revokeDevice(DEVICE.id, "2026-10-26T12:00:00.000Z");
       await store.revokeDevice(DEVICE.id, "2026-10-27T12:00:00.000Z");
 
-      assert.equal((await stat(join(dir, "revocations.jsonl"))).mode & 0o777, 0o600);
+      assert.equal((await stat(join(dir, "revoked"))).mode & 0o777, 0o700);
+      assert.equal((await stat(join(dir, "revoked", `${DEVICE.id}.json`))).mode & 0o777, 0o600);
       const devices = await new FileConfigStore(dir).loadDevices();
       assert.deepEqual(
         devices.map((device) => device.revokedAt),
@@ -315,7 +316,7 @@ describe("FileConfigStore", () => {
       );
     });
 
-    test("a revocation date in the device list is ignored: only the journal revokes", async () => {
+    test("a revocation date in the device list is ignored: only revokeDevice revokes", async () => {
       const dir = await tempDir();
       const store = new FileConfigStore(dir);
 
@@ -324,59 +325,84 @@ describe("FileConfigStore", () => {
       assert.equal((await store.loadDevices())[0]?.revokedAt, null);
     });
 
-    test("refuses a damaged journal rather than letting a revoked device through", async () => {
-      const dir = await privateDir();
-      await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [DEVICE] }), {
-        mode: 0o600,
-      });
-      await writeFile(join(dir, "revocations.jsonl"), '{"id":"d1"}\n', { mode: 0o600 });
+    test("a damaged revocation, for example cut short by a full disk, still revokes its device and only it", async () => {
+      const dir = await tempDir();
+      const store = new FileConfigStore(dir);
+      await store.updateDevices(() => [DEVICE, pairedDevice({ id: "d2" })]);
+      await mkdir(join(dir, "revoked"), { mode: 0o700 });
+      await writeFile(join(dir, "revoked", `${DEVICE.id}.json`), '{"revo', { mode: 0o600 });
 
-      await assert.rejects(new FileConfigStore(dir).loadDevices(), /revocations\.jsonl is damaged/);
+      const [revoked, other] = await store.loadDevices();
+
+      assert.equal(typeof revoked?.revokedAt, "string");
+      assert.equal(other?.revokedAt, null);
     });
 
-    test("refuses a journal other users can read", async () => {
-      const dir = await privateDir();
-      await writeFile(join(dir, "revocations.jsonl"), "", { mode: 0o644 });
+    test("refuses a revoke for an id that is not a device id, which could name another file", async () => {
+      const store = new FileConfigStore(await tempDir());
 
-      await assert.rejects(new FileConfigStore(dir).loadDevices(), /chmod 600/);
+      await assert.rejects(
+        store.revokeDevice("../config", "2026-10-26T12:00:00.000Z"),
+        /device id/,
+      );
     });
   });
 
-  describe("the pairing window", () => {
+  describe("pairing windows", () => {
     const WINDOW = { codeSha256: "c".repeat(64), expiresAt: "2026-10-26T12:05:00.000Z" };
+    const NEWER = { codeSha256: "d".repeat(64), expiresAt: "2026-10-26T12:06:00.000Z" };
 
-    test("is closed when nothing opened it", async () => {
-      assert.equal(await new FileConfigStore(await tempDir()).loadPairingWindow(), null);
+    test("none is open when nothing opened one", async () => {
+      const store = new FileConfigStore(await tempDir());
+      assert.equal(await store.loadPairingWindow(WINDOW.codeSha256), null);
     });
 
-    test("is saved readable by the owner only, read back, then cleared", async () => {
+    test("a window is saved readable by the owner only, read back by its code, then cleared", async () => {
       const dir = await tempDir();
       await new FileConfigStore(dir).savePairingWindow(WINDOW);
 
-      assert.equal((await stat(join(dir, "pairing-window.json"))).mode & 0o777, 0o600);
-      assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(), WINDOW);
+      assert.equal((await stat(join(dir, "pairing-windows"))).mode & 0o777, 0o700);
+      assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(WINDOW.codeSha256), WINDOW);
+      assert.equal(await new FileConfigStore(dir).loadPairingWindow(NEWER.codeSha256), null);
       await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
-      assert.equal(await new FileConfigStore(dir).loadPairingWindow(), null);
+      assert.equal(await new FileConfigStore(dir).loadPairingWindow(WINDOW.codeSha256), null);
       await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
     });
 
-    test("clearing leaves alone a window that holds another code", async () => {
+    test("opening a window closes the others", async () => {
       const dir = await tempDir();
-      const newer = { ...WINDOW, codeSha256: "d".repeat(64) };
-      await new FileConfigStore(dir).savePairingWindow(newer);
+      const store = new FileConfigStore(dir);
+      await store.savePairingWindow(WINDOW);
 
-      await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
+      await store.savePairingWindow(NEWER);
 
-      assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(), newer);
+      assert.equal(await store.loadPairingWindow(WINDOW.codeSha256), null);
+      assert.deepEqual(await store.loadPairingWindow(NEWER.codeSha256), NEWER);
+    });
+
+    test("clearing an old window leaves a newer one alone", async () => {
+      const dir = await tempDir();
+      const store = new FileConfigStore(dir);
+      await store.savePairingWindow(NEWER);
+
+      await store.clearPairingWindow(WINDOW.codeSha256);
+
+      assert.deepEqual(await store.loadPairingWindow(NEWER.codeSha256), NEWER);
     });
 
     test("refuses a damaged window rather than opening it", async () => {
       const dir = await privateDir();
-      await writeFile(join(dir, "pairing-window.json"), JSON.stringify({ expiresAt: "x" }), {
-        mode: 0o600,
-      });
+      await mkdir(join(dir, "pairing-windows"), { mode: 0o700 });
+      await writeFile(
+        join(dir, "pairing-windows", `${WINDOW.codeSha256}.json`),
+        JSON.stringify({ expiresAt: "x" }),
+        { mode: 0o600 },
+      );
 
-      await assert.rejects(new FileConfigStore(dir).loadPairingWindow(), /damaged/);
+      await assert.rejects(
+        new FileConfigStore(dir).loadPairingWindow(WINDOW.codeSha256),
+        /damaged/,
+      );
     });
   });
 });

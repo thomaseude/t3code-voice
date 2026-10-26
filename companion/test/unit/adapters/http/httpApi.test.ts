@@ -300,10 +300,10 @@ describe("Pairing (POST /pair)", () => {
   test("two requests sent at the same time with the same code pair one device", async () => {
     const api = await startPairingApi();
     const { code } = await api.openWindow();
-    // A slow disk: both requests read the window before either one closes it.
+    // A slow disk: both requests read the window before either one uses the code up.
     const load = api.store.loadPairingWindow.bind(api.store);
-    api.store.loadPairingWindow = async () => {
-      const window = await load();
+    api.store.loadPairingWindow = async (codeSha256) => {
+      const window = await load(codeSha256);
       await new Promise((resolve) => setTimeout(resolve, 20));
       return window;
     };

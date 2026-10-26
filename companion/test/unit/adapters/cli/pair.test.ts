@@ -112,7 +112,10 @@ describe("t3-voice pair", () => {
 
     assert.equal(await run.done, 1);
     assert.equal(store.pairingWindow, other);
-    assert.equal(run.lines.at(-1), 'Another "t3-voice pair" replaced this pairing window.');
+    assert.equal(
+      run.lines.at(-1),
+      'The pairing window was closed, or another "t3-voice pair" replaced it.',
+    );
   });
 
   test("needs the public URL of the companion", async () => {

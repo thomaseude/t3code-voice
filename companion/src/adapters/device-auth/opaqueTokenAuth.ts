@@ -79,10 +79,15 @@ export class OpaqueTokenAuth implements DeviceAuth {
 
     // The device missed the previous replacement, if any: that one is dropped.
     const replacement = newToken();
-    const saved = await this.changeIfStill(device, (current) => ({
-      ...current,
-      nextToken: { sha256: sha256(replacement), issuedAt: new Date(now).toISOString() },
-    }));
+    const saved = await this.changeIfStill(device, (current) =>
+      // Another request sent a replacement meanwhile: that one counts.
+      current.nextToken?.sha256 !== device.nextToken?.sha256
+        ? null
+        : {
+            ...current,
+            nextToken: { sha256: sha256(replacement), issuedAt: new Date(now).toISOString() },
+          },
+    );
     return saved ? { ...authenticated, replacementToken: replacement } : authenticated;
   }
 
@@ -96,38 +101,38 @@ export class OpaqueTokenAuth implements DeviceAuth {
     usedSha256: string,
   ): Promise<Authentication> {
     const now = new Date(this.now()).toISOString();
-    await this.store.updateDevices((devices) =>
-      devices.map((current) => {
-        if (current.id !== device.id || current.revokedAt !== null) return current;
-        // Another request already promoted it.
-        if (current.tokenSha256 !== device.tokenSha256) return current;
-        const newer = current.nextToken?.sha256 === usedSha256 ? null : current.nextToken;
-        return { ...current, tokenSha256: usedSha256, nextToken: newer, tokenIssuedAt: now };
-      }),
-    );
+    await this.changeIfStill(device, (current) => ({
+      ...current,
+      tokenSha256: usedSha256,
+      nextToken: current.nextToken?.sha256 === usedSha256 ? null : current.nextToken,
+      tokenIssuedAt: now,
+    }));
     return { device: summary(device), replacementToken: null };
   }
 
   /**
-   * Applies the change only if the device's tokens are still the ones just checked and it
-   * was not revoked meanwhile. Otherwise another request already changed them, or
+   * Applies the change (null: no change) only if the device still has the token just
+   * checked and was not revoked meanwhile. Otherwise another request already changed it, or
    * `t3-voice devices revoke` ran: the token was valid when checked, so the request goes on.
    */
   private async changeIfStill(
     seen: PairedDevice,
-    change: (device: PairedDevice) => PairedDevice,
+    change: (device: PairedDevice) => PairedDevice | null,
   ): Promise<boolean> {
     let changed = false;
     await this.store.updateDevices((devices) =>
       devices.map((device) => {
-        const unchanged =
-          device.id === seen.id &&
-          device.revokedAt === null &&
-          device.tokenSha256 === seen.tokenSha256 &&
-          device.nextToken?.sha256 === seen.nextToken?.sha256;
-        if (!unchanged) return device;
+        if (
+          device.id !== seen.id ||
+          device.revokedAt !== null ||
+          device.tokenSha256 !== seen.tokenSha256
+        ) {
+          return device;
+        }
+        const result = change(device);
+        if (result === null) return device;
         changed = true;
-        return change(device);
+        return result;
       }),
     );
     return changed;

@@ -38,8 +38,13 @@ export class InMemoryConfigStore implements ConfigStore {
   async loadDevices() {
     return this.devices;
   }
+  /** Like the file store, it keeps revocations as they were: only revokeDevice revokes. */
   async updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]) {
-    this.devices = change(this.devices);
+    const revoked = new Map(this.devices.map((device) => [device.id, device.revokedAt]));
+    this.devices = change(this.devices).map((device) => ({
+      ...device,
+      revokedAt: revoked.get(device.id) ?? null,
+    }));
     return this.devices;
   }
   async revokeDevice(id: string, revokedAt: string) {
@@ -47,8 +52,8 @@ export class InMemoryConfigStore implements ConfigStore {
       device.id === id && device.revokedAt === null ? { ...device, revokedAt } : device,
     );
   }
-  async loadPairingWindow() {
-    return this.pairingWindow;
+  async loadPairingWindow(codeSha256: string) {
+    return this.pairingWindow?.codeSha256 === codeSha256 ? this.pairingWindow : null;
   }
   async savePairingWindow(window: PairingWindow) {
     this.pairingWindow = window;

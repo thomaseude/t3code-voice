@@ -50,13 +50,8 @@ export async function runPair({
       out(`Paired "${paired.name}" (${paired.id}).`);
       return 0;
     }
-    const current = await store.loadPairingWindow();
-    if (current?.codeSha256 !== window.codeSha256) {
-      out(
-        current === null
-          ? "The pairing window was closed."
-          : 'Another "t3-voice pair" replaced this pairing window.',
-      );
+    if ((await store.loadPairingWindow(window.codeSha256)) === null) {
+      out('The pairing window was closed, or another "t3-voice pair" replaced it.');
       return 1;
     }
     if (event === "stop") {

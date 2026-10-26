@@ -4,9 +4,9 @@
 // directory that other users can open is refused. Secrets are only read from and written to
 // these files: they are never printed or logged.
 
-import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type CompanionConfig,
   ConfigError,
@@ -19,8 +19,14 @@ import type { T3Pairing } from "../../ports/t3Backend.ts";
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
 const DEVICES_FILE = "devices.json";
-const PAIRING_WINDOW_FILE = "pairing-window.json";
-const REVOCATIONS_FILE = "revocations.jsonl";
+/** One file per revoked device: `<device id>.json`. */
+const REVOKED_DIR = "revoked";
+/** One file per open pairing window: `<SHA-256 of its code>.json`. */
+const PAIRING_WINDOWS_DIR = "pairing-windows";
+
+/** Device ids and code hashes become file names: nothing else may. */
+const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** A device as devices.json holds it: revocations live in their own file. */
 type StoredDevice = Omit<PairedDevice, "revokedAt">;
@@ -126,58 +132,80 @@ export class FileConfigStore implements ConfigStore {
   }
 
   async revokeDevice(id: string, revokedAt: string): Promise<void> {
-    await this.ensurePrivateDir();
-    // One line added at the end: it cannot overwrite what `serve` or another revoke wrote.
-    await appendFile(
-      join(this.location, REVOCATIONS_FILE),
-      `${JSON.stringify({ id, revokedAt })}\n`,
-      { mode: 0o600 },
-    );
+    if (!DEVICE_ID.test(id)) throw new ConfigError(`"${id}" is not a device id.`);
+    const name = join(REVOKED_DIR, `${id}.json`);
+    // The first date counts.
+    if ((await modeOf(join(this.location, name))) !== null) return;
+    // A file of its own, written in one step: it cannot overwrite what `serve` or
+    // another revoke wrote, and a write cut short leaves nothing behind.
+    await this.writePrivateFile(name, `${JSON.stringify({ revokedAt })}\n`);
   }
 
-  /** Device id → date of its first revocation. */
+  /** Device id → date of its revocation. */
   private async loadRevocations(): Promise<Map<string, string>> {
-    const path = join(this.location, REVOCATIONS_FILE);
-    const text = await this.readPrivateText(path);
     const revocations = new Map<string, string>();
-    for (const line of (text ?? "").split("\n")) {
-      if (line.trim() === "") continue;
-      let entry: { id?: unknown; revokedAt?: unknown } | null = null;
+    for (const file of await this.privateFilesIn(REVOKED_DIR)) {
+      const path = join(this.location, REVOKED_DIR, file);
+      let revokedAt: unknown = null;
       try {
-        entry = JSON.parse(line);
+        revokedAt = JSON.parse((await this.readPrivateText(path)) ?? "null")?.revokedAt;
       } catch {}
-      if (typeof entry?.id !== "string" || typeof entry?.revokedAt !== "string") {
-        // Fail closed: a revocation we cannot read must not let the device through.
-        throw new ConfigError(`${path} is damaged.`);
-      }
-      if (!revocations.has(entry.id)) revocations.set(entry.id, entry.revokedAt);
+      // A damaged file still revokes its device: fail closed, for that device only.
+      if (typeof revokedAt !== "string")
+        revokedAt = new Date((await stat(path)).mtimeMs).toISOString();
+      revocations.set(file.slice(0, -".json".length), revokedAt as string);
     }
     return revocations;
   }
 
-  async loadPairingWindow(): Promise<PairingWindow | null> {
-    const path = join(this.location, PAIRING_WINDOW_FILE);
+  async loadPairingWindow(codeSha256: string): Promise<PairingWindow | null> {
+    if (!SHA256_HEX.test(codeSha256)) return null;
+    const path = join(this.location, PAIRING_WINDOWS_DIR, `${codeSha256}.json`);
     const data = await this.readPrivateJson(path);
     if (data === null) return null;
-    if (typeof data?.codeSha256 !== "string" || Number.isNaN(Date.parse(data?.expiresAt))) {
+    if (Number.isNaN(Date.parse(data?.expiresAt))) {
       throw new ConfigError(`${path} is damaged; run "t3-voice pair" again.`);
     }
-    return { codeSha256: data.codeSha256, expiresAt: data.expiresAt };
+    return { codeSha256, expiresAt: data.expiresAt };
   }
 
   async savePairingWindow(window: PairingWindow): Promise<void> {
-    await this.writePrivateFile(PAIRING_WINDOW_FILE, `${JSON.stringify(window, null, 2)}\n`);
+    const own = `${window.codeSha256}.json`;
+    await this.writePrivateFile(
+      join(PAIRING_WINDOWS_DIR, own),
+      `${JSON.stringify({ expiresAt: window.expiresAt }, null, 2)}\n`,
+    );
+    for (const file of await this.privateFilesIn(PAIRING_WINDOWS_DIR)) {
+      if (file !== own) await rm(join(this.location, PAIRING_WINDOWS_DIR, file), { force: true });
+    }
   }
 
   async clearPairingWindow(codeSha256: string): Promise<void> {
-    if ((await this.loadPairingWindow())?.codeSha256 !== codeSha256) return;
-    await rm(join(this.location, PAIRING_WINDOW_FILE), { force: true });
+    if (!SHA256_HEX.test(codeSha256)) return;
+    // Only this window's own file: a newer window is another file.
+    await rm(join(this.location, PAIRING_WINDOWS_DIR, `${codeSha256}.json`), { force: true });
   }
 
-  /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
+  /** The `.json` files of a subdirectory (temp files left out); none when it is missing. */
+  private async privateFilesIn(dir: string): Promise<string[]> {
+    const path = join(this.location, dir);
+    await this.assertPrivateDir(path);
+    try {
+      return (await readdir(path)).filter((file) => file.endsWith(".json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  /**
+   * Writes atomically (temp file + rename) so a crash never leaves a half-written secret.
+   * `name` may be in a subdirectory, which is created private too.
+   */
   private async writePrivateFile(name: string, content: string): Promise<void> {
-    await this.ensurePrivateDir();
     const path = join(this.location, name);
+    await this.ensurePrivateDir();
+    await this.ensurePrivateDir(dirname(path));
     const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, content, { mode: 0o600 });
     await chmod(tempPath, 0o600);
@@ -199,6 +227,7 @@ export class FileConfigStore implements ConfigStore {
   private async readPrivateText(path: string): Promise<string | null> {
     // Check the directory even when the file is missing: setup must fail before it pairs.
     await this.assertPrivateDir();
+    await this.assertPrivateDir(dirname(path));
     const mode = await modeOf(path);
     if (mode === null) return null;
     if ((mode & 0o077) !== 0) {
@@ -207,19 +236,17 @@ export class FileConfigStore implements ConfigStore {
     return readFile(path, "utf8");
   }
 
-  private async ensurePrivateDir(): Promise<void> {
+  private async ensurePrivateDir(dir = this.location): Promise<void> {
     // Tighten the directory only if we created it. An existing one is checked, never changed.
-    const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
-    if (created !== undefined) await chmod(this.location, 0o700);
-    else await this.assertPrivateDir();
+    const created = await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (created !== undefined) await chmod(dir, 0o700);
+    else await this.assertPrivateDir(dir);
   }
 
-  private async assertPrivateDir(): Promise<void> {
-    const mode = (await modeOf(this.location)) ?? 0;
+  private async assertPrivateDir(dir = this.location): Promise<void> {
+    const mode = (await modeOf(dir)) ?? 0;
     if ((mode & 0o077) !== 0) {
-      throw new ConfigError(
-        `${this.location} can be opened by other users; run "chmod 700 ${this.location}".`,
-      );
+      throw new ConfigError(`${dir} can be opened by other users; run "chmod 700 ${dir}".`);
     }
   }
 }
