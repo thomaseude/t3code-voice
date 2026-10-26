@@ -1,11 +1,16 @@
-#!/usr/bin/env node
-// Entry point of the `t3-voice` command.
+// Driving adapter: the `t3-voice` command line. It only knows the ports; main.ts wires
+// the real adapters in.
 
-import { runSetup } from "./commands/setup.ts";
-import { runStatus } from "./commands/status.ts";
-import { configDir, DEFAULT_T3_URL } from "./config.ts";
+import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
+import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
 import { scrubSecrets } from "./secrets.ts";
-import { T3IncompatibleError } from "./t3/compatibility.ts";
+import { runSetup } from "./setup.ts";
+import { runStatus } from "./status.ts";
+
+export interface CliDependencies {
+  store: ConfigStore;
+  t3: T3Connector;
+}
 
 const EXIT_ERROR = 1;
 const EXIT_USAGE = 2;
@@ -22,16 +27,29 @@ Commands:
 
 Configuration and secrets live in ~/.config/t3voice/ (or $T3VOICE_CONFIG_DIR).`;
 
-async function main(argv: string[]): Promise<number> {
+/** Runs one command and returns the process exit code. */
+export async function runCli(argv: string[], deps: CliDependencies): Promise<number> {
+  try {
+    return await dispatch(argv, deps);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`t3-voice: ${scrubSecrets(message)}\n`);
+    if (error instanceof T3IncompatibleError) return EXIT_INCOMPATIBLE_T3;
+    if (error instanceof UsageError) return EXIT_USAGE;
+    return EXIT_ERROR;
+  }
+}
+
+async function dispatch(argv: string[], { store, t3 }: CliDependencies): Promise<number> {
   const [command, ...args] = argv;
   const out = (line: string) => process.stdout.write(`${line}\n`);
-  const dir = configDir();
 
   switch (command) {
     case "setup": {
       const t3Url = readFlag(args, "--t3-url");
       await runSetup({
-        dir,
+        store,
+        t3,
         ...(t3Url ? { t3Url } : {}),
         out,
         readPairingLink: () => readSecretLine("Paste the T3 pairing link (input hidden): "),
@@ -39,7 +57,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "status":
-      await runStatus({ dir, out });
+      await runStatus({ store, t3, out });
       return 0;
     case undefined:
     case "help":
@@ -106,16 +124,3 @@ function readSecretLine(prompt: string): Promise<string> {
     stdin.on("data", onData);
   });
 }
-
-main(process.argv.slice(2)).then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`t3-voice: ${scrubSecrets(message)}\n`);
-    if (error instanceof T3IncompatibleError) process.exitCode = EXIT_INCOMPATIBLE_T3;
-    else if (error instanceof UsageError) process.exitCode = EXIT_USAGE;
-    else process.exitCode = EXIT_ERROR;
-  },
-);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { t3Command } from "../../src/commands/t3Command.ts";
+import { t3Command } from "../../../../src/adapters/cli/t3Command.ts";
 
 const lookup = (files: string[]) => ({
   path: "/usr/bin:/home/me/bin",

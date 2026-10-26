@@ -3,7 +3,7 @@
 // T3 adds fields often and marks many as optional ("absent from older servers"), so every
 // reader below tolerates missing fields and ignores unknown ones.
 
-import type { Project, ShellEvent, T3Config, Thread } from "./backend.ts";
+import type { Project, ShellEvent, T3Config, Thread } from "../../ports/t3Backend.ts";
 
 /** Untyped JSON as received from T3. Readers check each field they use. */
 // biome-ignore lint/suspicious/noExplicitAny: wire JSON is checked field by field.

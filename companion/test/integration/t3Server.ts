@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { DEFAULT_T3_PIN } from "../../src/t3/compatibility.ts";
+import { DEFAULT_T3_PIN } from "../../src/adapters/t3-websocket/compatibility.ts";
 
 const run = promisify(execFile);
 

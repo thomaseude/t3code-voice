@@ -1,6 +1,6 @@
 // The current list of projects and threads, kept up to date from shell events.
 
-import type { Project, ShellEvent, Thread } from "./backend.ts";
+import type { Project, ShellEvent, Thread } from "../ports/t3Backend.ts";
 
 /** Run statuses during which an agent is still working on the thread. */
 const LIVE_STATUSES = new Set(["queued", "preparing", "starting", "running", "waiting"]);

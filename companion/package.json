@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "t3-voice": "dist/cli.js"
+    "t3-voice": "dist/main.js"
   },
   "files": [
     "dist"
@@ -21,7 +21,7 @@
     "format": "biome check --write .",
     "test": "node --test \"test/unit/**/*.test.ts\"",
     "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.test.ts\"",
-    "t3-voice": "node src/cli.ts"
+    "t3-voice": "node src/main.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",

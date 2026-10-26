@@ -1,12 +1,12 @@
 // In-memory stand-ins for T3, used to drive the WebSocket adapter in unit tests.
 
-import type { EnvironmentDescriptor } from "../../src/t3/compatibility.ts";
+import type { EnvironmentDescriptor } from "../../../../src/adapters/t3-websocket/compatibility.ts";
 import {
   ConnectionClosedError,
   type RpcConnection,
   type StreamHandlers,
-} from "../../src/t3/rpcConnection.ts";
-import type { T3Transport } from "../../src/t3/webSocketBackend.ts";
+} from "../../../../src/adapters/t3-websocket/rpcConnection.ts";
+import type { T3Transport } from "../../../../src/adapters/t3-websocket/webSocketBackend.ts";
 
 export const COMPATIBLE_DESCRIPTOR: EnvironmentDescriptor = {
   serverVersion: "0.1.0",

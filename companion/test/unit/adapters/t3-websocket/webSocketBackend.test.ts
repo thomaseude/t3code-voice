@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { ShellEvent } from "../../src/t3/backend.ts";
-import { DEFAULT_T3_PIN, T3IncompatibleError } from "../../src/t3/compatibility.ts";
-import { RpcError } from "../../src/t3/rpcConnection.ts";
-import { WebSocketT3Backend } from "../../src/t3/webSocketBackend.ts";
+import { DEFAULT_T3_PIN } from "../../../../src/adapters/t3-websocket/compatibility.ts";
+import { RpcError } from "../../../../src/adapters/t3-websocket/rpcConnection.ts";
+import { WebSocketT3Backend } from "../../../../src/adapters/t3-websocket/webSocketBackend.ts";
+import type { ShellEvent } from "../../../../src/ports/t3Backend.ts";
+import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
 import { FakeTransport, settle, shellSnapshot, wireProject, wireThread } from "./fakes.ts";
 
 function makeBackend(transport: FakeTransport) {
@@ -58,7 +59,7 @@ describe("startup check", () => {
     const backend = await WebSocketT3Backend.connect({ transport, pin: DEFAULT_T3_PIN });
 
     assert.equal(transport.connections.length, 1);
-    assert.equal(backend.descriptor?.serverVersion, "0.1.0");
+    assert.deepEqual(backend.serverInfo(), { version: "0.1.0", protocolVersion: 2 });
   });
 });
 

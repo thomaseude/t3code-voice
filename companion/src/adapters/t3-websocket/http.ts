@@ -1,11 +1,9 @@
 // The few HTTP calls the companion makes to T3: the environment descriptor, the pairing
 // token exchange, and the short-lived WebSocket ticket.
 
+import { REQUIRED_T3_SCOPES, type T3Session } from "../../ports/t3Backend.ts";
 import type { EnvironmentDescriptor } from "./compatibility.ts";
 import type { WireJson } from "./wire.ts";
-
-/** The scopes the companion asks for. T3 grants at most what the pairing link allows. */
-export const REQUIRED_SCOPES = ["orchestration:read", "orchestration:operate"];
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -17,12 +15,6 @@ export class T3HttpError extends Error {
     this.name = "T3HttpError";
     this.status = status;
   }
-}
-
-export interface T3Session {
-  token: string;
-  scopes: string[];
-  expiresAt: string;
 }
 
 export async function fetchDescriptor(baseUrl: string): Promise<EnvironmentDescriptor> {
@@ -66,7 +58,8 @@ export async function exchangePairingCredential(
     subject_token: credential,
     subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
     requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-    scope: REQUIRED_SCOPES.join(" "),
+    // T3 grants at most what the pairing link allows.
+    scope: REQUIRED_T3_SCOPES.join(" "),
     client_label: "t3-voice companion",
   });
   const body = await request(baseUrl, "/oauth/token", { method: "POST", body: form });

@@ -8,7 +8,7 @@ import {
   issueWebSocketTicket,
   parsePairingCredential,
   T3HttpError,
-} from "../../src/t3/http.ts";
+} from "../../../../src/adapters/t3-websocket/http.ts";
 
 type Handler = (request: IncomingMessage, body: string, response: ServerResponse) => void;
 

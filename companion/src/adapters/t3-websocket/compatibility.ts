@@ -1,4 +1,6 @@
 // Startup check against the T3 version the companion was tested with.
+
+import { T3IncompatibleError } from "../../ports/t3Backend.ts";
 //
 // T3's protocol is not a stable public API, so the companion fails closed: if the server
 // is not a version we tested, it refuses to run rather than risk sending wrong commands.
@@ -23,20 +25,6 @@ export interface EnvironmentDescriptor {
   serverVersion: string;
   orchestrationProtocolVersion: number;
   capabilities: Record<string, unknown>;
-}
-
-export class T3IncompatibleError extends Error {
-  readonly problems: string[];
-
-  constructor(problems: string[]) {
-    super(
-      `The T3 server does not match the version this companion was tested with:\n` +
-        problems.map((problem) => `  - ${problem}`).join("\n") +
-        `\nUpdate t3-voice (or re-test it and add the version to "t3.acceptedServerVersions").`,
-    );
-    this.name = "T3IncompatibleError";
-    this.problems = problems;
-  }
 }
 
 /** Returns the list of mismatches; an empty list means the server is compatible. */

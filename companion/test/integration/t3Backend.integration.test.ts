@@ -9,15 +9,19 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { runSetup } from "../../src/commands/setup.ts";
-import { runStatus } from "../../src/commands/status.ts";
-import { loadT3Session } from "../../src/config.ts";
-import type { ShellEvent } from "../../src/t3/backend.ts";
-import { DEFAULT_T3_PIN, T3IncompatibleError } from "../../src/t3/compatibility.ts";
-import { issueWebSocketTicket } from "../../src/t3/http.ts";
-import { openRpcConnection } from "../../src/t3/rpcConnection.ts";
-import { ShellState } from "../../src/t3/shellState.ts";
-import { makeHttpTransport, WebSocketT3Backend } from "../../src/t3/webSocketBackend.ts";
+import { runSetup } from "../../src/adapters/cli/setup.ts";
+import { runStatus } from "../../src/adapters/cli/status.ts";
+import { FileConfigStore } from "../../src/adapters/config/fileConfigStore.ts";
+import { DEFAULT_T3_PIN } from "../../src/adapters/t3-websocket/compatibility.ts";
+import { WebSocketT3Connector } from "../../src/adapters/t3-websocket/connector.ts";
+import { issueWebSocketTicket } from "../../src/adapters/t3-websocket/http.ts";
+import { openRpcConnection } from "../../src/adapters/t3-websocket/rpcConnection.ts";
+import {
+  makeHttpTransport,
+  WebSocketT3Backend,
+} from "../../src/adapters/t3-websocket/webSocketBackend.ts";
+import { ShellState } from "../../src/core/shellState.ts";
+import { type ShellEvent, T3IncompatibleError } from "../../src/ports/t3Backend.ts";
 import { findT3Binary, T3TestServer } from "./t3Server.ts";
 
 const binary = findT3Binary();
@@ -51,13 +55,14 @@ describe("T3Backend WebSocket adapter against a real T3", {
     const lines: string[] = [];
 
     await runSetup({
-      dir: configDir,
+      store: new FileConfigStore(configDir),
+      t3: new WebSocketT3Connector(),
       t3Url: server.baseUrl,
       readPairingLink: async () => link,
       out: (line) => lines.push(line),
     });
 
-    const session = await loadT3Session(configDir);
+    const session = await new FileConfigStore(configDir).loadT3Session();
     assert.ok(session);
     token = session.token;
     assert.deepEqual(session.scopes.sort(), ["orchestration:operate", "orchestration:read"]);
@@ -76,7 +81,8 @@ describe("T3Backend WebSocket adapter against a real T3", {
     const dir = join(await mkdtemp(join(tmpdir(), "t3voice-it-config-")), "t3voice");
     const setup = (target: string) =>
       runSetup({
-        dir: target,
+        store: new FileConfigStore(target),
+        t3: new WebSocketT3Connector(),
         t3Url: server.baseUrl,
         readPairingLink: async () => link,
         out: () => {},
@@ -88,8 +94,17 @@ describe("T3Backend WebSocket adapter against a real T3", {
 
   test("fails closed when the server is not the pinned version", async () => {
     const pin = { ...DEFAULT_T3_PIN, serverVersions: ["0.0.0-untested"] };
+    const connector = new WebSocketT3Connector();
 
     await assert.rejects(connect(pin), T3IncompatibleError);
+    await assert.rejects(
+      connector.checkServer(server.baseUrl, ["0.0.0-untested"]),
+      T3IncompatibleError,
+    );
+    await assert.rejects(
+      connector.connect(server.baseUrl, token, ["0.0.0-untested"]),
+      T3IncompatibleError,
+    );
   });
 
   test("getConfig returns T3's providers and default runtime mode", async () => {
@@ -184,7 +199,11 @@ describe("T3Backend WebSocket adapter against a real T3", {
   test("t3-voice status lists the projects from a live T3", async () => {
     const lines: string[] = [];
 
-    await runStatus({ dir: configDir, out: (line) => lines.push(line) });
+    await runStatus({
+      store: new FileConfigStore(configDir),
+      t3: new WebSocketT3Connector(),
+      out: (line) => lines.push(line),
+    });
 
     assert.match(lines[0] ?? "", /^T3 \S+, protocol 2 at http:\/\/127\.0\.0\.1:\d+: connected\.$/);
     assert.ok(lines.includes("Projects (2):"), lines.join("\n"));

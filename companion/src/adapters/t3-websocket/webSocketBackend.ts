@@ -1,19 +1,20 @@
 // T3Backend adapter over T3's app protocol: `/ws`, orchestration protocol 2, one
 // short-lived `wsTicket` per socket.
 
-import type {
-  Project,
-  ShellEvent,
-  ShellSubscriber,
-  ShellSubscription,
-  T3Backend,
-  T3Config,
-} from "./backend.ts";
+import {
+  type Project,
+  type ServerInfo,
+  type ShellEvent,
+  type ShellSubscriber,
+  type ShellSubscription,
+  type T3Backend,
+  type T3Config,
+  T3IncompatibleError,
+} from "../../ports/t3Backend.ts";
 import {
   assertCompatible,
   type EnvironmentDescriptor,
   SUPPORTED_ORCHESTRATION_PROTOCOL,
-  T3IncompatibleError,
   type T3Pin,
 } from "./compatibility.ts";
 import { fetchDescriptor, issueWebSocketTicket } from "./http.ts";
@@ -59,8 +60,8 @@ export class WebSocketT3Backend implements T3Backend {
   private readonly subscriptions = new Set<ShellStream>();
   private closed = false;
 
-  /** Last descriptor seen by the startup check, for display. */
-  descriptor: EnvironmentDescriptor | null = null;
+  /** Last descriptor seen by the startup check. */
+  private descriptor: EnvironmentDescriptor | null = null;
 
   readonly options: WebSocketBackendOptions;
 
@@ -76,6 +77,14 @@ export class WebSocketT3Backend implements T3Backend {
     const backend = new WebSocketT3Backend(options);
     await backend.connection();
     return backend;
+  }
+
+  serverInfo(): ServerInfo {
+    if (!this.descriptor) throw new Error("Not connected to T3 yet.");
+    return {
+      version: this.descriptor.serverVersion,
+      protocolVersion: this.descriptor.orchestrationProtocolVersion,
+    };
   }
 
   async getConfig(): Promise<T3Config> {

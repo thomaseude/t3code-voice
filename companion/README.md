@@ -58,7 +58,7 @@ reads `/.well-known/t3/environment` and refuses to run unless:
 
 - the orchestration protocol is 2;
 - the server version is one it was tested with (`DEFAULT_T3_PIN` in
-  `src/t3/compatibility.ts`, currently `0.1.0`);
+  `src/adapters/t3-websocket/compatibility.ts`, currently `0.1.0`);
 - the capabilities it requires are advertised.
 
 On a mismatch, commands print what differs and exit with code 3. To support a new T3
@@ -67,17 +67,23 @@ machine only, to `t3.acceptedServerVersions` in `config.json`).
 
 ## Code map
 
-| Path | Role |
-|---|---|
-| `src/t3/backend.ts` | `T3Backend` port and the companion's own types |
-| `src/t3/webSocketBackend.ts` | Adapter over `/ws`: startup check, shared socket, shell stream with resume |
-| `src/t3/rpcConnection.ts` | Minimal client for T3's WebSocket RPC frames |
-| `src/t3/wire.ts` | Translation from T3's wire JSON to the companion's types |
-| `src/t3/http.ts` | Descriptor, pairing exchange, WebSocket ticket |
-| `src/t3/compatibility.ts` | Pinned T3 version and the startup check |
-| `src/t3/shellState.ts` | Projects and threads kept up to date from the shell stream |
-| `src/commands/` | `setup` and `status` |
-| `src/config.ts` | Config and secret files |
+Hexagonal: the core and the CLI only know the ports; adapters implement them; `main.ts` is
+the one place that plugs the real adapters in. `test/unit/architecture.test.ts` enforces it.
+
+```
+src/
+  main.ts                    composition root
+  ports/
+    t3Backend.ts             T3Backend, T3Connector, the companion's own T3 types
+    configStore.ts           ConfigStore (settings + T3 session)
+  core/
+    shellState.ts            projects and threads kept up to date; "is this thread running?"
+  adapters/
+    t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
+                             pairing/ticket HTTP calls, pinned version check
+    config/                  ConfigStore on files in ~/.config/t3voice/
+    cli/                     `t3-voice` commands (setup, status)
+```
 
 ## Tests
 

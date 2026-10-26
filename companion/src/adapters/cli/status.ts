@@ -1,28 +1,33 @@
 // `t3-voice status`: prints the T3 server, its projects and the threads agents work on.
 
-import type { Thread } from "../t3/backend.ts";
-import type { EnvironmentDescriptor } from "../t3/compatibility.ts";
-import { ShellState } from "../t3/shellState.ts";
-import type { WebSocketT3Backend } from "../t3/webSocketBackend.ts";
-import { connectBackend, loadSavedSetup } from "./connect.ts";
+import { ShellState } from "../../core/shellState.ts";
+import { ConfigError, type ConfigStore } from "../../ports/configStore.ts";
+import type { ServerInfo, T3Backend, T3Connector, Thread } from "../../ports/t3Backend.ts";
 
 const SNAPSHOT_TIMEOUT_MS = 15_000;
 
 export interface StatusOptions {
-  dir: string;
+  store: ConfigStore;
+  t3: T3Connector;
   out(line: string): void;
   now?: Date;
 }
 
-export async function runStatus({ dir, out, now = new Date() }: StatusOptions): Promise<void> {
-  const setup = await loadSavedSetup(dir);
-  const backend = await connectBackend(setup);
+export async function runStatus({ store, t3, out, now = new Date() }: StatusOptions) {
+  const config = await store.loadConfig();
+  const session = await store.loadT3Session();
+  if (!config || !session) {
+    throw new ConfigError('The companion is not set up yet; run "t3-voice setup".');
+  }
+
+  const { baseUrl, acceptedServerVersions } = config.t3;
+  const backend = await t3.connect(baseUrl, session.token, acceptedServerVersions);
   try {
     const state = await readShell(backend);
     const report = formatStatus({
-      baseUrl: setup.config.t3.baseUrl,
-      descriptor: backend.descriptor,
-      tokenExpiresAt: setup.session.expiresAt,
+      baseUrl,
+      server: backend.serverInfo(),
+      tokenExpiresAt: session.expiresAt,
       state,
       now,
     });
@@ -33,7 +38,7 @@ export async function runStatus({ dir, out, now = new Date() }: StatusOptions): 
 }
 
 /** Subscribes until the first snapshot arrives, then stops. */
-function readShell(backend: WebSocketT3Backend): Promise<ShellState> {
+function readShell(backend: T3Backend): Promise<ShellState> {
   const state = new ShellState();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -58,7 +63,7 @@ function readShell(backend: WebSocketT3Backend): Promise<ShellState> {
 
 export interface StatusReport {
   baseUrl: string;
-  descriptor: EnvironmentDescriptor | null;
+  server: ServerInfo;
   tokenExpiresAt: string;
   state: ShellState;
   now: Date;
@@ -66,15 +71,13 @@ export interface StatusReport {
 
 export function formatStatus({
   baseUrl,
-  descriptor,
+  server,
   tokenExpiresAt,
   state,
   now,
 }: StatusReport): string[] {
   const lines: string[] = [];
-  const version = descriptor
-    ? `T3 ${descriptor.serverVersion}, protocol ${descriptor.orchestrationProtocolVersion}`
-    : "T3";
+  const version = `T3 ${server.version}, protocol ${server.protocolVersion}`;
   lines.push(`${version} at ${baseUrl}: connected.`);
   lines.push(`T3 session expires ${describeExpiry(tokenExpiresAt, now)}.`);
 

@@ -1,4 +1,4 @@
-// The T3Backend port: everything the companion needs from a T3 Code server.
+// The T3 ports: everything the companion needs from a T3 Code server.
 //
 // These types belong to the companion. Adapters translate T3's wire format into them, so
 // the rest of the companion never depends on T3's internal schemas, which change often.
@@ -88,7 +88,14 @@ export interface ShellSubscription {
   close(): void;
 }
 
+/** The T3 server the backend is connected to, as checked at startup. */
+export interface ServerInfo {
+  version: string;
+  protocolVersion: number;
+}
+
 export interface T3Backend {
+  serverInfo(): ServerInfo;
   listProjects(): Promise<Project[]>;
   getConfig(): Promise<T3Config>;
   /**
@@ -100,4 +107,42 @@ export interface T3Backend {
     options?: { afterSequence?: number },
   ): ShellSubscription;
   close(): void;
+}
+
+/** A T3 session token and what it grants. `token` is a secret. */
+export interface T3Session {
+  token: string;
+  scopes: string[];
+  expiresAt: string;
+}
+
+/** Scopes the companion needs; a pairing must grant both. */
+export const REQUIRED_T3_SCOPES = ["orchestration:read", "orchestration:operate"];
+
+/** Reaching a T3 server: version check, pairing, and opening a backend. */
+export interface T3Connector {
+  /**
+   * Checks that the server is a version the companion was tested with.
+   * Throws T3IncompatibleError otherwise.
+   */
+  checkServer(baseUrl: string, acceptedVersions?: string[]): Promise<ServerInfo>;
+  /** Exchanges a one-time pairing link (or bare credential) for a session. */
+  pair(baseUrl: string, pairingLink: string): Promise<T3Session>;
+  /** Opens a backend after the same version check. */
+  connect(baseUrl: string, token: string, acceptedVersions?: string[]): Promise<T3Backend>;
+}
+
+/** The T3 server is not a tested version: the companion must not run against it. */
+export class T3IncompatibleError extends Error {
+  readonly problems: string[];
+
+  constructor(problems: string[]) {
+    super(
+      `The T3 server does not match the version this companion was tested with:\n` +
+        problems.map((problem) => `  - ${problem}`).join("\n") +
+        `\nUpdate t3-voice (or re-test it and add the version to "t3.acceptedServerVersions").`,
+    );
+    this.name = "T3IncompatibleError";
+    this.problems = problems;
+  }
 }
