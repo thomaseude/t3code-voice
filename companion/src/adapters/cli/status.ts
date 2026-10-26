@@ -27,7 +27,7 @@ export async function runStatus({ store, t3, out, now = new Date() }: StatusOpti
       `The saved T3 token is for ${pairing.baseUrl}, not ${baseUrl}; run "t3-voice setup" again.`,
     );
   }
-  const backend = await t3.connect(baseUrl, pairing.token, acceptedServerVersions);
+  const backend = await t3.connect(pairing, acceptedServerVersions);
   try {
     const state = await readShell(backend);
     const report = formatStatus({

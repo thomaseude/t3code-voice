@@ -104,7 +104,9 @@ describe("T3Backend WebSocket adapter against a real T3", {
       T3IncompatibleError,
     );
     await assert.rejects(
-      connector.connect(server.baseUrl, token, ["0.0.0-untested"]),
+      connector.connect({ baseUrl: server.baseUrl, token, scopes: [], expiresAt: null }, [
+        "0.0.0-untested",
+      ]),
       T3IncompatibleError,
     );
   });

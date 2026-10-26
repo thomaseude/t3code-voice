@@ -131,8 +131,8 @@ export interface T3Connector {
   checkServer(baseUrl: string, acceptedVersions?: string[]): Promise<ServerInfo>;
   /** Exchanges a one-time pairing link (or bare credential) for a token. */
   pair(baseUrl: string, pairingLink: string): Promise<T3Pairing>;
-  /** Opens a backend after the same version check. */
-  connect(baseUrl: string, token: string, acceptedVersions?: string[]): Promise<T3Backend>;
+  /** Opens a backend on the pairing's server, after the same version check. */
+  connect(pairing: T3Pairing, acceptedVersions?: string[]): Promise<T3Backend>;
 }
 
 /** The T3 server is not a tested version: the companion must not run against it. */

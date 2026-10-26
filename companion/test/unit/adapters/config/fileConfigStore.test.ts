@@ -99,6 +99,14 @@ describe("FileConfigStore", () => {
     await assert.rejects(new FileConfigStore(dir).loadT3Pairing(), /chmod 700/);
   });
 
+  test("refuses a loose directory before any file is in it, so setup stops before pairing", async () => {
+    const dir = await tempDir();
+    await mkdir(dir, { mode: 0o755 });
+    await chmod(dir, 0o755);
+
+    await assert.rejects(new FileConfigStore(dir).loadConfig(), /chmod 700/);
+  });
+
   test("uses an existing private directory", async () => {
     const dir = await tempDir();
     await mkdir(dir, { mode: 0o700 });

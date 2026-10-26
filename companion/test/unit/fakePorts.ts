@@ -86,7 +86,8 @@ export class FakeT3Connector implements T3Connector {
       expiresAt: this.expiresAt,
     };
   }
-  async connect(baseUrl: string, token: string): Promise<T3Backend> {
+  async connect(pairing: T3Pairing): Promise<T3Backend> {
+    const { baseUrl, token } = pairing;
     this.calls.push(
       `connect ${baseUrl} ${token === "secret-pairing-token" ? "with token" : "BAD TOKEN"}`,
     );

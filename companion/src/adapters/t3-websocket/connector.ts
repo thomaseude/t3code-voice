@@ -16,9 +16,9 @@ export class WebSocketT3Connector implements T3Connector {
     return exchangePairingCredential(baseUrl, parsePairingCredential(pairingLink));
   }
 
-  connect(baseUrl: string, token: string, acceptedVersions?: string[]): Promise<T3Backend> {
+  connect(pairing: T3Pairing, acceptedVersions?: string[]): Promise<T3Backend> {
     return WebSocketT3Backend.connect({
-      transport: makeHttpTransport(baseUrl, token),
+      transport: makeHttpTransport(pairing.baseUrl, pairing.token),
       pin: pinFor(acceptedVersions),
     });
   }

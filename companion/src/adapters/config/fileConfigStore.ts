@@ -80,9 +80,10 @@ export class FileConfigStore implements ConfigStore {
 
   // biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
   private async readPrivateJson(path: string): Promise<any | null> {
+    // Check the directory even when the file is missing: setup must fail before it pairs.
+    await this.assertPrivateDir();
     const mode = await modeOf(path);
     if (mode === null) return null;
-    await this.assertPrivateDir();
     if ((mode & 0o077) !== 0) {
       throw new ConfigError(`${path} can be read by other users; run "chmod 600 ${path}".`);
     }

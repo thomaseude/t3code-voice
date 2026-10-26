@@ -46,7 +46,7 @@ export async function runSetup({ store, t3, t3Url, readPairingLink, out }: Setup
     : "T3 did not say when it expires.";
   out(`Saved the T3 token in ${store.location} (mode 600). ${expiry}`);
 
-  const backend = await t3.connect(baseUrl, pairing.token, acceptedServerVersions);
+  const backend = await t3.connect(pairing, acceptedServerVersions);
   try {
     const projects = await backend.listProjects();
     out(`Connected: ${projects.length} project(s) visible. Run "t3-voice status" for details.`);
