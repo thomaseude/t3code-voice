@@ -15,6 +15,7 @@ import {
   REQUIRED_SCOPES,
 } from "../t3/http.ts";
 import { connectBackend, pinFor } from "./connect.ts";
+import { t3Command } from "./t3Command.ts";
 
 export interface SetupOptions {
   dir: string;
@@ -44,7 +45,7 @@ export async function runSetup(options: SetupOptions): Promise<void> {
   out("");
   out("Create a pairing link limited to orchestration on the T3 host:");
   out(
-    `  t3 auth pairing create --scope orchestration:read --scope orchestration:operate --base-url ${baseUrl}`,
+    `  ${t3Command(descriptor.serverVersion)} auth pairing create --scope orchestration:read --scope orchestration:operate --base-url ${baseUrl}`,
   );
   const credential = parsePairingCredential(await options.readPairingLink());
 

@@ -22,6 +22,10 @@ t3 auth pairing create --scope orchestration:read --scope orchestration:operate 
   --base-url http://127.0.0.1:3773
 ```
 
+If `t3` is not on your PATH, use the binary T3 installed, for example
+`~/.t3/runtime/versions/0.1.0/t3` (`setup` prints the right path). In a terminal opened from
+T3 itself, prefix the command with `env -u T3_SERVICE_LAUNCHER_CONTEXT`.
+
 Then pair the companion and paste the link when asked (the input is hidden):
 
 ```sh
