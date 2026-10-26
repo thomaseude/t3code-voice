@@ -1,9 +1,9 @@
 // Startup check against the T3 version the companion was tested with.
-
-import { T3IncompatibleError } from "../../ports/t3Backend.ts";
 //
 // T3's protocol is not a stable public API, so the companion fails closed: if the server
 // is not a version we tested, it refuses to run rather than risk sending wrong commands.
+
+import { type ServerInfo, T3IncompatibleError } from "../../ports/t3Backend.ts";
 
 export const SUPPORTED_ORCHESTRATION_PROTOCOL = 2;
 
@@ -15,7 +15,8 @@ export interface T3Pin {
 }
 
 export const DEFAULT_T3_PIN: T3Pin = {
-  serverVersions: ["0.1.0"],
+  // Add a version only after `T3_VERSION=<version> npm run test:integration` passes.
+  serverVersions: ["0.1.0", "0.1.1"],
   // No feature used so far is gated by a capability flag. Add a flag here as soon as one is.
   requiredCapabilities: [],
 };
@@ -57,4 +58,11 @@ export function findIncompatibilities(descriptor: EnvironmentDescriptor, pin: T3
 export function assertCompatible(descriptor: EnvironmentDescriptor, pin: T3Pin): void {
   const problems = findIncompatibilities(descriptor, pin);
   if (problems.length > 0) throw new T3IncompatibleError(problems);
+}
+
+export function toServerInfo(descriptor: EnvironmentDescriptor): ServerInfo {
+  return {
+    version: descriptor.serverVersion,
+    protocolVersion: descriptor.orchestrationProtocolVersion,
+  };
 }

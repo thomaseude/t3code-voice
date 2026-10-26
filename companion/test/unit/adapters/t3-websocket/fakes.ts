@@ -30,11 +30,14 @@ export class FakeConnection implements RpcConnection {
   readonly requests: Array<{ tag: string; payload: unknown }> = [];
   readonly streams: FakeStream[] = [];
   readonly responses = new Map<string, unknown>();
+  /** When true, requests never get an answer, as with a T3 that hangs but still answers pings. */
+  silent = false;
   private readonly closeListeners: Array<() => void> = [];
   closed = false;
 
   request(tag: string, payload: unknown): Promise<unknown> {
     this.requests.push({ tag, payload });
+    if (this.silent) return new Promise(() => {});
     return Promise.resolve(this.responses.get(tag));
   }
 

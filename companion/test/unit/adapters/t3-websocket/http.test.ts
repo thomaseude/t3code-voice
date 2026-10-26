@@ -103,13 +103,14 @@ describe("exchangePairingCredential", () => {
       },
     };
 
-    const session = await exchangePairingCredential(
+    const pairing = await exchangePairingCredential(
       baseUrl,
       "PAIR1234",
       new Date("2026-10-26T12:00:00Z"),
     );
 
-    assert.deepEqual(session, {
+    assert.deepEqual(pairing, {
+      baseUrl,
       token: "issued-token",
       scopes: ["orchestration:read", "orchestration:operate"],
       expiresAt: "2026-10-26T13:00:00.000Z",
@@ -131,10 +132,10 @@ describe("exchangePairingCredential", () => {
         json(response, 200, { access_token: "issued-token", token_type: "Bearer" }),
     };
 
-    const session = await exchangePairingCredential(baseUrl, "PAIR1234");
+    const pairing = await exchangePairingCredential(baseUrl, "PAIR1234");
 
-    assert.deepEqual(session.scopes, ["orchestration:read", "orchestration:operate"]);
-    assert.equal(session.expiresAt, "");
+    assert.deepEqual(pairing.scopes, ["orchestration:read", "orchestration:operate"]);
+    assert.equal(pairing.expiresAt, null);
   });
 
   test("reports a refused pairing with T3's error code only", async () => {

@@ -1,7 +1,7 @@
 // The few HTTP calls the companion makes to T3: the environment descriptor, the pairing
 // token exchange, and the short-lived WebSocket ticket.
 
-import { REQUIRED_T3_SCOPES, type T3Session } from "../../ports/t3Backend.ts";
+import { REQUIRED_T3_SCOPES, type T3Pairing } from "../../ports/t3Backend.ts";
 import type { EnvironmentDescriptor } from "./compatibility.ts";
 import type { WireJson } from "./wire.ts";
 
@@ -52,7 +52,7 @@ export async function exchangePairingCredential(
   baseUrl: string,
   credential: string,
   now: Date = new Date(),
-): Promise<T3Session> {
+): Promise<T3Pairing> {
   const form = new URLSearchParams({
     grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
     subject_token: credential,
@@ -67,6 +67,7 @@ export async function exchangePairingCredential(
     throw new T3HttpError("T3 answered the pairing exchange with an unexpected token.");
   }
   return {
+    baseUrl,
     token: body.access_token,
     // OAuth may leave `scope` out when it grants exactly what was requested.
     scopes:
@@ -76,7 +77,7 @@ export async function exchangePairingCredential(
     expiresAt:
       typeof body.expires_in === "number"
         ? new Date(now.getTime() + body.expires_in * 1000).toISOString()
-        : "",
+        : null,
   };
 }
 

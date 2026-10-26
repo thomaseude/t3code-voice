@@ -28,12 +28,11 @@ export async function runSetup({ store, t3, t3Url, readPairingLink, out }: Setup
 
   out("");
   out("Create a pairing link limited to orchestration on the T3 host:");
-  out(
-    `  ${t3Command(server.version)} auth pairing create --scope orchestration:read --scope orchestration:operate --base-url ${baseUrl}`,
-  );
-  const session = await t3.pair(baseUrl, await readPairingLink());
+  const scopeFlags = REQUIRED_T3_SCOPES.map((scope) => `--scope ${scope}`).join(" ");
+  out(`  ${t3Command(server.version)} auth pairing create ${scopeFlags} --base-url ${baseUrl}`);
+  const pairing = await t3.pair(baseUrl, await readPairingLink());
 
-  const missing = REQUIRED_T3_SCOPES.filter((scope) => !session.scopes.includes(scope));
+  const missing = REQUIRED_T3_SCOPES.filter((scope) => !pairing.scopes.includes(scope));
   if (missing.length > 0) {
     throw new Error(
       `The pairing link does not grant ${missing.join(", ")}. Create one with the command above.`,
@@ -41,10 +40,13 @@ export async function runSetup({ store, t3, t3Url, readPairingLink, out }: Setup
   }
 
   await store.saveConfig(config);
-  await store.saveT3Session(session);
-  out(`Saved the T3 session in ${store.location} (mode 600). It expires on ${session.expiresAt}.`);
+  await store.saveT3Pairing(pairing);
+  const expiry = pairing.expiresAt
+    ? `It expires on ${pairing.expiresAt}.`
+    : "T3 did not say when it expires.";
+  out(`Saved the T3 token in ${store.location} (mode 600). ${expiry}`);
 
-  const backend = await t3.connect(baseUrl, session.token, acceptedServerVersions);
+  const backend = await t3.connect(baseUrl, pairing.token, acceptedServerVersions);
   try {
     const projects = await backend.listProjects();
     out(`Connected: ${projects.length} project(s) visible. Run "t3-voice status" for details.`);

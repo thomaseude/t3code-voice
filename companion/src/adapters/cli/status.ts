@@ -15,19 +15,25 @@ export interface StatusOptions {
 
 export async function runStatus({ store, t3, out, now = new Date() }: StatusOptions) {
   const config = await store.loadConfig();
-  const session = await store.loadT3Session();
-  if (!config || !session) {
+  const pairing = await store.loadT3Pairing();
+  if (!config || !pairing) {
     throw new ConfigError('The companion is not set up yet; run "t3-voice setup".');
   }
 
   const { baseUrl, acceptedServerVersions } = config.t3;
-  const backend = await t3.connect(baseUrl, session.token, acceptedServerVersions);
+  if (pairing.baseUrl !== baseUrl) {
+    // The two files are written one after the other: never send a token to another server.
+    throw new ConfigError(
+      `The saved T3 token is for ${pairing.baseUrl}, not ${baseUrl}; run "t3-voice setup" again.`,
+    );
+  }
+  const backend = await t3.connect(baseUrl, pairing.token, acceptedServerVersions);
   try {
     const state = await readShell(backend);
     const report = formatStatus({
       baseUrl,
       server: backend.serverInfo(),
-      tokenExpiresAt: session.expiresAt,
+      tokenExpiresAt: pairing.expiresAt,
       state,
       now,
     });
@@ -64,7 +70,7 @@ function readShell(backend: T3Backend): Promise<ShellState> {
 export interface StatusReport {
   baseUrl: string;
   server: ServerInfo;
-  tokenExpiresAt: string;
+  tokenExpiresAt: string | null;
   state: ShellState;
   now: Date;
 }
@@ -79,7 +85,7 @@ export function formatStatus({
   const lines: string[] = [];
   const version = `T3 ${server.version}, protocol ${server.protocolVersion}`;
   lines.push(`${version} at ${baseUrl}: connected.`);
-  lines.push(`T3 session expires ${describeExpiry(tokenExpiresAt, now)}.`);
+  lines.push(`T3 token expires ${describeExpiry(tokenExpiresAt, now)}.`);
 
   const projects = [...state.projects.values()].sort((a, b) => a.title.localeCompare(b.title));
   lines.push("", `Projects (${projects.length}):`);
@@ -100,12 +106,16 @@ export function formatStatus({
 }
 
 function describeState(thread: Thread): string {
-  if (thread.pendingRequest?.kind === "user_input") return "waiting for your answer";
-  if (thread.pendingRequest) return `waiting for approval (${thread.pendingRequest.kind})`;
-  return thread.activeRunStatus ?? thread.status;
+  const request = thread.pendingRequest;
+  const runStatus = thread.activeRunStatus ?? thread.status;
+  if (request?.kind === "user_input" && !request.blocking) return `${runStatus}, question pending`;
+  if (request?.kind === "user_input") return "waiting for your answer";
+  if (request) return `waiting for approval (${request.kind})`;
+  return runStatus;
 }
 
-function describeExpiry(expiresAt: string, now: Date): string {
+function describeExpiry(expiresAt: string | null, now: Date): string {
+  if (expiresAt === null) return "at an unknown date";
   const remainingMs = Date.parse(expiresAt) - now.getTime();
   if (Number.isNaN(remainingMs)) return "at an unknown date";
   const date = expiresAt.slice(0, 10);

@@ -17,7 +17,7 @@ function setup(store: InMemoryConfigStore, t3: FakeT3Connector, t3Url?: string) 
 }
 
 describe("runSetup", () => {
-  test("pairs with T3 on loopback by default and saves the session", async () => {
+  test("pairs with T3 on loopback by default and saves the token", async () => {
     const store = new InMemoryConfigStore();
     const t3 = new FakeT3Connector();
 
@@ -25,7 +25,8 @@ describe("runSetup", () => {
     await done;
 
     assert.deepEqual(store.config, { t3: { baseUrl: "http://127.0.0.1:3773" } });
-    assert.equal(store.session?.token, "secret-session-token");
+    assert.equal(store.pairing?.token, "secret-pairing-token");
+    assert.equal(store.pairing?.baseUrl, "http://127.0.0.1:3773");
     assert.deepEqual(t3.calls, [
       "checkServer http://127.0.0.1:3773",
       "pair http://127.0.0.1:3773 http://127.0.0.1:3773/pair#token=PAIRCODE",
@@ -33,8 +34,25 @@ describe("runSetup", () => {
       "checkServer http://127.0.0.1:3773",
     ]);
     const output = lines.join("\n");
-    assert.ok(!output.includes("secret-session-token"), "the token is never printed");
+    assert.ok(!output.includes("secret-pairing-token"), "the token is never printed");
     assert.ok(!output.includes("PAIRCODE"), "the pairing code is never printed");
+    assert.ok(
+      output.includes(
+        "auth pairing create --scope orchestration:read --scope orchestration:operate",
+      ),
+    );
+    assert.ok(output.includes("It expires on 2026-11-25T14:00:00.000Z."));
+  });
+
+  test("says when T3 gave no expiry", async () => {
+    const store = new InMemoryConfigStore();
+    const t3 = new FakeT3Connector();
+    t3.expiresAt = null;
+
+    const { lines, done } = setup(store, t3);
+    await done;
+
+    assert.ok(lines.some((line) => line.endsWith("T3 did not say when it expires.")));
   });
 
   test("keeps the saved T3 URL unless --t3-url overrides it", async () => {
@@ -57,7 +75,7 @@ describe("runSetup", () => {
 
     await assert.rejects(setup(store, t3).done, T3IncompatibleError);
     assert.deepEqual(t3.calls, ["checkServer http://127.0.0.1:3773"]);
-    assert.equal(store.session, null);
+    assert.equal(store.pairing, null);
   });
 
   test("refuses a pairing that does not grant both orchestration scopes", async () => {
@@ -66,6 +84,6 @@ describe("runSetup", () => {
     t3.grantedScopes = ["orchestration:read"];
 
     await assert.rejects(setup(store, t3).done, /does not grant orchestration:operate/);
-    assert.equal(store.session, null);
+    assert.equal(store.pairing, null);
   });
 });

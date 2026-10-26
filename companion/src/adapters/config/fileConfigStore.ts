@@ -1,16 +1,17 @@
 // ConfigStore adapter: JSON files under ~/.config/t3voice/ (override with T3VOICE_CONFIG_DIR).
 //
-// Every file is written with mode 600 and the directory with mode 700. Secrets are only
-// read from and written to these files: they are never printed or logged.
+// Every file is written with mode 600 and the directory is created with mode 700. A file or
+// directory that other users can open is refused. Secrets are only read from and written to
+// these files: they are never printed or logged.
 
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type CompanionConfig, ConfigError, type ConfigStore } from "../../ports/configStore.ts";
-import type { T3Session } from "../../ports/t3Backend.ts";
+import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
-const T3_SESSION_FILE = "t3-session.json";
+const T3_PAIRING_FILE = "t3-pairing.json";
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.T3VOICE_CONFIG_DIR ?? join(homedir(), ".config", "t3voice");
@@ -25,7 +26,7 @@ export class FileConfigStore implements ConfigStore {
 
   async loadConfig(): Promise<CompanionConfig | null> {
     const path = join(this.location, CONFIG_FILE);
-    const data = await readPrivateJson(path);
+    const data = await this.readPrivateJson(path);
     if (data === null) return null;
     if (typeof data?.t3?.baseUrl !== "string") {
       throw new ConfigError(`${path} has no "t3.baseUrl".`);
@@ -45,18 +46,23 @@ export class FileConfigStore implements ConfigStore {
     await this.writePrivateFile(CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`);
   }
 
-  async loadT3Session(): Promise<T3Session | null> {
-    const path = join(this.location, T3_SESSION_FILE);
-    const data = await readPrivateJson(path);
+  async loadT3Pairing(): Promise<T3Pairing | null> {
+    const path = join(this.location, T3_PAIRING_FILE);
+    const data = await this.readPrivateJson(path);
     if (data === null) return null;
-    if (typeof data?.token !== "string" || typeof data?.expiresAt !== "string") {
+    const expiresAt = data?.expiresAt;
+    if (
+      typeof data?.baseUrl !== "string" ||
+      typeof data?.token !== "string" ||
+      !(typeof expiresAt === "string" || expiresAt === null)
+    ) {
       throw new ConfigError(`${path} is damaged; run "t3-voice setup" again.`);
     }
-    return data as T3Session;
+    return data as T3Pairing;
   }
 
-  async saveT3Session(session: T3Session): Promise<void> {
-    await this.writePrivateFile(T3_SESSION_FILE, `${JSON.stringify(session, null, 2)}\n`);
+  async saveT3Pairing(pairing: T3Pairing): Promise<void> {
+    await this.writePrivateFile(T3_PAIRING_FILE, `${JSON.stringify(pairing, null, 2)}\n`);
   }
 
   /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
@@ -64,29 +70,45 @@ export class FileConfigStore implements ConfigStore {
     // Tighten the directory only if we created it: never change a directory the user owns.
     const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
     if (created !== undefined) await chmod(this.location, 0o700);
+    else await this.assertPrivateDir();
     const path = join(this.location, name);
     const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, content, { mode: 0o600 });
     await chmod(tempPath, 0o600);
     await rename(tempPath, path);
   }
+
+  // biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
+  private async readPrivateJson(path: string): Promise<any | null> {
+    const mode = await modeOf(path);
+    if (mode === null) return null;
+    await this.assertPrivateDir();
+    if ((mode & 0o077) !== 0) {
+      throw new ConfigError(`${path} can be read by other users; run "chmod 600 ${path}".`);
+    }
+    try {
+      return JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      throw new ConfigError(`${path} is not valid JSON.`);
+    }
+  }
+
+  private async assertPrivateDir(): Promise<void> {
+    const mode = (await modeOf(this.location)) ?? 0;
+    if ((mode & 0o077) !== 0) {
+      throw new ConfigError(
+        `${this.location} can be opened by other users; run "chmod 700 ${this.location}".`,
+      );
+    }
+  }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
-async function readPrivateJson(path: string): Promise<any | null> {
-  let mode: number;
+/** The file mode, or null when the path does not exist. */
+async function modeOf(path: string): Promise<number | null> {
   try {
-    mode = (await stat(path)).mode;
+    return (await stat(path)).mode;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
-  }
-  if ((mode & 0o077) !== 0) {
-    throw new ConfigError(`${path} can be read by other users; run "chmod 600 ${path}".`);
-  }
-  try {
-    return JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    throw new ConfigError(`${path} is not valid JSON.`);
   }
 }

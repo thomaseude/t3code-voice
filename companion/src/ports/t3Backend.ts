@@ -109,12 +109,14 @@ export interface T3Backend {
   close(): void;
 }
 
-/** A T3 session token and what it grants. `token` is a secret. */
-export interface T3Session {
+/** The token a pairing gave the companion, the server it is for, and what it grants. `token` is a secret. */
+export interface T3Pairing {
+  /** The T3 server that issued the token: the token is never sent anywhere else. */
+  baseUrl: string;
   token: string;
   scopes: string[];
-  /** ISO date, or "" when T3 did not say. */
-  expiresAt: string;
+  /** ISO date, or null when T3 did not say. */
+  expiresAt: string | null;
 }
 
 /** Scopes the companion needs; a pairing must grant both. */
@@ -127,8 +129,8 @@ export interface T3Connector {
    * Throws T3IncompatibleError otherwise.
    */
   checkServer(baseUrl: string, acceptedVersions?: string[]): Promise<ServerInfo>;
-  /** Exchanges a one-time pairing link (or bare credential) for a session. */
-  pair(baseUrl: string, pairingLink: string): Promise<T3Session>;
+  /** Exchanges a one-time pairing link (or bare credential) for a token. */
+  pair(baseUrl: string, pairingLink: string): Promise<T3Pairing>;
   /** Opens a backend after the same version check. */
   connect(baseUrl: string, token: string, acceptedVersions?: string[]): Promise<T3Backend>;
 }

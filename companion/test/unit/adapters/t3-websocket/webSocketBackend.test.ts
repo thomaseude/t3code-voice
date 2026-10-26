@@ -139,6 +139,37 @@ describe("listProjects", () => {
     assert.equal(stream.tag, "orchestration.subscribeShell");
     assert.equal(stream.cancelled, true);
   });
+
+  test("gives up when T3 sends no full snapshot in time", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const transport = new FakeTransport();
+    const backend = makeBackend(transport);
+
+    const projects = backend.listProjects();
+    await settle();
+    const stream = transport.lastConnection().lastStream();
+    stream.push({ kind: "synchronized" });
+    t.mock.timers.tick(15_000);
+
+    await assert.rejects(projects, /did not send the project list in time/);
+    assert.equal(stream.cancelled, true);
+  });
+});
+
+describe("answer timeout", () => {
+  test("getConfig gives up when T3 never answers", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const transport = new FakeTransport();
+    const backend = makeBackend(transport);
+    await backend.connection();
+    transport.lastConnection().silent = true;
+
+    const config = backend.getConfig();
+    await settle();
+    t.mock.timers.tick(15_000);
+
+    await assert.rejects(config, /did not send its configuration in time/);
+  });
 });
 
 describe("subscribeShell", () => {
@@ -246,6 +277,35 @@ describe("subscribeShell", () => {
     );
   });
 
+  test("resumes from its cursor when T3 ends a working stream with an error", async () => {
+    const transport = new FakeTransport();
+    const { events, fatalErrors } = recordShell(makeBackend(transport));
+    await settle();
+    const first = transport.lastConnection().lastStream();
+    first.push(shellSnapshot(10, []));
+
+    first.fail(new RpcError("Failed while streaming the application shell"));
+    await settle();
+
+    const second = transport.lastConnection().lastStream();
+    assert.notEqual(first, second);
+    assert.deepEqual(second.payload, { afterSequence: 10 });
+    assert.equal(fatalErrors.length, 0);
+    assert.equal(events.length, 1);
+  });
+
+  test("stops for good when T3 refuses a plain subscription", async () => {
+    const transport = new FakeTransport();
+    const { fatalErrors } = recordShell(makeBackend(transport));
+    await settle();
+
+    transport.lastConnection().lastStream().fail(new RpcError("missing scope"));
+    await settle();
+
+    assert.equal(transport.lastConnection().streams.length, 1);
+    assert.match(fatalErrors[0]?.message ?? "", /refused the shell subscription: missing scope/);
+  });
+
   test("stops for good when T3 was upgraded to an untested version while disconnected", async () => {
     const transport = new FakeTransport();
     const { fatalErrors } = recordShell(makeBackend(transport));
@@ -261,7 +321,7 @@ describe("subscribeShell", () => {
     assert.ok(fatalErrors[0] instanceof T3IncompatibleError);
   });
 
-  test("stops for good when T3 refuses the session token after a disconnect", async () => {
+  test("stops for good when T3 refuses the token after a disconnect", async () => {
     const transport = new FakeTransport();
     const { fatalErrors } = recordShell(makeBackend(transport));
     await settle();

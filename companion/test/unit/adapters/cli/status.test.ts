@@ -29,6 +29,16 @@ describe("formatStatus", () => {
           providerInstanceId: "codex",
           model: "gpt-6",
         }),
+        thread("t3", {
+          title: "Plan",
+          status: "running",
+          pendingRequest: { id: "r2", kind: "user_input", blocking: true },
+        }),
+        thread("t4", {
+          title: "Refactor",
+          status: "running",
+          pendingRequest: { id: "r3", kind: "user_input", blocking: false },
+        }),
       ],
     );
 
@@ -42,19 +52,21 @@ describe("formatStatus", () => {
 
     assert.deepEqual(lines, [
       "T3 0.1.0, protocol 2 at http://127.0.0.1:3773: connected.",
-      "T3 session expires on 2026-11-25 (in 30 days).",
+      "T3 token expires on 2026-11-25 (in 30 days).",
       "",
       "Projects (2):",
       "  - blog  /home/me/blog",
       "  - joombo  /home/me/joombo",
       "",
-      "Running threads (2):",
+      "Running threads (4):",
       "  - Fix the Reviews tests  [joombo]  running  (claudeAgent / claude-opus-5-5)",
       "  - Deploy  [blog]  waiting for approval (command)  (codex / gpt-6)",
+      "  - Plan  [joombo]  waiting for your answer  (claudeAgent / claude-opus-5-5)",
+      "  - Refactor  [joombo]  running, question pending  (claudeAgent / claude-opus-5-5)",
     ]);
   });
 
-  test("says when nothing runs and when the session expired", () => {
+  test("says when nothing runs and when the token expired", () => {
     const lines = formatStatus({
       baseUrl: "http://127.0.0.1:3773",
       server: SERVER,
@@ -63,7 +75,7 @@ describe("formatStatus", () => {
       now: new Date("2026-10-26T14:00:00.000Z"),
     });
 
-    assert.ok(lines.includes('T3 session expires on 2026-10-01 (expired; run "t3-voice setup").'));
+    assert.ok(lines.includes('T3 token expires on 2026-10-01 (expired; run "t3-voice setup").'));
     assert.deepEqual(lines.slice(-5), [
       "Projects (0):",
       "  (none)",
@@ -74,8 +86,8 @@ describe("formatStatus", () => {
   });
 });
 
-describe("session expiry", () => {
-  const expiryLine = (expiresAt: string) =>
+describe("token expiry", () => {
+  const expiryLine = (expiresAt: string | null) =>
     formatStatus({
       baseUrl: "http://127.0.0.1:3773",
       server: SERVER,
@@ -87,12 +99,12 @@ describe("session expiry", () => {
   test("warns when less than a day is left", () => {
     assert.equal(
       expiryLine("2026-10-26T19:00:00.000Z"),
-      'T3 session expires on 2026-10-26 (in less than a day; run "t3-voice setup" soon).',
+      'T3 token expires on 2026-10-26 (in less than a day; run "t3-voice setup" soon).',
     );
   });
 
   test("says when T3 gave no expiry", () => {
-    assert.equal(expiryLine(""), "T3 session expires at an unknown date.");
+    assert.equal(expiryLine(null), "T3 token expires at an unknown date.");
   });
 });
 
@@ -104,11 +116,12 @@ describe("runStatus", () => {
     );
   });
 
-  test("connects with the saved session and prints the shell", async () => {
+  test("connects with the saved token and prints the shell", async () => {
     const store = new InMemoryConfigStore();
     store.config = { t3: { baseUrl: "http://127.0.0.1:3773" } };
-    store.session = {
-      token: "secret-session-token",
+    store.pairing = {
+      baseUrl: "http://127.0.0.1:3773",
+      token: "secret-pairing-token",
       scopes: [],
       expiresAt: "2026-11-25T14:00:00.000Z",
     };
@@ -128,14 +141,35 @@ describe("runStatus", () => {
     assert.ok(lines.some((line) => line.startsWith("  - Fix tests  [joombo]  running")));
     assert.ok(t3.calls.includes("connect http://127.0.0.1:3773 with token"));
     assert.ok(t3.backend.closed);
-    assert.ok(!lines.join("\n").includes("secret-session-token"));
+    assert.ok(!lines.join("\n").includes("secret-pairing-token"));
+  });
+
+  test("never sends the saved token to another server than the one that issued it", async () => {
+    const store = new InMemoryConfigStore();
+    store.config = { t3: { baseUrl: "http://10.0.0.5:3773" } };
+    store.pairing = {
+      baseUrl: "http://127.0.0.1:3773",
+      token: "secret-pairing-token",
+      scopes: [],
+      expiresAt: null,
+    };
+    const t3 = new FakeT3Connector();
+
+    await assert.rejects(runStatus({ store, t3, out: () => {} }), (error: Error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /t3-voice setup/);
+      assert.doesNotMatch(error.message, /secret-pairing-token/);
+      return true;
+    });
+    assert.deepEqual(t3.calls, []);
   });
 
   test("fails closed on an untested T3 version", async () => {
     const store = new InMemoryConfigStore();
     store.config = { t3: { baseUrl: "http://127.0.0.1:3773" } };
-    store.session = {
-      token: "secret-session-token",
+    store.pairing = {
+      baseUrl: "http://127.0.0.1:3773",
+      token: "secret-pairing-token",
       scopes: [],
       expiresAt: "2026-11-25T14:00:00.000Z",
     };

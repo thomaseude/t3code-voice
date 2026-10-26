@@ -16,6 +16,7 @@ import {
   type EnvironmentDescriptor,
   SUPPORTED_ORCHESTRATION_PROTOCOL,
   type T3Pin,
+  toServerInfo,
 } from "./compatibility.ts";
 import { fetchDescriptor, issueWebSocketTicket, T3HttpError } from "./http.ts";
 import { openRpcConnection, type RpcConnection, RpcError } from "./rpcConnection.ts";
@@ -25,6 +26,11 @@ const METHODS = {
   getConfig: "server.getConfig",
   subscribeShell: "orchestration.subscribeShell",
 };
+
+/** How long a one-off call waits for T3's answer. A socket that only answers pings is no answer. */
+const ANSWER_TIMEOUT_MS = 15_000;
+
+const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
 /** How the adapter reaches T3. Tests replace it with an in-memory fake. */
 export interface T3Transport {
@@ -63,7 +69,7 @@ export class WebSocketT3Backend implements T3Backend {
   /** Last descriptor seen by the startup check. */
   private descriptor: EnvironmentDescriptor | null = null;
 
-  readonly options: WebSocketBackendOptions;
+  private readonly options: WebSocketBackendOptions;
 
   constructor(options: WebSocketBackendOptions) {
     this.options = options;
@@ -81,21 +87,20 @@ export class WebSocketT3Backend implements T3Backend {
 
   serverInfo(): ServerInfo {
     if (!this.descriptor) throw new Error("Not connected to T3 yet.");
-    return {
-      version: this.descriptor.serverVersion,
-      protocolVersion: this.descriptor.orchestrationProtocolVersion,
-    };
+    return toServerInfo(this.descriptor);
   }
 
   async getConfig(): Promise<T3Config> {
     const connection = await this.connection();
-    return toConfig(await connection.request(METHODS.getConfig, {}));
+    const answer = connection.request(METHODS.getConfig, {});
+    return toConfig(await withTimeout(answer, "its configuration"));
   }
 
   async listProjects(): Promise<Project[]> {
     const connection = await this.connection();
-    return new Promise((resolve, reject) => {
-      const cancel = connection.stream(
+    let cancel = () => {};
+    const projects = new Promise<Project[]>((resolve, reject) => {
+      cancel = connection.stream(
         METHODS.subscribeShell,
         {},
         {
@@ -109,13 +114,20 @@ export class WebSocketT3Backend implements T3Backend {
         },
       );
     });
+    return withTimeout(projects, "the project list", () => cancel());
   }
 
   subscribeShell(
     subscriber: ShellSubscriber,
     options: { afterSequence?: number } = {},
   ): ShellSubscription {
-    const stream = new ShellStream(this, subscriber, options.afterSequence ?? null);
+    const stream = new ShellStream({
+      connection: () => this.connection(),
+      subscriber,
+      afterSequence: options.afterSequence ?? null,
+      reconnectDelaysMs: this.options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS,
+      wait: this.options.wait ?? sleep,
+    });
     this.subscriptions.add(stream);
     stream.start();
     return {
@@ -161,7 +173,14 @@ export class WebSocketT3Backend implements T3Backend {
   }
 }
 
-const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+interface ShellStreamOptions {
+  /** The backend's shared, checked connection. */
+  connection(): Promise<RpcConnection>;
+  subscriber: ShellSubscriber;
+  afterSequence: number | null;
+  reconnectDelaysMs: number[];
+  wait(ms: number): Promise<void>;
+}
 
 /** One shell subscription that survives disconnects. */
 class ShellStream {
@@ -171,17 +190,13 @@ class ShellStream {
   private stopped = false;
   private failedAttempts = 0;
   private connected = false;
-  private readonly backend: WebSocketT3Backend;
+  private readonly options: ShellStreamOptions;
   private readonly subscriber: ShellSubscriber;
 
-  constructor(
-    backend: WebSocketT3Backend,
-    subscriber: ShellSubscriber,
-    afterSequence: number | null,
-  ) {
-    this.backend = backend;
-    this.subscriber = subscriber;
-    this.lastSequence = afterSequence;
+  constructor(options: ShellStreamOptions) {
+    this.options = options;
+    this.subscriber = options.subscriber;
+    this.lastSequence = options.afterSequence;
   }
 
   start(): void {
@@ -198,14 +213,14 @@ class ShellStream {
     if (this.stopped) return;
     let connection: RpcConnection;
     try {
-      connection = await this.backend.connection();
+      connection = await this.options.connection();
     } catch (error) {
       if (error instanceof T3IncompatibleError) return this.fail(error);
       if (error instanceof T3HttpError && (error.status === 401 || error.status === 403)) {
-        // The session was revoked or expired: retrying won't help, the owner must re-pair.
+        // The token was revoked or expired: retrying won't help, the owner must re-pair.
         return this.fail(
           new Error(
-            `T3 refused the companion's session (${error.status}); run "t3-voice setup" again.`,
+            `T3 refused the companion's token (${error.status}); run "t3-voice setup" again.`,
           ),
         );
       }
@@ -215,16 +230,21 @@ class ShellStream {
 
     const usedCursor = this.lastSequence !== null;
     const payload = usedCursor ? { afterSequence: this.lastSequence } : {};
+    // An error before the first item is T3 refusing the request; after it, the stream broke.
+    let accepted = false;
     this.cancelCurrent = connection.stream(METHODS.subscribeShell, payload, {
-      onValue: (item) => this.handleItem(item),
+      onValue: (item) => {
+        accepted = true;
+        this.handleItem(item);
+      },
       onEnd: (error) => {
         this.cancelCurrent = null;
         if (this.stopped) return;
-        if (error instanceof RpcError && usedCursor) {
+        if (error instanceof RpcError && !accepted && usedCursor) {
           // T3 refused to resume from our cursor: start over from a fresh snapshot.
           this.lastSequence = null;
           void this.subscribe();
-        } else if (error instanceof RpcError) {
+        } else if (error instanceof RpcError && !accepted) {
           // T3 refused a plain subscription (missing scope, changed schema...): retrying won't help.
           this.fail(new Error(`T3 refused the shell subscription: ${error.message}`));
         } else {
@@ -259,11 +279,10 @@ class ShellStream {
       this.connected = false;
       this.subscriber.onConnectionChange?.("reconnecting");
     }
-    const delays = this.backend.options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+    const delays = this.options.reconnectDelaysMs;
     const delay = delays[Math.min(this.failedAttempts, delays.length - 1)] ?? 1_000;
     this.failedAttempts += 1;
-    const wait = this.backend.options.wait ?? sleep;
-    void wait(delay).then(() => this.subscribe());
+    void this.options.wait(delay).then(() => this.subscribe());
   }
 
   private fail(error: Error): void {
@@ -275,4 +294,24 @@ class ShellStream {
 function sleep(ms: number): Promise<void> {
   // Unref'd: a pending retry alone must not keep a finished CLI command alive.
   return new Promise((resolve) => setTimeout(resolve, ms).unref());
+}
+
+/** Rejects when T3 has not answered in time, after calling `onTimeout` to clean up. */
+function withTimeout<T>(answer: Promise<T>, what: string, onTimeout = () => {}): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new Error(`T3 did not send ${what} in time.`));
+    }, ANSWER_TIMEOUT_MS);
+    answer.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

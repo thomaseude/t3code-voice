@@ -1,7 +1,8 @@
 // Seam 3: the WebSocket adapter against a real `t3 serve` at the pinned version.
 // Detects protocol drift when T3 is upgraded. Skipped when no T3 binary is installed.
 //
-//   npm run test:integration            (uses ~/.t3/runtime/versions/<pinned>/t3)
+//   npm run test:integration                   (~/.t3/runtime/versions/<newest pinned>/t3)
+//   T3_VERSION=0.1.2 npm run test:integration  (~/.t3/runtime/versions/0.1.2/t3)
 //   T3_BIN=/path/to/t3 npm run test:integration
 
 import assert from "node:assert/strict";
@@ -10,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { runSetup } from "../../src/adapters/cli/setup.ts";
-import { runStatus } from "../../src/adapters/cli/status.ts";
+import { formatStatus, runStatus } from "../../src/adapters/cli/status.ts";
 import { FileConfigStore } from "../../src/adapters/config/fileConfigStore.ts";
 import { DEFAULT_T3_PIN } from "../../src/adapters/t3-websocket/compatibility.ts";
 import { WebSocketT3Connector } from "../../src/adapters/t3-websocket/connector.ts";
@@ -50,7 +51,7 @@ describe("T3Backend WebSocket adapter against a real T3", {
     });
   }
 
-  test("setup exchanges a pairing link and stores a scoped session privately", async () => {
+  test("setup exchanges a pairing link and stores a scoped token privately", async () => {
     const link = await server.createPairingLink();
     const lines: string[] = [];
 
@@ -62,11 +63,12 @@ describe("T3Backend WebSocket adapter against a real T3", {
       out: (line) => lines.push(line),
     });
 
-    const session = await new FileConfigStore(configDir).loadT3Session();
-    assert.ok(session);
-    token = session.token;
-    assert.deepEqual(session.scopes.sort(), ["orchestration:operate", "orchestration:read"]);
-    assert.equal((await stat(join(configDir, "t3-session.json"))).mode & 0o777, 0o600);
+    const pairing = await new FileConfigStore(configDir).loadT3Pairing();
+    assert.ok(pairing);
+    token = pairing.token;
+    assert.equal(pairing.baseUrl, server.baseUrl);
+    assert.deepEqual(pairing.scopes.sort(), ["orchestration:operate", "orchestration:read"]);
+    assert.equal((await stat(join(configDir, "t3-pairing.json"))).mode & 0o777, 0o600);
     assert.ok(lines.some((line) => line.startsWith("Connected: 0 project(s)")));
 
     const output = lines.join("\n");
@@ -129,10 +131,21 @@ describe("T3Backend WebSocket adapter against a real T3", {
     const events: ShellEvent[] = [];
     const connectionStates: string[] = [];
     const state = new ShellState();
+    // What `t3-voice status` would print while a thread runs: the run is too short to poll for.
+    let statusWhileRunning: string[] = [];
     const subscription = backend.subscribeShell({
       onEvent: (event) => {
         events.push(event);
         state.apply(event);
+        if (statusWhileRunning.length === 0 && state.runningThreads().length > 0) {
+          statusWhileRunning = formatStatus({
+            baseUrl: server.baseUrl,
+            server: backend.serverInfo(),
+            tokenExpiresAt: null,
+            state,
+            now: new Date(),
+          });
+        }
       },
       onConnectionChange: (change) => connectionStates.push(change),
       onFatalError: (error) => assert.fail(error),
@@ -157,6 +170,11 @@ describe("T3Backend WebSocket adapter against a real T3", {
       assert.ok(
         seen.some((status) => ["preparing", "starting", "running"].includes(status)),
         `statuses seen: ${seen.join(", ")}`,
+      );
+      assert.ok(statusWhileRunning.includes("Running threads (1):"), statusWhileRunning.join("\n"));
+      assert.ok(
+        statusWhileRunning.some((line) => line.startsWith("  - Integration probe  [alpha]  ")),
+        statusWhileRunning.join("\n"),
       );
       const thread = state.threads.get(threadId);
       assert.equal(thread?.projectId, alpha.id);

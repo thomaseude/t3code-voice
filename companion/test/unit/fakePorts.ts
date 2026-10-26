@@ -10,14 +10,14 @@ import {
   type T3Config,
   type T3Connector,
   T3IncompatibleError,
-  type T3Session,
+  type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
 
 export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
   config: CompanionConfig | null = null;
-  session: T3Session | null = null;
+  pairing: T3Pairing | null = null;
 
   async loadConfig() {
     return this.config;
@@ -25,11 +25,11 @@ export class InMemoryConfigStore implements ConfigStore {
   async saveConfig(config: CompanionConfig) {
     this.config = config;
   }
-  async loadT3Session() {
-    return this.session;
+  async loadT3Pairing() {
+    return this.pairing;
   }
-  async saveT3Session(session: T3Session) {
-    this.session = session;
+  async saveT3Pairing(pairing: T3Pairing) {
+    this.pairing = pairing;
   }
 }
 
@@ -68,6 +68,7 @@ export class FakeT3Connector implements T3Connector {
   serverVersion = "0.1.0";
   grantedScopes = ["orchestration:read", "orchestration:operate"];
   readonly calls: string[] = [];
+  expiresAt: string | null = "2026-11-25T14:00:00.000Z";
 
   async checkServer(baseUrl: string, acceptedVersions = ["0.1.0"]): Promise<ServerInfo> {
     this.calls.push(`checkServer ${baseUrl}`);
@@ -76,17 +77,18 @@ export class FakeT3Connector implements T3Connector {
     }
     return { version: this.serverVersion, protocolVersion: 2 };
   }
-  async pair(baseUrl: string, pairingLink: string): Promise<T3Session> {
+  async pair(baseUrl: string, pairingLink: string): Promise<T3Pairing> {
     this.calls.push(`pair ${baseUrl} ${pairingLink}`);
     return {
-      token: "secret-session-token",
+      baseUrl,
+      token: "secret-pairing-token",
       scopes: this.grantedScopes,
-      expiresAt: "2026-11-25T14:00:00.000Z",
+      expiresAt: this.expiresAt,
     };
   }
   async connect(baseUrl: string, token: string): Promise<T3Backend> {
     this.calls.push(
-      `connect ${baseUrl} ${token === "secret-session-token" ? "with token" : "BAD TOKEN"}`,
+      `connect ${baseUrl} ${token === "secret-pairing-token" ? "with token" : "BAD TOKEN"}`,
     );
     await this.checkServer(baseUrl);
     return this.backend;

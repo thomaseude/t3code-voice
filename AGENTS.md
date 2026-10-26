@@ -44,10 +44,11 @@ companion/src/
 ## House rules
 
 - **Fail closed against T3.** T3's protocol is not a public API. The adapter checks the
-  pinned version (`adapters/t3-websocket/compatibility.ts`) on every new socket. Supporting
-  a new T3 version = run the integration tests against it, then add it to the pin.
+  pinned versions (`adapters/t3-websocket/compatibility.ts`) on every new socket. Supporting
+  a new T3 version = add it to the pin, run `T3_VERSION=<version> npm run test:integration`,
+  keep it only if the tests pass. Never accept a version range.
 - **Secrets**: never print, log or commit one (T3 token, OpenAI key, device tokens).
-  They live in `~/.config/t3voice/` (dir 700, files 600). Logs carry no audio, transcripts,
+  They live in `~/.config/t3voice/` (dir 700, files 600; a looser one is refused). Logs carry no audio, transcripts,
   code or prompts. CLI errors go through `scrubSecrets` as a last line of defence.
 - **Never touch the user's T3 server** (`127.0.0.1:3773`) from tests or experiments. Ask
   before creating a pairing token for it, and never paste a token in chat.

@@ -12,11 +12,15 @@ import { DEFAULT_T3_PIN } from "../../src/adapters/t3-websocket/compatibility.ts
 
 const run = promisify(execFile);
 
-/** `T3_BIN`, or the pinned version installed by T3's own installer. */
+/**
+ * `T3_BIN`, or the version `T3_VERSION` names, or the newest pinned version, as installed by
+ * T3's own installer.
+ */
 export function findT3Binary(): string | null {
+  const version = process.env.T3_VERSION ?? DEFAULT_T3_PIN.serverVersions.at(-1) ?? "";
   const candidates = [
     process.env.T3_BIN,
-    join(homedir(), ".t3", "runtime", "versions", DEFAULT_T3_PIN.serverVersions[0] ?? "", "t3"),
+    join(homedir(), ".t3", "runtime", "versions", version, "t3"),
   ];
   return candidates.find((path): path is string => Boolean(path && existsSync(path))) ?? null;
 }
