@@ -20,9 +20,10 @@ export class RateLimiter {
   /**
    * Per key: when its window started and how many requests it counted. A Map keeps
    * insertion order, and a key is re-inserted when its window restarts, so the first
-   * entry is the oldest window (unless the clock stepped back).
+   * entry is always the oldest window.
    */
   private readonly windows = new Map<string, { start: number; count: number }>();
+  private lastNow = Number.NEGATIVE_INFINITY;
 
   constructor({ limit, windowMs, maxKeys = 10_000, now = Date.now }: RateLimiterOptions) {
     this.limit = limit;
@@ -34,13 +35,13 @@ export class RateLimiter {
   /** Counts one request for the key and says whether it may go through. */
   take(key: string): RateDecision {
     const now = this.now();
+    // The wall clock went back (an NTP step): restart every window rather than stretch
+    // them, which also keeps the oldest window first.
+    if (now < this.lastNow) this.windows.clear();
+    this.lastNow = now;
     this.dropEndedWindows(now);
 
     let window = this.windows.get(key);
-    if (window !== undefined && this.hasEnded(window, now)) {
-      this.windows.delete(key);
-      window = undefined;
-    }
     if (window === undefined) {
       // Full: forget the oldest caller. Refusing newcomers instead would let a flood of
       // addresses lock everyone else out.
@@ -59,18 +60,10 @@ export class RateLimiter {
     return this.windows.size;
   }
 
-  /**
-   * A window ends after its length, or at once if the wall clock went back before its
-   * start (an NTP step). The wall clock keeps counting while the host is suspended.
-   */
-  private hasEnded(window: { start: number }, now: number): boolean {
-    return now - window.start >= this.windowMs || now < window.start;
-  }
-
   /** Oldest windows come first, so this stops at the first one still running. */
   private dropEndedWindows(now: number) {
     for (const [key, window] of this.windows) {
-      if (!this.hasEnded(window, now)) return;
+      if (now - window.start < this.windowMs) return;
       this.windows.delete(key);
     }
   }
