@@ -51,7 +51,7 @@ export async function runPair({
       return 0;
     }
     if ((await store.loadPairingWindow(window.codeSha256)) === null) {
-      out('The pairing window was closed, or another "t3-voice pair" replaced it.');
+      out("The pairing window was closed.");
       return 1;
     }
     if (event === "stop") {

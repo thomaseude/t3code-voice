@@ -149,8 +149,8 @@ t3-voice devices revoke ID
 
 - `pair` opens the pairing window for 5 minutes and shows a QR code holding
   `t3voice://pair?url=<publicUrl>&code=<one-time code>`. The code is never printed as text.
-  The window closes when a device pairs, when it expires, or on Ctrl-C. Running `pair`
-  again replaces the code.
+  The window closes when a device pairs, when it expires, or on Ctrl-C. Each `pair`
+  has its own code: running it twice gives two codes, each valid once.
 - The app sends `POST /pair` with `{"code": "...", "name": "iPhone de Thomas"}` and gets
   `{"token": "...", "device": {"id": "...", "name": "..."}}`. A wrong, used or expired code,
   or a closed window, gets `401` with an empty body.
@@ -176,7 +176,7 @@ open, and prints the `chmod` command that fixes it.
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
-| `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them, and opening a window removes the others |
+| `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
 | `openai.env` | OpenAI key (secret, used by later tickets) |
 
 Secrets are never printed or logged.

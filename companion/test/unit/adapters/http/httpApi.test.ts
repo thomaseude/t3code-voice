@@ -345,13 +345,14 @@ describe("Pairing (POST /pair)", () => {
     assert.equal((await api.pair({ code, name: "iPhone" })).status, 200);
   });
 
-  test("a new window replaces the code of the previous one", async () => {
+  test("two windows can be open at once, and each code works once", async () => {
     const api = await startPairingApi();
     const first = await api.openWindow();
     const second = await api.openWindow();
 
-    assert.equal((await api.pair({ code: first.code, name: "iPhone" })).status, 401);
-    assert.equal((await api.pair({ code: second.code, name: "iPhone" })).status, 200);
+    assert.equal((await api.pair({ code: first.code, name: "iPhone" })).status, 200);
+    assert.equal((await api.pair({ code: second.code, name: "iPad" })).status, 200);
+    assert.equal((await api.pair({ code: first.code, name: "Another" })).status, 401);
   });
 
   describe("failed attempts are limited for all callers together", () => {

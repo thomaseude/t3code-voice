@@ -55,9 +55,8 @@ export interface ConfigStore {
   revokeDevice(id: string, revokedAt: string): Promise<void>;
   /** The open window for this code, or null. It may be expired or used. */
   loadPairingWindow(codeSha256: string): Promise<PairingWindow | null>;
-  /** Opens a window and closes any other: only the latest `t3-voice pair` works. */
+  /** Opens a window. Each `t3-voice pair` opens and closes only its own window. */
   savePairingWindow(window: PairingWindow): Promise<void>;
-  /** Closes the window for this code only. */
   clearPairingWindow(codeSha256: string): Promise<void>;
 }
 

@@ -21,7 +21,8 @@ export class InMemoryConfigStore implements ConfigStore {
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
   devices: PairedDevice[] = [];
-  pairingWindow: PairingWindow | null = null;
+  /** Open pairing windows, by code hash. */
+  readonly pairingWindows = new Map<string, PairingWindow>();
 
   async loadConfig() {
     return this.config;
@@ -53,13 +54,13 @@ export class InMemoryConfigStore implements ConfigStore {
     );
   }
   async loadPairingWindow(codeSha256: string) {
-    return this.pairingWindow?.codeSha256 === codeSha256 ? this.pairingWindow : null;
+    return this.pairingWindows.get(codeSha256) ?? null;
   }
   async savePairingWindow(window: PairingWindow) {
-    this.pairingWindow = window;
+    this.pairingWindows.set(window.codeSha256, window);
   }
   async clearPairingWindow(codeSha256: string) {
-    if (this.pairingWindow?.codeSha256 === codeSha256) this.pairingWindow = null;
+    this.pairingWindows.delete(codeSha256);
   }
 }
 

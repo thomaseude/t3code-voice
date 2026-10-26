@@ -28,7 +28,7 @@ const PAIRING_WINDOWS_DIR = "pairing-windows";
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-/** A device as devices.json holds it: revocations live in their own file. */
+/** A device as devices.json holds it: revocations live in `revoked/`, one file per device. */
 type StoredDevice = Omit<PairedDevice, "revokedAt">;
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -170,14 +170,10 @@ export class FileConfigStore implements ConfigStore {
   }
 
   async savePairingWindow(window: PairingWindow): Promise<void> {
-    const own = `${window.codeSha256}.json`;
     await this.writePrivateFile(
-      join(PAIRING_WINDOWS_DIR, own),
+      join(PAIRING_WINDOWS_DIR, `${window.codeSha256}.json`),
       `${JSON.stringify({ expiresAt: window.expiresAt }, null, 2)}\n`,
     );
-    for (const file of await this.privateFilesIn(PAIRING_WINDOWS_DIR)) {
-      if (file !== own) await rm(join(this.location, PAIRING_WINDOWS_DIR, file), { force: true });
-    }
   }
 
   async clearPairingWindow(codeSha256: string): Promise<void> {

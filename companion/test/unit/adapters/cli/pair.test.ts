@@ -40,15 +40,17 @@ function pair(store: InMemoryConfigStore, onTick: (clock: { now: number }) => "s
   return { done, lines, qrTexts, clock };
 }
 
+/** The window this run opened, or null once it is closed. */
+const openWindow = (store: InMemoryConfigStore) => [...store.pairingWindows.values()][0] ?? null;
 const codeOf = (qrText: string) => new URL(qrText).searchParams.get("code") ?? "";
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 describe("t3-voice pair", () => {
   test("shows a QR code with the public URL and a one-time code, never the code as text", async () => {
     const store = setUpStore();
-    let windowWhileOpen = store.pairingWindow;
+    let windowWhileOpen = openWindow(store);
     const run = pair(store, () => {
-      windowWhileOpen = store.pairingWindow;
+      windowWhileOpen = openWindow(store);
       return "stop";
     });
     await run.done;
@@ -71,7 +73,7 @@ describe("t3-voice pair", () => {
     const store = setUpStore();
     const run = pair(store, () => {
       // What POST /pair does in `t3-voice serve`: it saves the device with the code it used.
-      const codeSha256 = store.pairingWindow?.codeSha256 ?? "";
+      const codeSha256 = openWindow(store)?.codeSha256 ?? "";
       store.devices.push(
         pairedDevice({ id: "3f9a2c1b", name: "iPhone de Thomas", pairingCodeSha256: codeSha256 }),
       );
@@ -80,7 +82,7 @@ describe("t3-voice pair", () => {
 
     assert.equal(await run.done, 0);
     assert.equal(run.lines.at(-1), 'Paired "iPhone de Thomas" (3f9a2c1b).');
-    assert.equal(store.pairingWindow, null, "the used window is closed");
+    assert.equal(openWindow(store), null, "the used window is closed");
   });
 
   test("closes the window when it expires", async () => {
@@ -89,7 +91,7 @@ describe("t3-voice pair", () => {
 
     assert.equal(await run.done, 1);
     assert.equal(run.clock.now, START + 5 * 60_000);
-    assert.equal(store.pairingWindow, null);
+    assert.equal(openWindow(store), null);
     assert.equal(run.lines.at(-1), 'The pairing window expired. Run "t3-voice pair" again.');
   });
 
@@ -98,24 +100,21 @@ describe("t3-voice pair", () => {
     const run = pair(store, () => "stop");
 
     assert.equal(await run.done, 1);
-    assert.equal(store.pairingWindow, null);
+    assert.equal(openWindow(store), null);
     assert.equal(run.lines.at(-1), "Pairing cancelled.");
   });
 
-  test("leaves alone a window that another `t3-voice pair` opened", async () => {
+  test("leaves alone the window of another `t3-voice pair`: each command manages its own", async () => {
     const store = setUpStore();
     const other = { codeSha256: "c".repeat(64), expiresAt: "2026-10-26T12:06:00.000Z" };
     const run = pair(store, () => {
-      store.pairingWindow = other;
+      store.pairingWindows.set(other.codeSha256, other);
       return "stop";
     });
 
     assert.equal(await run.done, 1);
-    assert.equal(store.pairingWindow, other);
-    assert.equal(
-      run.lines.at(-1),
-      'The pairing window was closed, or another "t3-voice pair" replaced it.',
-    );
+    assert.deepEqual([...store.pairingWindows.values()], [other]);
+    assert.equal(run.lines.at(-1), "Pairing cancelled.");
   });
 
   test("needs the public URL of the companion", async () => {
@@ -126,6 +125,6 @@ describe("t3-voice pair", () => {
       pair(store, () => "stop").done,
       /"server\.publicUrl".*config\.json.*https:\/\/voice\.example\.com/s,
     );
-    assert.equal(store.pairingWindow, null);
+    assert.equal(openWindow(store), null);
   });
 });

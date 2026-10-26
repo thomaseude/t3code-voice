@@ -369,14 +369,14 @@ describe("FileConfigStore", () => {
       await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
     });
 
-    test("opening a window closes the others", async () => {
+    test("opening a window leaves the others open", async () => {
       const dir = await tempDir();
       const store = new FileConfigStore(dir);
       await store.savePairingWindow(WINDOW);
 
       await store.savePairingWindow(NEWER);
 
-      assert.equal(await store.loadPairingWindow(WINDOW.codeSha256), null);
+      assert.deepEqual(await store.loadPairingWindow(WINDOW.codeSha256), WINDOW);
       assert.deepEqual(await store.loadPairingWindow(NEWER.codeSha256), NEWER);
     });
 
