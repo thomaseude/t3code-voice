@@ -1,0 +1,274 @@
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
+import type { ShellEvent } from "../../src/t3/backend.ts";
+import { DEFAULT_T3_PIN, T3IncompatibleError } from "../../src/t3/compatibility.ts";
+import { RpcError } from "../../src/t3/rpcConnection.ts";
+import { WebSocketT3Backend } from "../../src/t3/webSocketBackend.ts";
+import { FakeTransport, settle, shellSnapshot, wireProject, wireThread } from "./fakes.ts";
+
+function makeBackend(transport: FakeTransport) {
+  return new WebSocketT3Backend({ transport, pin: DEFAULT_T3_PIN, wait: () => Promise.resolve() });
+}
+
+function recordShell(backend: WebSocketT3Backend, options?: { afterSequence?: number }) {
+  const events: ShellEvent[] = [];
+  const fatalErrors: Error[] = [];
+  const subscription = backend.subscribeShell(
+    { onEvent: (event) => events.push(event), onFatalError: (error) => fatalErrors.push(error) },
+    options,
+  );
+  return { events, fatalErrors, subscription };
+}
+
+describe("startup check", () => {
+  test("refuses a server with another protocol version before opening a socket", async () => {
+    const transport = new FakeTransport();
+    transport.descriptor = { ...transport.descriptor, orchestrationProtocolVersion: 3 };
+
+    await assert.rejects(
+      WebSocketT3Backend.connect({ transport, pin: DEFAULT_T3_PIN }),
+      T3IncompatibleError,
+    );
+    assert.equal(transport.connections.length, 0);
+  });
+
+  test("refuses an untested server version", async () => {
+    const transport = new FakeTransport();
+    transport.descriptor = { ...transport.descriptor, serverVersion: "0.2.0" };
+
+    await assert.rejects(
+      WebSocketT3Backend.connect({ transport, pin: DEFAULT_T3_PIN }),
+      /server version is 0\.2\.0/,
+    );
+    assert.equal(transport.connections.length, 0);
+  });
+
+  test("refuses a server missing a required capability", async () => {
+    const transport = new FakeTransport();
+    const pin = { ...DEFAULT_T3_PIN, requiredCapabilities: ["threadSettlement", "voiceFriendly"] };
+
+    await assert.rejects(
+      WebSocketT3Backend.connect({ transport, pin }),
+      /required capability "voiceFriendly" is missing/,
+    );
+  });
+
+  test("connects to a tested server", async () => {
+    const transport = new FakeTransport();
+    const backend = await WebSocketT3Backend.connect({ transport, pin: DEFAULT_T3_PIN });
+
+    assert.equal(transport.connections.length, 1);
+    assert.equal(backend.descriptor?.serverVersion, "0.1.0");
+  });
+});
+
+describe("getConfig", () => {
+  test("returns providers, models and the default runtime mode", async () => {
+    const transport = new FakeTransport();
+    const backend = makeBackend(transport);
+    await backend.connection();
+    transport.lastConnection().responses.set("server.getConfig", {
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          status: "ready",
+          models: [{ slug: "claude-opus-5-5", name: "Claude Opus 5.5", isCustom: false }],
+          slashCommands: [],
+        },
+        {
+          instanceId: "cursor",
+          driver: "cursor",
+          displayName: "Cursor",
+          enabled: false,
+          models: [],
+        },
+      ],
+      settings: {
+        defaultRuntimeMode: "approval-required",
+        defaultModelSelection: { instanceId: "claudeAgent", model: "claude-opus-5-5" },
+      },
+    });
+
+    const config = await backend.getConfig();
+
+    assert.deepEqual(config, {
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          status: "ready",
+          models: [{ slug: "claude-opus-5-5", name: "Claude Opus 5.5" }],
+        },
+        {
+          instanceId: "cursor",
+          driver: "cursor",
+          displayName: "Cursor",
+          enabled: false,
+          status: "unknown",
+          models: [],
+        },
+      ],
+      defaultRuntimeMode: "approval-required",
+      defaultModel: { providerInstanceId: "claudeAgent", model: "claude-opus-5-5" },
+    });
+  });
+});
+
+describe("listProjects", () => {
+  test("reads the projects from the shell snapshot, then stops the stream", async () => {
+    const transport = new FakeTransport();
+    const backend = makeBackend(transport);
+
+    const projects = backend.listProjects();
+    await settle();
+    const stream = transport.lastConnection().lastStream();
+    stream.push({ kind: "synchronized" }, shellSnapshot(4, [wireProject("p1", "joombo")]));
+
+    assert.deepEqual(await projects, [
+      { id: "p1", title: "joombo", workspaceRoot: "/home/me/joombo" },
+    ]);
+    assert.equal(stream.tag, "orchestration.subscribeShell");
+    assert.equal(stream.cancelled, true);
+  });
+});
+
+describe("subscribeShell", () => {
+  test("delivers the snapshot, then deltas in order", async () => {
+    const transport = new FakeTransport();
+    const { events } = recordShell(makeBackend(transport));
+    await settle();
+    const stream = transport.lastConnection().lastStream();
+
+    stream.push(
+      shellSnapshot(10, [wireProject("p1")]),
+      { kind: "synchronized" },
+      { kind: "thread.updated", sequence: 11, location: "active", thread: wireThread("t1") },
+      { kind: "project.removed", sequence: 12, projectId: "p1" },
+    );
+
+    assert.deepEqual(
+      events.map((event) => [event.type, event.sequence]),
+      [
+        ["snapshot", 10],
+        ["thread.updated", 11],
+        ["project.removed", 12],
+      ],
+    );
+  });
+
+  test("drops events replayed with a sequence it already delivered", async () => {
+    const transport = new FakeTransport();
+    const { events } = recordShell(makeBackend(transport));
+    await settle();
+    const stream = transport.lastConnection().lastStream();
+
+    stream.push(
+      shellSnapshot(10, []),
+      { kind: "thread.updated", sequence: 12, location: "active", thread: wireThread("t1") },
+      { kind: "thread.updated", sequence: 11, location: "active", thread: wireThread("t1") },
+      { kind: "thread.updated", sequence: 12, location: "active", thread: wireThread("t1") },
+      { kind: "thread.updated", sequence: 13, location: "active", thread: wireThread("t1") },
+    );
+
+    assert.deepEqual(
+      events.map((event) => event.sequence),
+      [10, 12, 13],
+    );
+  });
+
+  test("starts from the given cursor", async () => {
+    const transport = new FakeTransport();
+    recordShell(makeBackend(transport), { afterSequence: 42 });
+    await settle();
+
+    assert.deepEqual(transport.lastConnection().lastStream().payload, { afterSequence: 42 });
+  });
+
+  test("after a disconnect, resumes after the last sequence on a new socket", async () => {
+    const transport = new FakeTransport();
+    const { events } = recordShell(makeBackend(transport));
+    await settle();
+    transport
+      .lastConnection()
+      .lastStream()
+      .push(shellSnapshot(10, []), {
+        kind: "thread.updated",
+        sequence: 11,
+        location: "active",
+        thread: wireThread("t1"),
+      });
+
+    transport.lastConnection().close();
+    await settle();
+
+    assert.equal(transport.connections.length, 2);
+    assert.equal(transport.descriptorChecks, 2, "every new socket repeats the startup check");
+    const resumed = transport.lastConnection().lastStream();
+    assert.deepEqual(resumed.payload, { afterSequence: 11 });
+
+    resumed.push({
+      kind: "thread.updated",
+      sequence: 12,
+      location: "active",
+      thread: wireThread("t1", { status: "running" }),
+    });
+    assert.deepEqual(
+      events.map((event) => event.sequence),
+      [10, 11, 12],
+    );
+  });
+
+  test("falls back to a fresh snapshot when T3 refuses to resume from the cursor", async () => {
+    const transport = new FakeTransport();
+    const { events } = recordShell(makeBackend(transport), { afterSequence: 99 });
+    await settle();
+    const first = transport.lastConnection().lastStream();
+
+    first.fail(new RpcError("cursor is ahead of the server"));
+    await settle();
+
+    const second = transport.lastConnection().lastStream();
+    assert.notEqual(first, second);
+    assert.deepEqual(second.payload, {});
+    second.push(shellSnapshot(5, [wireProject("p1")]));
+    assert.deepEqual(
+      events.map((event) => [event.type, event.sequence]),
+      [["snapshot", 5]],
+    );
+  });
+
+  test("stops for good when T3 was upgraded to an untested version while disconnected", async () => {
+    const transport = new FakeTransport();
+    const { fatalErrors } = recordShell(makeBackend(transport));
+    await settle();
+    transport.lastConnection().lastStream().push(shellSnapshot(10, []));
+
+    transport.descriptor = { ...transport.descriptor, serverVersion: "9.9.9" };
+    transport.lastConnection().close();
+    await settle();
+
+    assert.equal(transport.connections.length, 1, "no socket is opened to the untested server");
+    assert.equal(fatalErrors.length, 1);
+    assert.ok(fatalErrors[0] instanceof T3IncompatibleError);
+  });
+
+  test("close() stops the stream and reconnects no more", async () => {
+    const transport = new FakeTransport();
+    const backend = makeBackend(transport);
+    const { subscription } = recordShell(backend);
+    await settle();
+    const stream = transport.lastConnection().lastStream();
+
+    subscription.close();
+    transport.lastConnection().close();
+    await settle();
+
+    assert.equal(stream.cancelled, true);
+    assert.equal(transport.connections.length, 1);
+  });
+});

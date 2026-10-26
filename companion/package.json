@@ -1,0 +1,31 @@
+{
+  "name": "t3-voice",
+  "version": "0.1.0",
+  "description": "Companion service that lets the T3 Voice iOS app drive a T3 Code server by voice.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "t3-voice": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "node --test \"test/unit/**/*.test.ts\"",
+    "test:integration": "node --test --test-concurrency=1 \"test/integration/**/*.test.ts\"",
+    "t3-voice": "node src/cli.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.3",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}
