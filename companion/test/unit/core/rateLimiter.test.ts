@@ -22,6 +22,20 @@ describe("RateLimiter", () => {
     assert.deepEqual(limiter.take("ip:1"), { allowed: true });
   });
 
+  test("check says whether a key is over its limit, without counting a request", () => {
+    const { clock, limiter } = limiterAt(0, 2);
+
+    assert.deepEqual(limiter.check("all"), { allowed: true });
+    limiter.take("all");
+    assert.deepEqual(limiter.check("all"), { allowed: true });
+    limiter.take("all");
+    clock.now = 15_000;
+    assert.deepEqual(limiter.check("all"), { allowed: false, retryAfterMs: 45_000 });
+    assert.deepEqual(limiter.check("all"), { allowed: false, retryAfterMs: 45_000 });
+    clock.now = 60_000;
+    assert.deepEqual(limiter.check("all"), { allowed: true });
+  });
+
   test("counts each key on its own", () => {
     const { limiter } = limiterAt(0, 1);
 

@@ -4,16 +4,32 @@
 // directory that other users can open is refused. Secrets are only read from and written to
 // these files: they are never printed or logged.
 
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { type CompanionConfig, ConfigError, type ConfigStore } from "../../ports/configStore.ts";
+import { dirname, join } from "node:path";
+import {
+  type CompanionConfig,
+  ConfigError,
+  type ConfigStore,
+  type PairingWindow,
+} from "../../ports/configStore.ts";
 import type { PairedDevice } from "../../ports/deviceAuth.ts";
 import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
 const DEVICES_FILE = "devices.json";
+/** One file per revoked device: `<device id>.json`. */
+const REVOKED_DIR = "revoked";
+/** One file per open pairing window: `<SHA-256 of its code>.json`. */
+const PAIRING_WINDOWS_DIR = "pairing-windows";
+
+/** Device ids and code hashes become file names, so they must match these patterns (no `/`, no `..`). */
+const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/** A device as devices.json holds it: revocations live in `revoked/`, one file per device. */
+type StoredDevice = Omit<PairedDevice, "revokedAt">;
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.T3VOICE_CONFIG_DIR ?? join(homedir(), ".config", "t3voice");
@@ -21,6 +37,8 @@ export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
 
 export class FileConfigStore implements ConfigStore {
   readonly location: string;
+  /** The device list change in progress: changes run one at a time. */
+  private deviceChanges: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.location = dir;
@@ -55,6 +73,12 @@ export class FileConfigStore implements ConfigStore {
     if (server.clientIpHeader !== undefined && typeof server.clientIpHeader !== "string") {
       throw new ConfigError(`${path}: "server.clientIpHeader" must be a header name.`);
     }
+    if (server.publicUrl !== undefined && !isHttpsUrl(server.publicUrl)) {
+      // The phone sends its device token to this address.
+      throw new ConfigError(
+        `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
+      );
+    }
     return data as CompanionConfig;
   }
 
@@ -84,22 +108,100 @@ export class FileConfigStore implements ConfigStore {
   async loadDevices(): Promise<PairedDevice[]> {
     const path = join(this.location, DEVICES_FILE);
     const data = await this.readPrivateJson(path);
-    if (data === null) return [];
-    const devices = data?.devices;
-    if (!Array.isArray(devices) || !devices.every(isPairedDevice)) {
+    const devices = data === null ? [] : data?.devices;
+    if (!Array.isArray(devices) || !devices.every(isStoredDevice)) {
       // Fail closed: a list we cannot read must not let any device through.
       throw new ConfigError(`${path} is damaged.`);
     }
-    return devices;
+    const revocations = await this.loadRevocations();
+    return devices.map((device) => ({ ...device, revokedAt: revocations.get(device.id) ?? null }));
   }
 
-  /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
+  updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]): Promise<PairedDevice[]> {
+    const run = this.deviceChanges.then(async () => {
+      const devices = change(await this.loadDevices());
+      const stored: StoredDevice[] = devices.map(({ revokedAt: _, ...device }) => device);
+      await this.writePrivateFile(
+        DEVICES_FILE,
+        `${JSON.stringify({ devices: stored }, null, 2)}\n`,
+      );
+      return devices;
+    });
+    this.deviceChanges = run.catch(() => {});
+    return run;
+  }
+
+  async revokeDevice(id: string, revokedAt: string): Promise<void> {
+    if (!DEVICE_ID.test(id)) throw new ConfigError(`"${id}" is not a device id.`);
+    const name = join(REVOKED_DIR, `${id}.json`);
+    // The first date counts.
+    if ((await modeOf(join(this.location, name))) !== null) return;
+    // A file of its own, written in one step: it cannot overwrite what `serve` or
+    // another revoke wrote, and a write cut short leaves nothing behind.
+    await this.writePrivateFile(name, `${JSON.stringify({ revokedAt })}\n`);
+  }
+
+  /** Device id → date of its revocation. */
+  private async loadRevocations(): Promise<Map<string, string>> {
+    const revocations = new Map<string, string>();
+    for (const file of await this.privateFilesIn(REVOKED_DIR)) {
+      const path = join(this.location, REVOKED_DIR, file);
+      let revokedAt: unknown = null;
+      try {
+        revokedAt = JSON.parse((await this.readPrivateText(path)) ?? "null")?.revokedAt;
+      } catch {}
+      // A damaged file still revokes its device: fail closed, for that device only.
+      if (typeof revokedAt !== "string")
+        revokedAt = new Date((await stat(path)).mtimeMs).toISOString();
+      revocations.set(file.slice(0, -".json".length), revokedAt as string);
+    }
+    return revocations;
+  }
+
+  async loadPairingWindow(codeSha256: string): Promise<PairingWindow | null> {
+    if (!SHA256_HEX.test(codeSha256)) return null;
+    const path = join(this.location, PAIRING_WINDOWS_DIR, `${codeSha256}.json`);
+    const data = await this.readPrivateJson(path);
+    if (data === null) return null;
+    if (Number.isNaN(Date.parse(data?.expiresAt))) {
+      throw new ConfigError(`${path} is damaged; run "t3-voice pair" again.`);
+    }
+    return { codeSha256, expiresAt: data.expiresAt };
+  }
+
+  async savePairingWindow(window: PairingWindow): Promise<void> {
+    await this.writePrivateFile(
+      join(PAIRING_WINDOWS_DIR, `${window.codeSha256}.json`),
+      `${JSON.stringify({ expiresAt: window.expiresAt }, null, 2)}\n`,
+    );
+  }
+
+  async clearPairingWindow(codeSha256: string): Promise<void> {
+    if (!SHA256_HEX.test(codeSha256)) return;
+    // Only this window's own file: a newer window is another file.
+    await rm(join(this.location, PAIRING_WINDOWS_DIR, `${codeSha256}.json`), { force: true });
+  }
+
+  /** The `.json` files of a subdirectory (temp files left out); none when it is missing. */
+  private async privateFilesIn(dir: string): Promise<string[]> {
+    const path = join(this.location, dir);
+    await this.assertPrivateDir(path);
+    try {
+      return (await readdir(path)).filter((file) => file.endsWith(".json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  /**
+   * Writes atomically (temp file + rename) so a crash never leaves a half-written secret.
+   * `name` may be in a subdirectory, which is created private too.
+   */
   private async writePrivateFile(name: string, content: string): Promise<void> {
-    // Tighten the directory only if we created it. An existing one is checked, never changed.
-    const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
-    if (created !== undefined) await chmod(this.location, 0o700);
-    else await this.assertPrivateDir();
     const path = join(this.location, name);
+    await this.ensurePrivateDir();
+    await this.ensurePrivateDir(dirname(path));
     const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, content, { mode: 0o600 });
     await chmod(tempPath, 0o600);
@@ -108,26 +210,39 @@ export class FileConfigStore implements ConfigStore {
 
   // biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
   private async readPrivateJson(path: string): Promise<any | null> {
-    // Check the directory even when the file is missing: setup must fail before it pairs.
-    await this.assertPrivateDir();
-    const mode = await modeOf(path);
-    if (mode === null) return null;
-    if ((mode & 0o077) !== 0) {
-      throw new ConfigError(`${path} can be read by other users; run "chmod 600 ${path}".`);
-    }
+    const text = await this.readPrivateText(path);
+    if (text === null) return null;
     try {
-      return JSON.parse(await readFile(path, "utf8"));
+      return JSON.parse(text);
     } catch {
       throw new ConfigError(`${path} is not valid JSON.`);
     }
   }
 
-  private async assertPrivateDir(): Promise<void> {
-    const mode = (await modeOf(this.location)) ?? 0;
+  /** The file's content, or null when it does not exist. Refuses a file others can read. */
+  private async readPrivateText(path: string): Promise<string | null> {
+    // Check the directory even when the file is missing: setup must fail before it pairs.
+    await this.assertPrivateDir();
+    await this.assertPrivateDir(dirname(path));
+    const mode = await modeOf(path);
+    if (mode === null) return null;
     if ((mode & 0o077) !== 0) {
-      throw new ConfigError(
-        `${this.location} can be opened by other users; run "chmod 700 ${this.location}".`,
-      );
+      throw new ConfigError(`${path} can be read by other users; run "chmod 600 ${path}".`);
+    }
+    return readFile(path, "utf8");
+  }
+
+  private async ensurePrivateDir(dir = this.location): Promise<void> {
+    // Tighten the directory only if we created it. An existing one is checked, never changed.
+    const created = await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (created !== undefined) await chmod(dir, 0o700);
+    else await this.assertPrivateDir(dir);
+  }
+
+  private async assertPrivateDir(dir = this.location): Promise<void> {
+    const mode = (await modeOf(dir)) ?? 0;
+    if ((mode & 0o077) !== 0) {
+      throw new ConfigError(`${dir} can be opened by other users; run "chmod 700 ${dir}".`);
     }
   }
 }
@@ -142,13 +257,20 @@ async function modeOf(path: string): Promise<number | null> {
   }
 }
 
+function isHttpsUrl(value: unknown): boolean {
+  return typeof value === "string" && URL.canParse(value) && new URL(value).protocol === "https:";
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: checks an untyped JSON value.
-function isPairedDevice(value: any): value is PairedDevice {
+function isStoredDevice(value: any): value is StoredDevice {
+  const next = value?.nextToken;
   return (
     typeof value?.id === "string" &&
     typeof value?.name === "string" &&
     typeof value?.tokenSha256 === "string" &&
-    typeof value?.pairedAt === "string" &&
-    (typeof value?.revokedAt === "string" || value?.revokedAt === null)
+    (next === null || (typeof next?.sha256 === "string" && typeof next?.issuedAt === "string")) &&
+    typeof value?.tokenIssuedAt === "string" &&
+    typeof value?.pairingCodeSha256 === "string" &&
+    typeof value?.pairedAt === "string"
   );
 }

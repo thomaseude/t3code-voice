@@ -2,27 +2,155 @@
 // when it pairs. Only their SHA-256 is stored. A token is long and random, so a plain
 // hash is enough: there is no weak password to protect with a slow hash.
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { randomSecret, sameHash, sha256 } from "../../core/secrets.ts";
 import type { ConfigStore } from "../../ports/configStore.ts";
-import type { Device, DeviceAuth } from "../../ports/deviceAuth.ts";
+import type { Authentication, Device, DeviceAuth, PairedDevice } from "../../ports/deviceAuth.ts";
+
+/** A token is replaced the first time it is used after this age. */
+const ROTATE_AFTER_MS = 30 * 86_400_000;
+/**
+ * A replacement is sent again (as a new token) only after this delay. Requests sent
+ * together with the old token then get one replacement, not several the app could mix up.
+ */
+const RESEND_REPLACEMENT_AFTER_MS = 60_000;
+
+export interface OpaqueTokenAuthOptions {
+  /** Current time in milliseconds; injectable for tests. */
+  now?: () => number;
+}
 
 export class OpaqueTokenAuth implements DeviceAuth {
   private readonly store: ConfigStore;
+  private readonly now: () => number;
 
-  constructor(store: ConfigStore) {
+  constructor(store: ConfigStore, { now = Date.now }: OpaqueTokenAuthOptions = {}) {
     this.store = store;
+    this.now = now;
   }
 
-  async authenticate(token: string): Promise<Device | null> {
-    const hash = createHash("sha256").update(token).digest();
+  async authenticate(token: string): Promise<Authentication | null> {
+    const hash = sha256(token);
     // Read on every request, so a revocation applies to the next one.
     for (const device of await this.store.loadDevices()) {
       if (device.revokedAt !== null) continue;
-      const stored = Buffer.from(device.tokenSha256, "hex");
-      if (stored.length === hash.length && timingSafeEqual(stored, hash)) {
-        return { id: device.id, name: device.name };
+      if (sameHash(device.tokenSha256, hash)) return this.withCurrentToken(device);
+      if (device.nextToken !== null && sameHash(device.nextToken.sha256, hash)) {
+        return this.withReplacementToken(device, hash);
       }
     }
     return null;
+  }
+
+  async register(
+    name: string,
+    pairingCodeSha256: string,
+  ): Promise<{ device: Device; token: string }> {
+    const token = newToken();
+    const now = new Date(this.now()).toISOString();
+    let device: Device = { id: "", name };
+    await this.store.updateDevices((devices) => {
+      device = { id: newDeviceId(devices), name };
+      const paired: PairedDevice = {
+        ...device,
+        tokenSha256: sha256(token),
+        nextToken: null,
+        tokenIssuedAt: now,
+        pairingCodeSha256,
+        pairedAt: now,
+        revokedAt: null,
+      };
+      return [...devices, paired];
+    });
+    return { device, token };
+  }
+
+  /** The device used its current token: hand it a replacement once the token is 30 days old. */
+  private async withCurrentToken(device: PairedDevice): Promise<Authentication> {
+    const now = this.now();
+    const authenticated = { device: summary(device), replacementToken: null };
+    if (now - Date.parse(device.tokenIssuedAt) < ROTATE_AFTER_MS) return authenticated;
+    if (
+      device.nextToken !== null &&
+      now - Date.parse(device.nextToken.issuedAt) < RESEND_REPLACEMENT_AFTER_MS
+    ) {
+      return authenticated;
+    }
+
+    // The device missed the previous replacement, if any: that one is dropped.
+    const replacement = newToken();
+    const saved = await this.changeIfStill(device, (current) =>
+      // Another request sent a replacement meanwhile: that one counts.
+      current.nextToken?.sha256 !== device.nextToken?.sha256
+        ? null
+        : {
+            ...current,
+            nextToken: { sha256: sha256(replacement), issuedAt: new Date(now).toISOString() },
+          },
+    );
+    return saved ? { ...authenticated, replacementToken: replacement } : authenticated;
+  }
+
+  /**
+   * The device used its replacement: it has stored it, so the old token stops working.
+   * The token the device used wins even if a newer replacement was sent meanwhile (to a
+   * request made with the old token): that one stays pending, as the device may store it.
+   */
+  private async withReplacementToken(
+    device: PairedDevice,
+    usedSha256: string,
+  ): Promise<Authentication> {
+    const now = new Date(this.now()).toISOString();
+    await this.changeIfStill(device, (current) => ({
+      ...current,
+      tokenSha256: usedSha256,
+      nextToken: current.nextToken?.sha256 === usedSha256 ? null : current.nextToken,
+      tokenIssuedAt: now,
+    }));
+    return { device: summary(device), replacementToken: null };
+  }
+
+  /**
+   * Applies the change (null: no change) only if the device still has the token just
+   * checked and was not revoked meanwhile. Otherwise another request already changed it, or
+   * `t3-voice devices revoke` ran: the token was valid when checked, so the request goes on.
+   */
+  private async changeIfStill(
+    seen: PairedDevice,
+    change: (device: PairedDevice) => PairedDevice | null,
+  ): Promise<boolean> {
+    let changed = false;
+    await this.store.updateDevices((devices) =>
+      devices.map((device) => {
+        if (
+          device.id !== seen.id ||
+          device.revokedAt !== null ||
+          device.tokenSha256 !== seen.tokenSha256
+        ) {
+          return device;
+        }
+        const result = change(device);
+        if (result === null) return device;
+        changed = true;
+        return result;
+      }),
+    );
+    return changed;
+  }
+}
+
+function summary(device: PairedDevice): Device {
+  return { id: device.id, name: device.name };
+}
+
+function newToken(): string {
+  return randomSecret(32);
+}
+
+/** Short, so it is easy to type in `t3-voice devices revoke <id>`. */
+function newDeviceId(devices: PairedDevice[]): string {
+  for (;;) {
+    const id = randomBytes(4).toString("hex");
+    if (!devices.some((device) => device.id === id)) return id;
   }
 }

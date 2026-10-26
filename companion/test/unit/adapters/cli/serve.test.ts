@@ -1,16 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { runServe } from "../../../../src/adapters/cli/serve.ts";
-import type { ApiServerOptions } from "../../../../src/ports/apiServer.ts";
-import { InMemoryConfigStore } from "../../fakePorts.ts";
+import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
+import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
+import { project, thread } from "../../builders.ts";
+import { FakeT3Connector, InMemoryConfigStore } from "../../fakePorts.ts";
 
-function serve(store: InMemoryConfigStore) {
+const NOW = new Date("2026-10-26T12:00:00.000Z");
+
+function setUpStore(): InMemoryConfigStore {
+  const store = new InMemoryConfigStore();
+  store.config = { t3: { baseUrl: "http://127.0.0.1:3773" } };
+  store.pairing = {
+    baseUrl: "http://127.0.0.1:3773",
+    token: "secret-pairing-token",
+    scopes: ["orchestration:read", "orchestration:operate"],
+    expiresAt: "2026-11-25T14:00:00.000Z",
+  };
+  return store;
+}
+
+function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   const lines: string[] = [];
   const started: ApiServerOptions[] = [];
   let closed = false;
   let stop = () => {};
   const done = runServe({
     store,
+    t3,
     startServer: async (options) => {
       started.push(options);
       return {
@@ -22,39 +39,61 @@ function serve(store: InMemoryConfigStore) {
     },
     waitForStop: () => new Promise<void>((resolve) => (stop = resolve)),
     out: (line) => lines.push(line),
+    now: () => NOW.getTime(),
   });
-  return { lines, started, done, stop: () => stop(), isClosed: () => closed };
+  const listenOptions = () => started.map(({ activity: _activity, ...rest }) => rest);
+  const activity = () => started[0]?.activity();
+  return {
+    lines,
+    started,
+    listenOptions,
+    activity,
+    done,
+    stop: () => stop(),
+    isClosed: () => closed,
+  };
+}
+
+/** Lets the fake T3 connect and send its snapshot. */
+async function settle() {
+  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }
 
 describe("runServe", () => {
-  test("listens on loopback port 8787 by default, until asked to stop", async () => {
-    const store = new InMemoryConfigStore();
-    store.config = { t3: { baseUrl: "http://127.0.0.1:3773" } };
+  test("connects to T3, then listens on loopback port 8787 by default, until asked to stop", async () => {
+    const t3 = new FakeT3Connector();
+    const run = serve(setUpStore(), t3);
+    await settle();
 
-    const run = serve(store);
-    await new Promise(setImmediate);
-
-    assert.deepEqual(run.started, [{ host: "127.0.0.1", port: 8787 }]);
-    assert.deepEqual(run.lines, ["Listening on http://127.0.0.1:8787 (0 paired devices)."]);
+    assert.deepEqual(run.listenOptions(), [{ host: "127.0.0.1", port: 8787 }]);
+    assert.deepEqual(t3.calls, [
+      "connect http://127.0.0.1:3773 with token",
+      "checkServer http://127.0.0.1:3773",
+    ]);
+    assert.deepEqual(run.lines, [
+      "Connected to T3 0.1.0 at http://127.0.0.1:3773.",
+      "Listening on http://127.0.0.1:8787 (0 paired devices).",
+    ]);
     assert.equal(run.isClosed(), false);
     run.stop();
     await run.done;
     assert.equal(run.isClosed(), true);
+    assert.equal(t3.backend.closed, true);
   });
 
   test("uses the address and the client IP header from the config", async () => {
-    const store = new InMemoryConfigStore();
+    const store = setUpStore();
     store.config = {
       t3: { baseUrl: "http://127.0.0.1:3773" },
       server: { host: "127.0.0.1", port: 9000, clientIpHeader: "cf-connecting-ip" },
     };
 
     const run = serve(store);
-    await new Promise(setImmediate);
+    await settle();
     run.stop();
     await run.done;
 
-    assert.deepEqual(run.started, [
+    assert.deepEqual(run.listenOptions(), [
       { host: "127.0.0.1", port: 9000, clientIpHeader: "cf-connecting-ip" },
     ]);
   });
@@ -64,5 +103,206 @@ describe("runServe", () => {
 
     await assert.rejects(run.done, /t3-voice setup/);
     assert.deepEqual(run.started, []);
+  });
+
+  test("refuses to start when T3 is not a tested version (fail closed)", async () => {
+    const t3 = new FakeT3Connector();
+    t3.serverVersion = "9.9.9";
+    const run = serve(setUpStore(), t3);
+
+    await assert.rejects(run.done, T3IncompatibleError);
+    assert.deepEqual(run.started, []);
+  });
+
+  test("stops when T3 fails for good, for example after an upgrade to an untested version", async () => {
+    const t3 = new FakeT3Connector();
+    const run = serve(setUpStore(), t3);
+    await settle();
+
+    t3.backend.subscriber?.onFatalError?.(new T3IncompatibleError(["server version is 9.9.9"]));
+
+    await assert.rejects(run.done, T3IncompatibleError);
+    assert.equal(run.isClosed(), true);
+    assert.equal(t3.backend.closed, true);
+  });
+
+  describe("activity", () => {
+    test("lists running threads, and threads that finished in the last 24 hours", async () => {
+      const t3 = new FakeT3Connector();
+      t3.backend.projects = [project("p1", "Joombo")];
+      t3.backend.threads = [
+        thread("t1", {
+          title: "Fix the Reviews tests",
+          status: "running",
+          activeRunStatus: "running",
+          updatedAt: "2026-10-26T11:58:00.000Z",
+        }),
+        thread("t2", {
+          title: "Bump Rails",
+          pendingRequest: { id: "r1", kind: "command", blocking: true },
+          activeRunStatus: "running",
+          updatedAt: "2026-10-26T11:50:00.000Z",
+        }),
+        thread("t3", {
+          title: "Which database?",
+          pendingRequest: { id: "r2", kind: "user_input", blocking: true },
+          updatedAt: "2026-10-26T11:40:00.000Z",
+        }),
+        thread("t4", {
+          title: "Add a README",
+          status: "completed",
+          updatedAt: "2026-10-26T09:00:00.000Z",
+        }),
+        thread("t5", {
+          title: "Deploy",
+          status: "failed",
+          lastError: { message: "usage limit", failureClass: "usage_limit" },
+          updatedAt: "2026-10-26T10:00:00.000Z",
+        }),
+        thread("old", {
+          title: "Yesterday's work",
+          status: "completed",
+          updatedAt: "2026-10-25T11:59:59.000Z",
+        }),
+        thread("archived", {
+          status: "completed",
+          archived: true,
+          updatedAt: "2026-10-26T11:00:00.000Z",
+        }),
+        thread("sub", {
+          status: "completed",
+          isSubagent: true,
+          updatedAt: "2026-10-26T11:00:00.000Z",
+        }),
+      ];
+      const run = serve(setUpStore(), t3);
+      await settle();
+
+      assert.deepEqual(run.activity(), {
+        running: [
+          {
+            threadId: "t1",
+            title: "Fix the Reviews tests",
+            project: "Joombo",
+            state: "running",
+            updatedAt: "2026-10-26T11:58:00.000Z",
+          },
+          {
+            threadId: "t2",
+            title: "Bump Rails",
+            project: "Joombo",
+            state: "waiting_for_approval",
+            updatedAt: "2026-10-26T11:50:00.000Z",
+          },
+          {
+            threadId: "t3",
+            title: "Which database?",
+            project: "Joombo",
+            state: "waiting_for_input",
+            updatedAt: "2026-10-26T11:40:00.000Z",
+          },
+        ],
+        finished: [
+          {
+            threadId: "t5",
+            title: "Deploy",
+            project: "Joombo",
+            state: "failed",
+            updatedAt: "2026-10-26T10:00:00.000Z",
+          },
+          {
+            threadId: "t4",
+            title: "Add a README",
+            project: "Joombo",
+            state: "completed",
+            updatedAt: "2026-10-26T09:00:00.000Z",
+          },
+        ],
+      });
+      run.stop();
+      await run.done;
+    });
+
+    test("follows T3's awareness rule: interrupted, cancelled, queued and never-run threads are left out", async () => {
+      const t3 = new FakeT3Connector();
+      const recent = "2026-10-26T11:00:00.000Z";
+      t3.backend.threads = [
+        thread("done", { status: "completed", updatedAt: recent }),
+        thread("never-run", { status: "idle", updatedAt: recent }),
+        thread("interrupted", { status: "interrupted", updatedAt: recent }),
+        thread("cancelled", { status: "cancelled", updatedAt: recent }),
+        thread("rolled-back", { status: "rolled_back", updatedAt: recent }),
+        thread("queued", { status: "queued", updatedAt: recent }),
+        thread("starting", { status: "starting", updatedAt: recent }),
+        thread("checkpoint", { status: "waiting", updatedAt: recent }),
+        thread("auth", {
+          status: "running",
+          pendingRequest: { id: "r1", kind: "auth_refresh", blocking: true },
+          updatedAt: recent,
+        }),
+        thread("async-question", {
+          status: "running",
+          pendingRequest: { id: "r2", kind: "user_input", blocking: false },
+          updatedAt: recent,
+        }),
+        thread("question-after-run", {
+          status: "completed",
+          pendingRequest: { id: "r3", kind: "user_input", blocking: false },
+          updatedAt: recent,
+        }),
+      ];
+      const run = serve(setUpStore(), t3);
+      await settle();
+
+      const states = (items: ActivityItem[] = []) =>
+        Object.fromEntries(items.map((item) => [item.threadId, item.state]));
+      assert.deepEqual(states(run.activity()?.running), {
+        starting: "running",
+        checkpoint: "running",
+        auth: "running",
+        "async-question": "running",
+        "question-after-run": "waiting_for_input",
+      });
+      assert.deepEqual(states(run.activity()?.finished), { done: "completed" });
+      run.stop();
+      await run.done;
+    });
+
+    test("keeps the list small: 10 running and 10 finished threads at most, the latest first", async () => {
+      const t3 = new FakeT3Connector();
+      const minutesAgo = (minutes: number) =>
+        new Date(NOW.getTime() - minutes * 60_000).toISOString();
+      for (let index = 0; index < 12; index++) {
+        t3.backend.threads.push(
+          thread(`running-${index}`, { status: "running", updatedAt: minutesAgo(index) }),
+          thread(`done-${index}`, { status: "completed", updatedAt: minutesAgo(index) }),
+        );
+      }
+      const run = serve(setUpStore(), t3);
+      await settle();
+
+      const activity = run.activity();
+      assert.equal(activity?.running.length, 10);
+      assert.equal(activity?.finished.length, 10);
+      assert.equal(activity?.running[0]?.threadId, "running-0");
+      assert.equal(activity?.finished[9]?.threadId, "done-9");
+      assert.equal(activity?.running[0]?.project, null, "T3 sent no project p1");
+      run.stop();
+      await run.done;
+    });
+
+    test("is unavailable while T3 reconnects", async () => {
+      const t3 = new FakeT3Connector();
+      const run = serve(setUpStore(), t3);
+      await settle();
+      assert.notEqual(run.activity(), null);
+
+      t3.backend.subscriber?.onConnectionChange?.("reconnecting");
+      assert.equal(run.activity(), null);
+      t3.backend.subscriber?.onConnectionChange?.("connected");
+      assert.notEqual(run.activity(), null);
+      run.stop();
+      await run.done;
+    });
   });
 });

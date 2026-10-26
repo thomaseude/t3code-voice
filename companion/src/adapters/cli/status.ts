@@ -1,8 +1,9 @@
 // `t3-voice status`: prints the T3 server, its projects and the threads agents work on.
 
 import { ShellState } from "../../core/shellState.ts";
-import { ConfigError, type ConfigStore } from "../../ports/configStore.ts";
+import type { ConfigStore } from "../../ports/configStore.ts";
 import type { ServerInfo, T3Backend, T3Connector, Thread } from "../../ports/t3Backend.ts";
+import { loadT3Setup } from "./t3Setup.ts";
 
 const SNAPSHOT_TIMEOUT_MS = 15_000;
 
@@ -14,19 +15,8 @@ export interface StatusOptions {
 }
 
 export async function runStatus({ store, t3, out, now = new Date() }: StatusOptions) {
-  const config = await store.loadConfig();
-  const pairing = await store.loadT3Pairing();
-  if (!config || !pairing) {
-    throw new ConfigError('The companion is not set up yet; run "t3-voice setup".');
-  }
-
+  const { config, pairing } = await loadT3Setup(store);
   const { baseUrl, acceptedServerVersions } = config.t3;
-  if (pairing.baseUrl !== baseUrl) {
-    // Setup writes the URL and the token in two files, so they disagree if one write failed.
-    throw new ConfigError(
-      `The saved T3 token is for ${pairing.baseUrl}, not ${baseUrl}; run "t3-voice setup" again.`,
-    );
-  }
   const backend = await t3.connect(pairing, acceptedServerVersions);
   try {
     const state = await readShell(backend);

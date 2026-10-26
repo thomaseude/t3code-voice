@@ -3,6 +3,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { type AddressInfo, isIPv6 } from "node:net";
+import type { DevicePairing } from "../../core/pairing.ts";
 import { type RateDecision, RateLimiter } from "../../core/rateLimiter.ts";
 import { scrubSecrets } from "../../core/secrets.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
@@ -15,6 +16,7 @@ export interface RateLimit {
 
 export interface HttpApiOptions extends ApiServerOptions {
   auth: DeviceAuth;
+  devicePairing: DevicePairing;
   limits?: { perIp: RateLimit; perDevice: RateLimit };
   /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
@@ -76,18 +78,73 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
     const ip = clientIp(request, peer, options.clientIpHeader);
     if (refused(response, perIp.take(rateKey(ip)))) return;
 
-    const token = bearerToken(request);
-    const device = token === null ? null : await options.auth.authenticate(token);
-    if (device === null) {
-      // No detail: a caller must not learn whether the token exists or was revoked.
-      response.writeHead(401);
-      response.end();
-      return;
-    }
-    if (refused(response, perDevice.take(device.id))) return;
+    const route = `${request.method} ${new URL(request.url ?? "/", "http://companion").pathname}`;
+    // The only route a device calls before it has a token.
+    if (route === "POST /pair") return pair(request, response);
 
-    sendJson(response, 404, { error: "not_found" });
+    const token = bearerToken(request);
+    const authentication = token === null ? null : await options.auth.authenticate(token);
+    if (authentication === null) return unauthorized(response);
+    if (refused(response, perDevice.take(authentication.device.id))) return;
+    if (authentication.replacementToken !== null) {
+      // The app stores it and sends it from the next request on.
+      response.setHeader("t3voice-token", authentication.replacementToken);
+      response.setHeader("cache-control", "no-store");
+    }
+
+    switch (route) {
+      case "GET /activity": {
+        const activity = options.activity();
+        if (activity === null) return sendJson(response, 503, { error: "t3_unavailable" });
+        return sendJson(response, 200, activity);
+      }
+      default:
+        return sendJson(response, 404, { error: "not_found" });
+    }
   }
+
+  async function pair(request: IncomingMessage, response: ServerResponse) {
+    const body = await readJson(request);
+    const code = typeof body?.code === "string" ? body.code : "";
+    const result = await options.devicePairing.pair(code, deviceName(body?.name));
+    if (result.status === "limited") {
+      return refused(response, { allowed: false, retryAfterMs: result.retryAfterMs });
+    }
+    if (result.status === "refused") return unauthorized(response);
+    response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end(JSON.stringify({ token: result.token, device: result.device }));
+  }
+}
+
+/** No detail: a caller must not learn whether a token or code exists, expired or was revoked. */
+function unauthorized(response: ServerResponse) {
+  response.writeHead(401);
+  response.end();
+}
+
+const MAX_BODY_BYTES = 4096;
+
+/** The JSON body, or null when it is missing, too big or not JSON. */
+// biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
+async function readJson(request: IncomingMessage): Promise<any | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return null;
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function deviceName(value: unknown): string {
+  // Printed by `t3-voice devices list`: no control characters, which could rewrite the terminal.
+  const name = typeof value === "string" ? value.replace(/\p{Cc}/gu, "").trim() : "";
+  return name === "" ? "iPhone" : name.slice(0, 64);
 }
 
 /** Answers 429 when the limiter refused the request. */

@@ -1,6 +1,6 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
-import type { CompanionConfig, ConfigStore } from "../../src/ports/configStore.ts";
+import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
   type Project,
@@ -14,12 +14,15 @@ import {
   type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
+import { pairedDevice } from "./builders.ts";
 
 export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
   devices: PairedDevice[] = [];
+  /** Open pairing windows, by code hash. */
+  readonly pairingWindows = new Map<string, PairingWindow>();
 
   async loadConfig() {
     return this.config;
@@ -35,6 +38,29 @@ export class InMemoryConfigStore implements ConfigStore {
   }
   async loadDevices() {
     return this.devices;
+  }
+  /** Like the file store, it keeps revocations as they were: only revokeDevice revokes. */
+  async updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]) {
+    const revoked = new Map(this.devices.map((device) => [device.id, device.revokedAt]));
+    this.devices = change(this.devices).map((device) => ({
+      ...device,
+      revokedAt: revoked.get(device.id) ?? null,
+    }));
+    return this.devices;
+  }
+  async revokeDevice(id: string, revokedAt: string) {
+    this.devices = this.devices.map((device) =>
+      device.id === id && device.revokedAt === null ? { ...device, revokedAt } : device,
+    );
+  }
+  async loadPairingWindow(codeSha256: string) {
+    return this.pairingWindows.get(codeSha256) ?? null;
+  }
+  async savePairingWindow(window: PairingWindow) {
+    this.pairingWindows.set(window.codeSha256, window);
+  }
+  async clearPairingWindow(codeSha256: string) {
+    this.pairingWindows.delete(codeSha256);
   }
 }
 
@@ -52,7 +78,11 @@ export class FakeT3Backend implements T3Backend {
   async getConfig(): Promise<T3Config> {
     return { providers: [], defaultRuntimeMode: "full-access", defaultModel: null };
   }
+  /** The last subscriber, to push events, reconnections and failures to it. */
+  subscriber: ShellSubscriber | null = null;
+
   subscribeShell(subscriber: ShellSubscriber): ShellSubscription {
+    this.subscriber = subscriber;
     setImmediate(() =>
       subscriber.onEvent({
         type: "snapshot",
@@ -101,9 +131,20 @@ export class FakeT3Connector implements T3Connector {
   }
 }
 
-/** Knows the tokens it was given; anything else is rejected. */
+/**
+ * Knows the tokens it was given or issued; anything else is rejected. With a store, a
+ * device it registers also goes in the store's device list, as the real one does.
+ */
 export class FakeDeviceAuth implements DeviceAuth {
   readonly devices = new Map<string, Device>();
+  private readonly store: InMemoryConfigStore | null;
+  private registered = 0;
+  /** Makes the next register() fail, like a device list that cannot be saved. */
+  failNextRegister = false;
+
+  constructor(store: InMemoryConfigStore | null = null) {
+    this.store = store;
+  }
 
   addDevice(token: string, device: Device = { id: "d1", name: "iPhone" }): Device {
     this.devices.set(token, device);
@@ -113,6 +154,18 @@ export class FakeDeviceAuth implements DeviceAuth {
     this.devices.delete(token);
   }
   async authenticate(token: string) {
-    return this.devices.get(token) ?? null;
+    const device = this.devices.get(token);
+    return device === undefined ? null : { device, replacementToken: null };
+  }
+  async register(name: string, pairingCodeSha256: string) {
+    if (this.failNextRegister) {
+      this.failNextRegister = false;
+      throw new Error("devices.json could not be saved.");
+    }
+    this.registered++;
+    const token = `issued-token-${this.registered}`;
+    const device = this.addDevice(token, { id: `new${this.registered}`, name });
+    this.store?.devices.push(pairedDevice({ ...device, pairingCodeSha256 }));
+    return { device, token };
   }
 }
