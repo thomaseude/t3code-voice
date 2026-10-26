@@ -1,5 +1,5 @@
-// Seam 3: the WebSocket adapter against a real `t3 serve` at the pinned version.
-// Detects protocol drift when T3 is upgraded. Skipped when no T3 binary is installed.
+// Seam 3: the WebSocket adapter against a real `t3 serve` at a pinned version.
+// Shows when a new T3 version changes the protocol. Skipped when no T3 binary is installed.
 //
 //   npm run test:integration                   (~/.t3/runtime/versions/<newest pinned>/t3)
 //   T3_VERSION=0.1.2 npm run test:integration  (~/.t3/runtime/versions/0.1.2/t3)

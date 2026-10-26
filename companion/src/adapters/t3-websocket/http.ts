@@ -88,7 +88,7 @@ export async function issueWebSocketTicket(baseUrl: string, token: string): Prom
   try {
     body = await request(baseUrl, "/api/auth/websocket-ticket/rpc", { method: "POST", headers });
   } catch (error) {
-    // Servers older than ticket audiences (T3 0.1.0) only have the bare route.
+    // T3 0.1.0 has no `/rpc` ticket route and answers 404; it only has the bare route.
     if (!(error instanceof T3HttpError && error.status === 404)) throw error;
     body = await request(baseUrl, "/api/auth/websocket-ticket", { method: "POST", headers });
   }

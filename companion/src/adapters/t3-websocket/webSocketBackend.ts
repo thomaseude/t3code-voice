@@ -27,7 +27,7 @@ const METHODS = {
   subscribeShell: "orchestration.subscribeShell",
 };
 
-/** How long a one-off call waits for T3's answer. A socket that only answers pings is no answer. */
+/** How long a one-off call waits for T3's answer. Pings keep a socket open even when T3 never answers. */
 const ANSWER_TIMEOUT_MS = 15_000;
 
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];

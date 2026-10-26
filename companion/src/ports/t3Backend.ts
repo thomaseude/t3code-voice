@@ -109,7 +109,7 @@ export interface T3Backend {
   close(): void;
 }
 
-/** The token a pairing gave the companion, the server it is for, and what it grants. `token` is a secret. */
+/** What a pairing gave the companion: a token (a secret), its server and its scopes. */
 export interface T3Pairing {
   /** The T3 server that issued the token: the token is never sent anywhere else. */
   baseUrl: string;

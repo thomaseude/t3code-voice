@@ -1,6 +1,6 @@
 // A minimal client for T3's WebSocket RPC (Effect RPC with JSON serialization).
 //
-// Wire format, checked against T3 0.1.0:
+// Wire format, checked against T3 0.1.0 and 0.1.1:
 //   client → server  {_tag:"Request", id, tag, payload, headers:[]}
 //                    {_tag:"Ack", requestId}            after each stream chunk
 //                    {_tag:"Interrupt", requestId, interruptors:[]}   cancels a stream

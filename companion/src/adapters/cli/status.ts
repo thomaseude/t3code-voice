@@ -22,7 +22,7 @@ export async function runStatus({ store, t3, out, now = new Date() }: StatusOpti
 
   const { baseUrl, acceptedServerVersions } = config.t3;
   if (pairing.baseUrl !== baseUrl) {
-    // The two files are written one after the other: never send a token to another server.
+    // Setup writes the URL and the token in two files, so they disagree if one write failed.
     throw new ConfigError(
       `The saved T3 token is for ${pairing.baseUrl}, not ${baseUrl}; run "t3-voice setup" again.`,
     );
