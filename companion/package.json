@@ -9,7 +9,8 @@
     "t3-voice": "dist/main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "deploy"
   ],
   "engines": {
     "node": ">=22.18"

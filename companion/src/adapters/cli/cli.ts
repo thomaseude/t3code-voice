@@ -5,12 +5,14 @@ import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
 import { scrubSecrets } from "./secrets.ts";
+import { type RunningServer, runServe, type ServerOptions } from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
 
 export interface CliDependencies {
   store: ConfigStore;
   t3: T3Connector;
+  startServer(options: ServerOptions): Promise<RunningServer>;
 }
 
 const EXIT_ERROR = 1;
@@ -24,6 +26,7 @@ Commands:
   setup [--t3-url URL]   Pair the companion with a T3 server (default ${DEFAULT_T3_URL}).
                          Reads the T3 pairing link from the terminal or from stdin.
   status                 Show the T3 server, its projects and the running threads.
+  serve                  Run the HTTP API the iPhone app calls (port 8787 by default).
   help                   Show this help.
 
 Configuration and secrets live in ~/.config/t3voice/ (or $T3VOICE_CONFIG_DIR).`;
@@ -41,7 +44,10 @@ export async function runCli(argv: string[], deps: CliDependencies): Promise<num
   }
 }
 
-async function dispatch(argv: string[], { store, t3 }: CliDependencies): Promise<number> {
+async function dispatch(
+  argv: string[],
+  { store, t3, startServer }: CliDependencies,
+): Promise<number> {
   const [command, ...args] = argv;
   const out = (line: string) => process.stdout.write(`${line}\n`);
 
@@ -60,6 +66,9 @@ async function dispatch(argv: string[], { store, t3 }: CliDependencies): Promise
     case "status":
       await runStatus({ store, t3, out });
       return 0;
+    case "serve":
+      await runServe({ store, startServer, waitForStop, out });
+      return 0;
     case undefined:
     case "help":
     case "--help":
@@ -70,6 +79,13 @@ async function dispatch(argv: string[], { store, t3 }: CliDependencies): Promise
       process.stderr.write(`Unknown command "${command}".\n\n${USAGE}\n`);
       return EXIT_USAGE;
   }
+}
+
+function waitForStop(): Promise<void> {
+  return new Promise((resolve) => {
+    process.once("SIGTERM", () => resolve());
+    process.once("SIGINT", () => resolve());
+  });
 }
 
 function readFlag(args: string[], name: string): string | undefined {

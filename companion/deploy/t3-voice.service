@@ -1,0 +1,17 @@
+# systemd user unit for `t3-voice serve`. The README shows how to fill @NODE@ and @MAIN@
+# and install it in ~/.config/systemd/user/.
+[Unit]
+Description=t3-voice companion (HTTP API for the T3 Voice app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=@NODE@ @MAIN@ serve
+Restart=on-failure
+RestartSec=5
+# Files the companion creates are private to the user.
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

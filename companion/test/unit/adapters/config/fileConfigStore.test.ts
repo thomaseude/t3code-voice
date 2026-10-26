@@ -133,4 +133,70 @@ describe("FileConfigStore", () => {
 
     await assert.rejects(new FileConfigStore(dir).loadT3Pairing(), /damaged/);
   });
+
+  test("has no device before the first pairing", async () => {
+    const dir = await tempDir();
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" } });
+
+    assert.deepEqual(await new FileConfigStore(dir).loadDevices(), []);
+  });
+
+  test("reads the paired devices", async () => {
+    const dir = await privateDir();
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [DEVICE] }), {
+      mode: 0o600,
+    });
+
+    assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
+  });
+
+  test("refuses a device list other users can read", async () => {
+    const dir = await privateDir();
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [DEVICE] }), {
+      mode: 0o644,
+    });
+
+    await assert.rejects(new FileConfigStore(dir).loadDevices(), /chmod 600/);
+  });
+
+  test("refuses a damaged device list rather than letting a device through", async () => {
+    const dir = await privateDir();
+    const { revokedAt: _, ...withoutRevocation } = DEVICE;
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [withoutRevocation] }), {
+      mode: 0o600,
+    });
+
+    await assert.rejects(new FileConfigStore(dir).loadDevices(), /damaged/);
+  });
+
+  test("reads the HTTP server settings", async () => {
+    const dir = await tempDir();
+    const server = { host: "127.0.0.1", port: 8787, clientIpHeader: "cf-connecting-ip" };
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, server });
+
+    assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.server, server);
+  });
+
+  test("refuses a port that is not a number", async () => {
+    const dir = await privateDir();
+    const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, server: { port: "8787" } };
+    await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+
+    await assert.rejects(new FileConfigStore(dir).loadConfig(), /"server.port"/);
+  });
 });
+
+const DEVICE = {
+  id: "d1",
+  name: "iPhone",
+  tokenSha256: "a".repeat(64),
+  pairedAt: "2026-10-26T10:00:00.000Z",
+  revokedAt: null,
+};
+
+async function privateDir(): Promise<string> {
+  const dir = await tempDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  return dir;
+}

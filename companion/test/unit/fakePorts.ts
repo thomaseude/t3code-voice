@@ -1,6 +1,7 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
 import type { CompanionConfig, ConfigStore } from "../../src/ports/configStore.ts";
+import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
   type Project,
   type ServerInfo,
@@ -18,6 +19,7 @@ export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
+  devices: PairedDevice[] = [];
 
   async loadConfig() {
     return this.config;
@@ -30,6 +32,9 @@ export class InMemoryConfigStore implements ConfigStore {
   }
   async saveT3Pairing(pairing: T3Pairing) {
     this.pairing = pairing;
+  }
+  async loadDevices() {
+    return this.devices;
   }
 }
 
@@ -93,5 +98,21 @@ export class FakeT3Connector implements T3Connector {
     );
     await this.checkServer(baseUrl);
     return this.backend;
+  }
+}
+
+/** Knows the tokens it was given; anything else is rejected. */
+export class FakeDeviceAuth implements DeviceAuth {
+  readonly devices = new Map<string, Device>();
+
+  addDevice(token: string, device: Device = { id: "d1", name: "iPhone" }): Device {
+    this.devices.set(token, device);
+    return device;
+  }
+  revoke(token: string) {
+    this.devices.delete(token);
+  }
+  async authenticate(token: string) {
+    return this.devices.get(token) ?? null;
   }
 }
