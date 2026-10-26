@@ -8,10 +8,12 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type CompanionConfig, ConfigError, type ConfigStore } from "../../ports/configStore.ts";
+import type { PairedDevice } from "../../ports/deviceAuth.ts";
 import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
+const DEVICES_FILE = "devices.json";
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.T3VOICE_CONFIG_DIR ?? join(homedir(), ".config", "t3voice");
@@ -39,6 +41,20 @@ export class FileConfigStore implements ConfigStore {
       // A malformed list must never loosen the version check.
       throw new ConfigError(`${path}: "t3.acceptedServerVersions" must be a list of versions.`);
     }
+    const server = data.server ?? {};
+    if (server.host !== undefined && !(typeof server.host === "string" && server.host !== "")) {
+      // Node listens on every interface when the host is empty.
+      throw new ConfigError(`${path}: "server.host" must be a non-empty address.`);
+    }
+    if (
+      server.port !== undefined &&
+      !(Number.isInteger(server.port) && server.port >= 1 && server.port <= 65535)
+    ) {
+      throw new ConfigError(`${path}: "server.port" must be a port number (1 to 65535).`);
+    }
+    if (server.clientIpHeader !== undefined && typeof server.clientIpHeader !== "string") {
+      throw new ConfigError(`${path}: "server.clientIpHeader" must be a header name.`);
+    }
     return data as CompanionConfig;
   }
 
@@ -63,6 +79,18 @@ export class FileConfigStore implements ConfigStore {
 
   async saveT3Pairing(pairing: T3Pairing): Promise<void> {
     await this.writePrivateFile(T3_PAIRING_FILE, `${JSON.stringify(pairing, null, 2)}\n`);
+  }
+
+  async loadDevices(): Promise<PairedDevice[]> {
+    const path = join(this.location, DEVICES_FILE);
+    const data = await this.readPrivateJson(path);
+    if (data === null) return [];
+    const devices = data?.devices;
+    if (!Array.isArray(devices) || !devices.every(isPairedDevice)) {
+      // Fail closed: a list we cannot read must not let any device through.
+      throw new ConfigError(`${path} is damaged.`);
+    }
+    return devices;
   }
 
   /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
@@ -112,4 +140,15 @@ async function modeOf(path: string): Promise<number | null> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: checks an untyped JSON value.
+function isPairedDevice(value: any): value is PairedDevice {
+  return (
+    typeof value?.id === "string" &&
+    typeof value?.name === "string" &&
+    typeof value?.tokenSha256 === "string" &&
+    typeof value?.pairedAt === "string" &&
+    (typeof value?.revokedAt === "string" || value?.revokedAt === null)
+  );
 }

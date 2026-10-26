@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { scrubSecrets } from "../../../../src/adapters/cli/secrets.ts";
+import { scrubSecrets } from "../../../src/core/secrets.ts";
 
 describe("scrubSecrets", () => {
   test("masks tickets, tokens and keys in text", () => {
