@@ -1,4 +1,5 @@
-// Driving adapter: the HTTP API the iPhone app calls (JSON, behind HTTPS at the tunnel).
+// Driving adapter: the HTTP API the iPhone app calls. It serves JSON over plain HTTP on
+// loopback; the tunnel in front of it adds HTTPS.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { type AddressInfo, isIPv6 } from "node:net";

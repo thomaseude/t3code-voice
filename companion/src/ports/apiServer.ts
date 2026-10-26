@@ -1,4 +1,4 @@
-// The HTTP API as `t3-voice serve` starts it. main.ts plugs the HTTP adapter in.
+// The HTTP API as `t3-voice serve` starts it.
 
 export interface ApiServerOptions {
   host: string;

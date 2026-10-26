@@ -6,7 +6,10 @@ export interface RateLimiterOptions {
   windowMs: number;
   /** Keys tracked at most; past it, the oldest key is forgotten. */
   maxKeys?: number;
-  /** Current time in milliseconds; injectable for tests. */
+  /**
+   * Current time in milliseconds; injectable for tests. A wall clock, because it keeps
+   * counting while the host is suspended.
+   */
   now?: () => number;
 }
 
