@@ -67,7 +67,7 @@ export class FileConfigStore implements ConfigStore {
 
   /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
   private async writePrivateFile(name: string, content: string): Promise<void> {
-    // Tighten the directory only if we created it: never change a directory the user owns.
+    // Tighten the directory only if we created it. An existing one is checked, never changed.
     const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
     if (created !== undefined) await chmod(this.location, 0o700);
     else await this.assertPrivateDir();
