@@ -6,7 +6,7 @@ export interface RateLimiterOptions {
   windowMs: number;
   /** Keys tracked at most; past it, the oldest key is forgotten. */
   maxKeys?: number;
-  /** Current time in milliseconds; injectable for tests. */
+  /** Milliseconds from a monotonic clock; injectable for tests. */
   now?: () => number;
 }
 
@@ -24,7 +24,12 @@ export class RateLimiter {
    */
   private readonly windows = new Map<string, { start: number; count: number }>();
 
-  constructor({ limit, windowMs, maxKeys = 10_000, now = Date.now }: RateLimiterOptions) {
+  constructor({
+    limit,
+    windowMs,
+    maxKeys = 10_000,
+    now = () => performance.now(),
+  }: RateLimiterOptions) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.maxKeys = maxKeys;

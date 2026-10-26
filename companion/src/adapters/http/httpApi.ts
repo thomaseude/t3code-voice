@@ -15,7 +15,7 @@ export interface RateLimit {
 export interface HttpApiOptions extends ApiServerOptions {
   auth: DeviceAuth;
   limits?: { perIp: RateLimit; perDevice: RateLimit };
-  /** Current time in milliseconds; injectable for tests. */
+  /** Milliseconds from a monotonic clock; injectable for tests. */
   now?: () => number;
   /** Where operational warnings go; stderr by default. */
   log?: (line: string) => void;
@@ -28,7 +28,8 @@ const DEFAULT_LIMITS = {
 
 export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiServer> {
   const limits = options.limits ?? DEFAULT_LIMITS;
-  const now = options.now ?? Date.now;
+  // Monotonic: a wall-clock step (NTP) must not stretch or shorten a window.
+  const now = options.now ?? (() => performance.now());
   const perIp = new RateLimiter({ ...limits.perIp, now });
   const perDevice = new RateLimiter({ ...limits.perDevice, now });
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
