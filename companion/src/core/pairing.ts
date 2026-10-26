@@ -1,5 +1,6 @@
 // Pairing an iPhone: `t3-voice pair` opens a window with a one-time code, and the app
-// trades the code for a device token through POST /pair.
+// trades the code for a device token through POST /pair. `serve` never changes the
+// window: the device it saves keeps the hash of the code, which uses the code up.
 
 import type { ConfigStore, PairingWindow } from "../ports/configStore.ts";
 import type { Device, DeviceAuth } from "../ports/deviceAuth.ts";
@@ -74,15 +75,20 @@ export class DevicePairing {
     if (
       window === null ||
       !(this.now() < Date.parse(window.expiresAt)) ||
-      !sameHash(window.codeSha256, sha256(code))
+      !sameHash(window.codeSha256, sha256(code)) ||
+      (await this.codeWasUsed(window.codeSha256))
     ) {
       this.failures.take(FAILURES_KEY);
       return { status: "refused" };
     }
-    // Saved first: if saving fails, the window stays open and the code can be tried again.
-    const { device, token } = await this.auth.register(name);
-    await this.store.clearPairingWindow(window.codeSha256);
+    // One write saves the device and uses up the code. If it fails, the code still works.
+    const { device, token } = await this.auth.register(name, window.codeSha256);
     return { status: "paired", device, token };
+  }
+
+  private async codeWasUsed(codeSha256: string): Promise<boolean> {
+    const devices = await this.store.loadDevices();
+    return devices.some((device) => device.pairingCodeSha256 === codeSha256);
   }
 }
 

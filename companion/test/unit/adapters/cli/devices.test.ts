@@ -46,12 +46,8 @@ describe("t3-voice devices", () => {
     assert.deepEqual(lines, ['No paired device. Run "t3-voice pair" to pair one.']);
   });
 
-  test("revoke marks the device revoked and drops its pending replacement token", async () => {
+  test("revoke marks the device revoked", async () => {
     const store = storeWithDevices();
-    store.devices[0] = {
-      ...(store.devices[0] ?? pairedDevice()),
-      nextToken: { sha256: "b".repeat(64), issuedAt: "2026-10-26T11:00:00.000Z" },
-    };
     const lines: string[] = [];
 
     await revokeDevice({
@@ -62,7 +58,6 @@ describe("t3-voice devices", () => {
     });
 
     assert.equal(store.devices[0]?.revokedAt, "2026-10-26T12:00:00.000Z");
-    assert.equal(store.devices[0]?.nextToken, null);
     assert.equal(
       store.devices[1]?.revokedAt,
       "2026-10-20T09:00:00.000Z",

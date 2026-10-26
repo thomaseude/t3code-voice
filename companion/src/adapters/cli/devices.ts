@@ -1,7 +1,6 @@
 // `t3-voice devices list|revoke`: the iPhones paired with this companion.
 
 import type { ConfigStore } from "../../ports/configStore.ts";
-import type { PairedDevice } from "../../ports/deviceAuth.ts";
 
 export async function listDevices({ store, out }: { store: ConfigStore; out(line: string): void }) {
   const devices = await store.loadDevices();
@@ -31,23 +30,16 @@ export async function revokeDevice({
   now?: () => number;
   out(line: string): void;
 }) {
-  let found: PairedDevice | undefined;
-  await store.updateDevices((devices) =>
-    devices.map((device) => {
-      if (device.id !== id) return device;
-      found = device;
-      if (device.revokedAt !== null) return device;
-      return { ...device, revokedAt: new Date(now()).toISOString(), nextToken: null };
-    }),
-  );
-  if (found === undefined) {
+  const device = (await store.loadDevices()).find((candidate) => candidate.id === id);
+  if (device === undefined) {
     throw new Error(`No device "${id}"; "t3-voice devices list" shows the ids.`);
   }
-  if (found.revokedAt !== null) {
-    out(`"${found.name}" (${id}) was already revoked.`);
+  if (device.revokedAt !== null) {
+    out(`"${device.name}" (${id}) was already revoked.`);
     return;
   }
-  out(`Revoked "${found.name}" (${id}). Its token is refused from its next request.`);
+  await store.revokeDevice(id, new Date(now()).toISOString());
+  out(`Revoked "${device.name}" (${id}). Its token is refused from its next request.`);
 }
 
 function day(isoDate: string): string {

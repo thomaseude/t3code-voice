@@ -34,6 +34,7 @@ export function pairedDevice(fields: Partial<PairedDevice> = {}): PairedDevice {
     tokenSha256: "a".repeat(64),
     nextToken: null,
     tokenIssuedAt: "2026-10-26T10:00:00.000Z",
+    pairingCodeSha256: "e".repeat(64),
     pairedAt: "2026-10-26T10:00:00.000Z",
     revokedAt: null,
     ...fields,

@@ -252,7 +252,7 @@ describe("Pairing (POST /pair)", () => {
   async function startPairingApi(options: Partial<HttpApiOptions> = {}) {
     const clock = { now: Date.parse("2026-10-26T12:00:00.000Z") };
     const store = new InMemoryConfigStore();
-    const auth = new FakeDeviceAuth();
+    const auth = new FakeDeviceAuth(store);
     const devicePairing = new DevicePairing({ store, auth, now: () => clock.now });
     const url = await startApi({ auth, devicePairing, ...options });
     const openWindow = () => openPairingWindow(store, clock.now);
@@ -495,6 +495,32 @@ describe("Device tokens issued by pairing", () => {
     assert.ok(replacement !== "" && replacement !== lost);
     assert.equal((await phone.activity(lost)).status, 401, "only the latest replacement counts");
     assert.equal((await phone.activity(replacement)).status, 200);
+  });
+
+  test("a phone that starts using its replacement while an old request gets a newer one can use either", async () => {
+    const phone = await pairedPhone();
+    phone.clock.now += 30 * DAY;
+    const first = (await phone.activity(phone.token)).headers.get("t3voice-token") ?? "";
+    phone.clock.now += 60_000;
+    // A slow disk: both requests read the device list before either one changes it.
+    const load = phone.store.loadDevices.bind(phone.store);
+    phone.store.loadDevices = async () => {
+      const devices = await load();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return devices;
+    };
+
+    const [withOld, withFirst] = await Promise.all([
+      phone.activity(phone.token),
+      phone.activity(first),
+    ]);
+    const second = withOld.headers.get("t3voice-token") ?? "";
+
+    assert.deepEqual([withOld.status, withFirst.status], [200, 200]);
+    assert.ok(second !== "");
+    assert.equal((await phone.activity(first)).status, 200, "the token the phone switched to");
+    assert.equal((await phone.activity(second)).status, 200, "the token the phone was just sent");
+    assert.equal((await phone.activity(phone.token)).status, 401);
   });
 
   test("`t3-voice devices revoke` rejects the token and its pending replacement at the next request", async () => {

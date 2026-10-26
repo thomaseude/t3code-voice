@@ -1,16 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -175,8 +164,8 @@ describe("FileConfigStore", () => {
 
   test("refuses a damaged device list rather than letting a device through", async () => {
     const dir = await privateDir();
-    const { revokedAt: _, ...withoutRevocation } = DEVICE;
-    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [withoutRevocation] }), {
+    const { tokenSha256: _, ...withoutHash } = DEVICE;
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [withoutHash] }), {
       mode: 0o600,
     });
 
@@ -266,53 +255,35 @@ describe("FileConfigStore", () => {
       assert.deepEqual(await readdir(dir), ["devices.json"], "no lock file left behind");
     });
 
-    test("changes made at the same time by `serve` and the CLI are all kept", async () => {
+    test("changes `serve` makes at the same time are all kept", async () => {
       const dir = await tempDir();
-      // Two stores on one directory, like two processes.
       const serve = new FileConfigStore(dir);
-      const cli = new FileConfigStore(dir);
 
       await Promise.all(
         Array.from({ length: 20 }, (_, index) =>
-          (index % 2 === 0 ? serve : cli).updateDevices((devices) => [
-            ...devices,
-            pairedDevice({ id: `d${index}` }),
-          ]),
+          serve.updateDevices((devices) => [...devices, pairedDevice({ id: `d${index}` })]),
         ),
       );
 
-      const ids = (await serve.loadDevices()).map((device) => device.id).sort();
-      assert.equal(ids.length, 20);
+      assert.equal((await serve.loadDevices()).length, 20);
     });
 
-    test("takes over a lock left by a process that died", async () => {
-      const dir = await privateDir();
-      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
-      await writeFile(join(dir, "devices.json.lock"), String(deadPid), { mode: 0o600 });
+    test("a revocation the CLI writes while `serve` changes the list is kept", async () => {
+      const dir = await tempDir();
+      // Two stores on one directory, like the two processes.
+      const serve = new FileConfigStore(dir);
+      const cli = new FileConfigStore(dir);
+      await serve.updateDevices(() => [DEVICE]);
 
-      await new FileConfigStore(dir).updateDevices((devices) => [...devices, DEVICE]);
+      await Promise.all([
+        ...Array.from({ length: 10 }, () =>
+          serve.updateDevices((devices) => devices.map((device) => ({ ...device }))),
+        ),
+        cli.revokeDevice(DEVICE.id, "2026-10-26T12:00:00.000Z"),
+      ]);
 
-      assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
-    });
-
-    test("waits for the lock of a running process, however old the lock is", async () => {
-      const dir = await privateDir();
-      const lock = join(dir, "devices.json.lock");
-      await writeFile(lock, String(process.pid), { mode: 0o600 });
-      const longAgo = new Date(Date.now() - 60_000);
-      await utimes(lock, longAgo, longAgo);
-      let released = false;
-      setTimeout(async () => {
-        released = true;
-        await rm(lock);
-      }, 100);
-
-      await new FileConfigStore(dir).updateDevices((devices) => {
-        assert.ok(released, "the change ran while the other process held the lock");
-        return [...devices, DEVICE];
-      });
-
-      assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
+      const [device] = await serve.loadDevices();
+      assert.equal(device?.revokedAt, "2026-10-26T12:00:00.000Z");
     });
 
     test("does not save a list the change cannot read", async () => {
@@ -324,6 +295,50 @@ describe("FileConfigStore", () => {
         /not valid JSON/,
       );
       assert.equal(await readFile(join(dir, "devices.json"), "utf8"), "{oops");
+    });
+  });
+
+  describe("revocations", () => {
+    test("are appended to a journal readable by the owner only; the first date counts", async () => {
+      const dir = await tempDir();
+      const store = new FileConfigStore(dir);
+      await store.updateDevices(() => [DEVICE, pairedDevice({ id: "d2" })]);
+
+      await store.revokeDevice(DEVICE.id, "2026-10-26T12:00:00.000Z");
+      await store.revokeDevice(DEVICE.id, "2026-10-27T12:00:00.000Z");
+
+      assert.equal((await stat(join(dir, "revocations.jsonl"))).mode & 0o777, 0o600);
+      const devices = await new FileConfigStore(dir).loadDevices();
+      assert.deepEqual(
+        devices.map((device) => device.revokedAt),
+        ["2026-10-26T12:00:00.000Z", null],
+      );
+    });
+
+    test("a revocation date in the device list is ignored: only the journal revokes", async () => {
+      const dir = await tempDir();
+      const store = new FileConfigStore(dir);
+
+      await store.updateDevices(() => [{ ...DEVICE, revokedAt: "2026-10-26T12:00:00.000Z" }]);
+
+      assert.equal((await store.loadDevices())[0]?.revokedAt, null);
+    });
+
+    test("refuses a damaged journal rather than letting a revoked device through", async () => {
+      const dir = await privateDir();
+      await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [DEVICE] }), {
+        mode: 0o600,
+      });
+      await writeFile(join(dir, "revocations.jsonl"), '{"id":"d1"}\n', { mode: 0o600 });
+
+      await assert.rejects(new FileConfigStore(dir).loadDevices(), /revocations\.jsonl is damaged/);
+    });
+
+    test("refuses a journal other users can read", async () => {
+      const dir = await privateDir();
+      await writeFile(join(dir, "revocations.jsonl"), "", { mode: 0o644 });
+
+      await assert.rejects(new FileConfigStore(dir).loadDevices(), /chmod 600/);
     });
   });
 

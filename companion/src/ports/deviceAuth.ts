@@ -22,8 +22,11 @@ export interface Authentication {
 export interface DeviceAuth {
   /** The device the token belongs to, or null when the token is unknown or revoked. */
   authenticate(token: string): Promise<Authentication | null>;
-  /** Adds a device and returns its first token. The token is a secret: never log it. */
-  register(name: string): Promise<{ device: Device; token: string }>;
+  /**
+   * Adds a device and returns its first token. The token is a secret: never log it.
+   * The device keeps the hash of the pairing code it used, so that code works once.
+   */
+  register(name: string, pairingCodeSha256: string): Promise<{ device: Device; token: string }>;
 }
 
 /** A device as the companion stores it. Only hashes of its tokens are kept. */
@@ -36,6 +39,8 @@ export interface PairedDevice {
   nextToken: { sha256: string; issuedAt: string } | null;
   /** ISO dates. The token is replaced on use once it is 30 days old. */
   tokenIssuedAt: string;
+  /** SHA-256 of the pairing code the device used. */
+  pairingCodeSha256: string;
   pairedAt: string;
   revokedAt: string | null;
 }

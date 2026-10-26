@@ -70,14 +70,17 @@ describe("t3-voice pair", () => {
   test("says which device paired, then stops", async () => {
     const store = setUpStore();
     const run = pair(store, () => {
-      // What POST /pair does in `t3-voice serve`.
-      store.pairingWindow = null;
-      store.devices.push(pairedDevice({ id: "3f9a2c1b", name: "iPhone de Thomas" }));
+      // What POST /pair does in `t3-voice serve`: it saves the device with the code it used.
+      const codeSha256 = store.pairingWindow?.codeSha256 ?? "";
+      store.devices.push(
+        pairedDevice({ id: "3f9a2c1b", name: "iPhone de Thomas", pairingCodeSha256: codeSha256 }),
+      );
       return undefined;
     });
 
     assert.equal(await run.done, 0);
     assert.equal(run.lines.at(-1), 'Paired "iPhone de Thomas" (3f9a2c1b).');
+    assert.equal(store.pairingWindow, null, "the used window is closed");
   });
 
   test("closes the window when it expires", async () => {

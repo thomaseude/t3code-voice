@@ -41,14 +41,19 @@ export interface ConfigStore {
   /** The pairing holds a secret: implementations must keep it private and never log it. */
   loadT3Pairing(): Promise<T3Pairing | null>;
   saveT3Pairing(pairing: T3Pairing): Promise<void>;
+  // Each file has one writer process, so no process can overwrite another's change:
+  // `serve` writes the device list, the CLI writes revocations and the pairing window.
+
   /** Paired iPhones, revoked ones included; an empty list when none was ever paired. */
   loadDevices(): Promise<PairedDevice[]>;
   /**
-   * Reads the device list, applies the change and saves the result, as one step: `serve`
-   * and the CLI both change the list, and neither may undo the other's change.
+   * Reads the device list, applies the change and saves the result. Only `serve` calls it,
+   * and its calls run one at a time. `revokedAt` is not saved: only revokeDevice revokes.
    */
   updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]): Promise<PairedDevice[]>;
-  /** The open pairing window, or null. An expired window may still be returned. */
+  /** Called by `t3-voice devices revoke`. It must never overwrite the device list. */
+  revokeDevice(id: string, revokedAt: string): Promise<void>;
+  /** The pairing window `t3-voice pair` opened, or null. It may be expired or used. */
   loadPairingWindow(): Promise<PairingWindow | null>;
   savePairingWindow(window: PairingWindow): Promise<void>;
   /** Closes the window, unless it holds another code: a newer `t3-voice pair` replaced it. */

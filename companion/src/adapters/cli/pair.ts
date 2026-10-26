@@ -1,5 +1,5 @@
 // `t3-voice pair`: opens the pairing window and shows the QR code the T3 Voice app scans.
-// `t3-voice serve` checks the code (POST /pair) and closes the window once a device paired.
+// `t3-voice serve` checks the code (POST /pair) and saves the device with the code's hash.
 
 import { renderUnicodeCompact } from "uqr";
 import { openPairingWindow, PAIRING_WINDOW_MS } from "../../core/pairing.ts";
@@ -33,8 +33,6 @@ export async function runPair({
         `iPhone reaches the companion at, for example "https://voice.example.com".`,
     );
   }
-  const known = new Set((await store.loadDevices()).map((device) => device.id));
-
   const { code, window } = await openPairingWindow(store, now());
   // The code is shown only inside the QR code: it is a secret until it is used.
   const link = `t3voice://pair?${new URLSearchParams({ url: publicUrl, code })}`;
@@ -44,13 +42,16 @@ export async function runPair({
 
   for (;;) {
     const event = await wait(POLL_MS);
+    const paired = (await store.loadDevices()).find(
+      (device) => device.pairingCodeSha256 === window.codeSha256,
+    );
+    if (paired) {
+      await store.clearPairingWindow(window.codeSha256);
+      out(`Paired "${paired.name}" (${paired.id}).`);
+      return 0;
+    }
     const current = await store.loadPairingWindow();
     if (current?.codeSha256 !== window.codeSha256) {
-      const added = (await store.loadDevices()).find((device) => !known.has(device.id));
-      if (added) {
-        out(`Paired "${added.name}" (${added.id}).`);
-        return 0;
-      }
       out(
         current === null
           ? "The pairing window was closed."

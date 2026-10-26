@@ -36,13 +36,16 @@ export class OpaqueTokenAuth implements DeviceAuth {
       if (device.revokedAt !== null) continue;
       if (sameHash(device.tokenSha256, hash)) return this.withCurrentToken(device);
       if (device.nextToken !== null && sameHash(device.nextToken.sha256, hash)) {
-        return this.withReplacementToken(device);
+        return this.withReplacementToken(device, hash);
       }
     }
     return null;
   }
 
-  async register(name: string): Promise<{ device: Device; token: string }> {
+  async register(
+    name: string,
+    pairingCodeSha256: string,
+  ): Promise<{ device: Device; token: string }> {
     const token = newToken();
     const now = new Date(this.now()).toISOString();
     let device: Device = { id: "", name };
@@ -53,6 +56,7 @@ export class OpaqueTokenAuth implements DeviceAuth {
         tokenSha256: sha256(token),
         nextToken: null,
         tokenIssuedAt: now,
+        pairingCodeSha256,
         pairedAt: now,
         revokedAt: null,
       };
@@ -82,15 +86,25 @@ export class OpaqueTokenAuth implements DeviceAuth {
     return saved ? { ...authenticated, replacementToken: replacement } : authenticated;
   }
 
-  /** The device used its replacement: it has stored it, so the old token stops working. */
-  private async withReplacementToken(device: PairedDevice): Promise<Authentication> {
+  /**
+   * The device used its replacement: it has stored it, so the old token stops working.
+   * The token the device used wins even if a newer replacement was sent meanwhile (to a
+   * request made with the old token): that one stays pending, as the device may store it.
+   */
+  private async withReplacementToken(
+    device: PairedDevice,
+    usedSha256: string,
+  ): Promise<Authentication> {
     const now = new Date(this.now()).toISOString();
-    await this.changeIfStill(device, (current) => ({
-      ...current,
-      tokenSha256: current.nextToken?.sha256 ?? current.tokenSha256,
-      nextToken: null,
-      tokenIssuedAt: now,
-    }));
+    await this.store.updateDevices((devices) =>
+      devices.map((current) => {
+        if (current.id !== device.id || current.revokedAt !== null) return current;
+        // Another request already promoted it.
+        if (current.tokenSha256 !== device.tokenSha256) return current;
+        const newer = current.nextToken?.sha256 === usedSha256 ? null : current.nextToken;
+        return { ...current, tokenSha256: usedSha256, nextToken: newer, tokenIssuedAt: now };
+      }),
+    );
     return { device: summary(device), replacementToken: null };
   }
 

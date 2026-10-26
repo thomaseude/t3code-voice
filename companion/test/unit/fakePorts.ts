@@ -14,6 +14,7 @@ import {
   type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
+import { pairedDevice } from "./builders.ts";
 
 export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
@@ -40,6 +41,11 @@ export class InMemoryConfigStore implements ConfigStore {
   async updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]) {
     this.devices = change(this.devices);
     return this.devices;
+  }
+  async revokeDevice(id: string, revokedAt: string) {
+    this.devices = this.devices.map((device) =>
+      device.id === id && device.revokedAt === null ? { ...device, revokedAt } : device,
+    );
   }
   async loadPairingWindow() {
     return this.pairingWindow;
@@ -119,12 +125,20 @@ export class FakeT3Connector implements T3Connector {
   }
 }
 
-/** Knows the tokens it was given or issued; anything else is rejected. */
+/**
+ * Knows the tokens it was given or issued; anything else is rejected. With a store, a
+ * device it registers also goes in the store's device list, as the real one does.
+ */
 export class FakeDeviceAuth implements DeviceAuth {
   readonly devices = new Map<string, Device>();
+  private readonly store: InMemoryConfigStore | null;
   private registered = 0;
   /** Makes the next register() fail, like a device list that cannot be saved. */
   failNextRegister = false;
+
+  constructor(store: InMemoryConfigStore | null = null) {
+    this.store = store;
+  }
 
   addDevice(token: string, device: Device = { id: "d1", name: "iPhone" }): Device {
     this.devices.set(token, device);
@@ -137,13 +151,15 @@ export class FakeDeviceAuth implements DeviceAuth {
     const device = this.devices.get(token);
     return device === undefined ? null : { device, replacementToken: null };
   }
-  async register(name: string) {
+  async register(name: string, pairingCodeSha256: string) {
     if (this.failNextRegister) {
       this.failNextRegister = false;
-      throw new Error("devices.json.lock is held by another t3-voice process.");
+      throw new Error("devices.json could not be saved.");
     }
     this.registered++;
     const token = `issued-token-${this.registered}`;
-    return { device: this.addDevice(token, { id: `new${this.registered}`, name }), token };
+    const device = this.addDevice(token, { id: `new${this.registered}`, name });
+    this.store?.devices.push(pairedDevice({ ...device, pairingCodeSha256 }));
+    return { device, token };
   }
 }

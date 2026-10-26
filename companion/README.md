@@ -158,7 +158,10 @@ t3-voice devices revoke ID
   answers `429` to everyone until the 10 minutes are over. The per-IP limit alone is not
   enough: it forgets old addresses, so a caller with many addresses would escape it.
 - `devices revoke` takes effect at the device's next request: `serve` reads the device
-  list on every request.
+  list and the revocations on every request.
+- Each file has one writer, so `serve` and the CLI never overwrite each other's change.
+  `serve` saves a paired device together with the hash of its code: that one write uses
+  the code up.
 
 ## Files
 
@@ -171,8 +174,9 @@ open, and prints the `chmod` command that fixes it.
 |---|---|
 | `config.json` | T3 URL and optional `t3.acceptedServerVersions` |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
-| `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), dates. Never a token itself. `serve` and the CLI change it under `devices.json.lock` |
-| `pairing-window.json` | While `t3-voice pair` runs: SHA-256 of the one-time code and its expiry. Never the code itself |
+| `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
+| `revocations.jsonl` | One line per `t3-voice devices revoke`: device id and date. Only the CLI writes it, and only adds lines |
+| `pairing-window.json` | While `t3-voice pair` runs: SHA-256 of the one-time code and its expiry. Never the code itself. Only `pair` writes it |
 | `openai.env` | OpenAI key (secret, used by later tickets) |
 
 Secrets are never printed or logged.
