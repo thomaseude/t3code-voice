@@ -9,7 +9,7 @@ import type { ShellState } from "./shellState.ts";
 const MAX_PER_LIST = 10;
 const FINISHED_SINCE_MS = 24 * 3_600_000;
 
-/** Run statuses during which the agent's turn is not over. */
+/** Run statuses that upstream awareness reports as running. In `waiting`, only the checkpoint capture is left. */
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
 export function activityOf(state: ShellState, now: Date): Activity {

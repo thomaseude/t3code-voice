@@ -24,7 +24,7 @@ const REVOKED_DIR = "revoked";
 /** One file per open pairing window: `<SHA-256 of its code>.json`. */
 const PAIRING_WINDOWS_DIR = "pairing-windows";
 
-/** Device ids and code hashes become file names: nothing else may. */
+/** Device ids and code hashes become file names, so they must match these patterns (no `/`, no `..`). */
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
