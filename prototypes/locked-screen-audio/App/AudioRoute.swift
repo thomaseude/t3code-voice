@@ -52,7 +52,7 @@ enum AudioRoute {
         case .failed: return "failed"
         case .disconnected: return "disconnected"
         case .closed: return "closed"
-        @unknown default: return "raw:\(state.rawValue)"
+        default: return "raw:\(state.rawValue)"
         }
     }
 

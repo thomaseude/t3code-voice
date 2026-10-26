@@ -131,7 +131,7 @@ final class VoiceSession: ObservableObject {
         let config = RTCAudioSessionConfiguration.webRTC()
         config.category = AVAudioSession.Category.playAndRecord.rawValue
         config.mode = (ProtoSettings.voiceChatMode ? AVAudioSession.Mode.voiceChat : AVAudioSession.Mode.default).rawValue
-        var options: AVAudioSession.CategoryOptions = [.allowBluetooth]
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         if ProtoSettings.defaultToSpeaker { options.insert(.defaultToSpeaker) }
         config.categoryOptions = options
         RTCAudioSessionConfiguration.setWebRTC(config)
