@@ -1,0 +1,58 @@
+# Settings the shared skills (/code-review, /resolve-findings, /review-loop, /dead-code,
+# /comment-cleanup, /implement, /tdd, /seo-brief, /seo-adapt) read for this repo. One key per setting: edit
+# `value`, keep the rest. A missing key means its `default`.
+
+review_reports:
+  value: english
+  default: english
+  description: The language of what a person reads in a `/code-review` or `/resolve-findings` comment.
+
+commit_messages:
+  value: english
+  default: english
+  description: The language of the commit messages the skills write.
+
+code_comments:
+  value: english
+  default: english
+  description: The language `/comment-cleanup` writes, and translates other comments to.
+
+comment_cleanup_scope:
+  value: diff
+  default: diff
+  allowed: [diff, file]
+  description: >
+    Which comments `/comment-cleanup` reads with no argument. `diff`: only the comments
+    on lines the branch adds or changes, and those annotating code it changed. `file`:
+    every comment of every touched file, the boy scout rule.
+
+widening:
+  value: ask
+  default: ask
+  allowed: [ask, defer]
+  description: >
+    What `/resolve-findings` does with a real finding outside the ticket. `ask`: it
+    opens an issue, but asks the user whether to widen the branch when the fix is
+    clearly cheaper than an issue. `defer`: it always opens an issue, even for a small
+    fix, and asks nothing. With `defer`, PRs stay small and no run waits for an answer.
+
+keyword_source:
+  value: export
+  default: export
+  allowed: [dataforseo, export]
+  description: >
+    Where `/seo-brief` gets keyword volume, difficulty and the Google top 10. `dataforseo`:
+    the DataForSEO API, credentials in `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD`.
+    `export`: the user pastes an export and names the tool.
+
+search_market:
+  value: fr-FR
+  default: fr-FR
+  description: The Google market `/seo-brief` reads, as language-COUNTRY (fr-FR, es-ES, en-GB…).
+
+adapt_markets:
+  value: []
+  default: []
+  description: >
+    The Google markets `/seo-adapt` adapts an article into, as language-COUNTRY (es-ES,
+    en-GB…). One market per language. Empty: `/seo-adapt` stops and asks.

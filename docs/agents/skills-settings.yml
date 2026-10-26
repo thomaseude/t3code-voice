@@ -1,0 +1,41 @@
+# Settings the shared skills (/code-review, /resolve-findings, /review-loop, /dead-code,
+# /comment-cleanup, /implement, /tdd, /seo-brief) read for this repo. One key per setting: edit
+# `value`, keep the rest. A missing key means its `default`.
+
+review_reports:
+  value: english
+  default: english
+  description: The language of what a person reads in a `/code-review` or `/resolve-findings` comment.
+
+commit_messages:
+  value: english
+  default: english
+  description: The language of the commit messages the skills write.
+
+code_comments:
+  value: english
+  default: english
+  description: The language `/comment-cleanup` writes, and translates other comments to.
+
+comment_cleanup_scope:
+  value: diff
+  default: diff
+  allowed: [diff, file]
+  description: >
+    Which comments `/comment-cleanup` reads with no argument. `diff`: only the comments
+    on lines the branch adds or changes, and those annotating code it changed. `file`:
+    every comment of every touched file, the boy scout rule.
+
+keyword_source:
+  value: export
+  default: export
+  allowed: [dataforseo, export]
+  description: >
+    Where `/seo-brief` gets keyword volume, difficulty and the Google top 10. `dataforseo`:
+    the DataForSEO API, credentials in `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD`.
+    `export`: the user pastes an export and names the tool.
+
+search_market:
+  value: fr-FR
+  default: fr-FR
+  description: The Google market `/seo-brief` reads, as language-COUNTRY (fr-FR, es-ES, en-GB…).

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "skills": {
+    "code-review": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/code-review/SKILL.md",
+      "computedHash": "a6d3aa26dfe9e2551c0b3a39fa6e529a54937b469e639b560c3aeed889e85d5b"
+    },
+    "comment-cleanup": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/comment-cleanup/SKILL.md",
+      "computedHash": "ea20f2f3701064f06d315f23a4b15db4aa769525ff6d2aaa0a8699eb595e6884"
+    },
+    "dead-code": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/dead-code/SKILL.md",
+      "computedHash": "60aaccf15fbdcf503ec67a319a3367a3d08f38a36b85c6b47428369845e7dfac"
+    },
+    "explique": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/explique/SKILL.md",
+      "computedHash": "eeac042d717dd27ec64460ab334b926c7ff4dc0f16d15b056135e032f605d8e6"
+    },
+    "implement": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/implement/SKILL.md",
+      "computedHash": "f743014d6b5c1490da6834758479055175ab4bf18906c9282b9698396e57f92c"
+    },
+    "resolve-findings": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/resolve-findings/SKILL.md",
+      "computedHash": "8d2926e03a035e7ecf3b48d89fcd142a55509d9842f288e5dca5370101655e36"
+    },
+    "review-loop": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/review-loop/SKILL.md",
+      "computedHash": "221770873359ae0c973f236d1d10a05319fc8486d81995d0c30a01468027c4c8"
+    },
+    "setup-matt-pocock-skills": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+      "computedHash": "1d35d0afa3ded88c9324d38db08b2cff91cd03e0e11d64786bee41385cd7b9fb"
+    },
+    "setup-skill": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/setup-skill/SKILL.md",
+      "computedHash": "2ab4d811aae5be4830cde543745d2663994c2de1ec9938d91c078906bcf4bfdb"
+    },
+    "tdd": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/tdd/SKILL.md",
+      "computedHash": "9236b08669d79ac5616da4a858d361edc8fcf75c4bc3290d6bfaf879a435f04a"
+    },
+    "technical-writing": {
+      "source": "thomaseude/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/writing/technical-writing/SKILL.md",
+      "computedHash": "b92e585ac65ad203b21b5ad36d69fb40366b82d69e9bf99d03e7d237124e942e"
+    }
+  }
+}
