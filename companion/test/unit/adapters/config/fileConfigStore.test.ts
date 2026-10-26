@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chmod,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  rm,
   stat,
   utimes,
   writeFile,
@@ -285,12 +287,30 @@ describe("FileConfigStore", () => {
 
     test("takes over a lock left by a process that died", async () => {
       const dir = await privateDir();
-      const lock = join(dir, "devices.json.lock");
-      await writeFile(lock, "", { mode: 0o600 });
-      const longAgo = new Date(Date.now() - 60_000);
-      await utimes(lock, longAgo, longAgo);
+      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+      await writeFile(join(dir, "devices.json.lock"), String(deadPid), { mode: 0o600 });
 
       await new FileConfigStore(dir).updateDevices((devices) => [...devices, DEVICE]);
+
+      assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
+    });
+
+    test("waits for the lock of a running process, however old the lock is", async () => {
+      const dir = await privateDir();
+      const lock = join(dir, "devices.json.lock");
+      await writeFile(lock, String(process.pid), { mode: 0o600 });
+      const longAgo = new Date(Date.now() - 60_000);
+      await utimes(lock, longAgo, longAgo);
+      let released = false;
+      setTimeout(async () => {
+        released = true;
+        await rm(lock);
+      }, 100);
+
+      await new FileConfigStore(dir).updateDevices((devices) => {
+        assert.ok(released, "the change ran while the other process held the lock");
+        return [...devices, DEVICE];
+      });
 
       assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
     });
@@ -320,9 +340,19 @@ describe("FileConfigStore", () => {
 
       assert.equal((await stat(join(dir, "pairing-window.json"))).mode & 0o777, 0o600);
       assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(), WINDOW);
-      await new FileConfigStore(dir).clearPairingWindow();
+      await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
       assert.equal(await new FileConfigStore(dir).loadPairingWindow(), null);
-      await new FileConfigStore(dir).clearPairingWindow();
+      await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
+    });
+
+    test("clearing leaves alone a window that holds another code", async () => {
+      const dir = await tempDir();
+      const newer = { ...WINDOW, codeSha256: "d".repeat(64) };
+      await new FileConfigStore(dir).savePairingWindow(newer);
+
+      await new FileConfigStore(dir).clearPairingWindow(WINDOW.codeSha256);
+
+      assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(), newer);
     });
 
     test("refuses a damaged window rather than opening it", async () => {

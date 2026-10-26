@@ -3,7 +3,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { type AddressInfo, isIPv6 } from "node:net";
-import type { PairingDesk } from "../../core/pairing.ts";
+import type { DevicePairing } from "../../core/pairing.ts";
 import { type RateDecision, RateLimiter } from "../../core/rateLimiter.ts";
 import { scrubSecrets } from "../../core/secrets.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
@@ -16,7 +16,7 @@ export interface RateLimit {
 
 export interface HttpApiOptions extends ApiServerOptions {
   auth: DeviceAuth;
-  pairing: PairingDesk;
+  devicePairing: DevicePairing;
   limits?: { perIp: RateLimit; perDevice: RateLimit };
   /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
@@ -106,7 +106,7 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
   async function pair(request: IncomingMessage, response: ServerResponse) {
     const body = await readJson(request);
     const code = typeof body?.code === "string" ? body.code : "";
-    const result = await options.pairing.pair(code, deviceName(body?.name));
+    const result = await options.devicePairing.pair(code, deviceName(body?.name));
     if (result.status === "limited") {
       return refused(response, { allowed: false, retryAfterMs: result.retryAfterMs });
     }

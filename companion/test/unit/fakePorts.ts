@@ -47,8 +47,8 @@ export class InMemoryConfigStore implements ConfigStore {
   async savePairingWindow(window: PairingWindow) {
     this.pairingWindow = window;
   }
-  async clearPairingWindow() {
-    this.pairingWindow = null;
+  async clearPairingWindow(codeSha256: string) {
+    if (this.pairingWindow?.codeSha256 === codeSha256) this.pairingWindow = null;
   }
 }
 
@@ -123,6 +123,8 @@ export class FakeT3Connector implements T3Connector {
 export class FakeDeviceAuth implements DeviceAuth {
   readonly devices = new Map<string, Device>();
   private registered = 0;
+  /** Makes the next register() fail, like a device list that cannot be saved. */
+  failNextRegister = false;
 
   addDevice(token: string, device: Device = { id: "d1", name: "iPhone" }): Device {
     this.devices.set(token, device);
@@ -136,6 +138,10 @@ export class FakeDeviceAuth implements DeviceAuth {
     return device === undefined ? null : { device, replacementToken: null };
   }
   async register(name: string) {
+    if (this.failNextRegister) {
+      this.failNextRegister = false;
+      throw new Error("devices.json.lock is held by another t3-voice process.");
+    }
     this.registered++;
     const token = `issued-token-${this.registered}`;
     return { device: this.addDevice(token, { id: `new${this.registered}`, name }), token };

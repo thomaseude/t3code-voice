@@ -54,7 +54,12 @@ describe("t3-voice devices", () => {
     };
     const lines: string[] = [];
 
-    await revokeDevice({ store, id: "3f9a2c1b", now: NOW, out: (line) => lines.push(line) });
+    await revokeDevice({
+      store,
+      id: "3f9a2c1b",
+      now: () => NOW.getTime(),
+      out: (line) => lines.push(line),
+    });
 
     assert.equal(store.devices[0]?.revokedAt, "2026-10-26T12:00:00.000Z");
     assert.equal(store.devices[0]?.nextToken, null);
@@ -72,7 +77,12 @@ describe("t3-voice devices", () => {
     const store = storeWithDevices();
     const lines: string[] = [];
 
-    await revokeDevice({ store, id: "77aa0e12", now: NOW, out: (line) => lines.push(line) });
+    await revokeDevice({
+      store,
+      id: "77aa0e12",
+      now: () => NOW.getTime(),
+      out: (line) => lines.push(line),
+    });
 
     assert.equal(store.devices[1]?.revokedAt, "2026-10-20T09:00:00.000Z");
     assert.deepEqual(lines, ['"Old iPhone" (77aa0e12) was already revoked.']);
@@ -82,7 +92,7 @@ describe("t3-voice devices", () => {
     const store = storeWithDevices();
 
     await assert.rejects(
-      revokeDevice({ store, id: "nope", now: NOW, out: () => {} }),
+      revokeDevice({ store, id: "nope", now: () => NOW.getTime(), out: () => {} }),
       /No device "nope"; "t3-voice devices list" shows the ids/,
     );
   });

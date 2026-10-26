@@ -3,8 +3,8 @@
 Hands-free voice companion for T3 Code: an iOS app ("T3 Voice") and a companion service
 (`t3-voice`) that runs next to a T3 Code server. The spec is issue #15; tickets are its
 children (#16–#28). Only the companion exists so far, in `companion/` (TypeScript on Node
-≥ 22.18). Runtime dependencies are the ones the spec lists (#15, "Languages"), plus `uqr`
-for the pairing QR code (decided by Thomas in #18). Ask before adding another one.
+≥ 22.18). Runtime dependencies are only the ones spec #15 lists under "Languages" (`uqr`
+draws the pairing QR code). Ask Thomas before adding another one.
 
 Issues are GitHub issues via `gh` (`docs/agents/issue-tracker.md`). Search the spec and the
 `research/*` branches before re-deciding something.

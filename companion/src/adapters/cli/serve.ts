@@ -20,7 +20,8 @@ export interface ServeOptions {
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
   waitForStop(): Promise<void>;
   out(line: string): void;
-  now?: () => Date;
+  /** Current time in milliseconds; injectable for tests. */
+  now?: () => number;
 }
 
 export async function runServe({
@@ -29,7 +30,7 @@ export async function runServe({
   startServer,
   waitForStop,
   out,
-  now = () => new Date(),
+  now = Date.now,
 }: ServeOptions) {
   const { config, pairing } = await loadT3Setup(store);
   // Read once now, so a damaged or loose device list stops the start, not the first request.
@@ -66,7 +67,7 @@ export async function runServe({
       port,
       ...(clientIpHeader ? { clientIpHeader } : {}),
       // While T3 is away, its last known state could be stale: say so instead.
-      activity: () => (connected && state.hasSnapshot ? activityOf(state, now()) : null),
+      activity: () => (connected && state.hasSnapshot ? activityOf(state, new Date(now())) : null),
     });
     const { version } = backend.serverInfo();
     const paired = devices.filter((device) => device.revokedAt === null).length;

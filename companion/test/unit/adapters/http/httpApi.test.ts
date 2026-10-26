@@ -6,7 +6,7 @@ import { afterEach, describe, test } from "node:test";
 import { revokeDevice } from "../../../../src/adapters/cli/devices.ts";
 import { OpaqueTokenAuth } from "../../../../src/adapters/device-auth/opaqueTokenAuth.ts";
 import { type HttpApiOptions, startHttpApi } from "../../../../src/adapters/http/httpApi.ts";
-import { openPairingWindow, PairingDesk } from "../../../../src/core/pairing.ts";
+import { DevicePairing, openPairingWindow } from "../../../../src/core/pairing.ts";
 import type { PairedDevice } from "../../../../src/ports/deviceAuth.ts";
 import { pairedDevice } from "../../builders.ts";
 import { FakeDeviceAuth, InMemoryConfigStore } from "../../fakePorts.ts";
@@ -35,7 +35,10 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
     host: "127.0.0.1",
     port: 0,
     auth: new FakeDeviceAuth(),
-    pairing: new PairingDesk({ store: new InMemoryConfigStore(), auth: new FakeDeviceAuth() }),
+    devicePairing: new DevicePairing({
+      store: new InMemoryConfigStore(),
+      auth: new FakeDeviceAuth(),
+    }),
     activity: () => ({ running: [], finished: [] }),
     ...options,
   });
@@ -250,8 +253,8 @@ describe("Pairing (POST /pair)", () => {
     const clock = { now: Date.parse("2026-10-26T12:00:00.000Z") };
     const store = new InMemoryConfigStore();
     const auth = new FakeDeviceAuth();
-    const pairing = new PairingDesk({ store, auth, now: () => clock.now });
-    const url = await startApi({ auth, pairing, ...options });
+    const devicePairing = new DevicePairing({ store, auth, now: () => clock.now });
+    const url = await startApi({ auth, devicePairing, ...options });
     const openWindow = () => openPairingWindow(store, clock.now);
     const pair = (body: unknown) =>
       fetch(`${url}/pair`, { method: "POST", body: JSON.stringify(body) });
@@ -312,6 +315,15 @@ describe("Pairing (POST /pair)", () => {
 
     assert.deepEqual(statuses.sort(), [200, 401]);
     assert.equal(api.auth.devices.size, 1);
+  });
+
+  test("a code still works after the device could not be saved", async () => {
+    const api = await startPairingApi({ log: () => {} });
+    const { code } = await api.openWindow();
+    api.auth.failNextRegister = true;
+
+    assert.equal((await api.pair({ code, name: "iPhone" })).status, 500);
+    assert.equal((await api.pair({ code, name: "iPhone" })).status, 200);
   });
 
   test("a code expires 5 minutes after the window opened", async () => {
@@ -403,7 +415,7 @@ describe("Device tokens issued by pairing", () => {
     const auth = new OpaqueTokenAuth(store, { now: () => clock.now });
     const url = await startApi({
       auth,
-      pairing: new PairingDesk({ store, auth, now: () => clock.now }),
+      devicePairing: new DevicePairing({ store, auth, now: () => clock.now }),
     });
     const { code } = await openPairingWindow(store, clock.now);
     const paired = await fetch(`${url}/pair`, {
@@ -491,7 +503,7 @@ describe("Device tokens issued by pairing", () => {
     const replacement = (await phone.activity(phone.token)).headers.get("t3voice-token") ?? "";
     const id = phone.store.devices[0]?.id ?? "";
 
-    await revokeDevice({ store: phone.store, id, now: new Date(phone.clock.now), out: () => {} });
+    await revokeDevice({ store: phone.store, id, now: () => phone.clock.now, out: () => {} });
 
     assert.equal((await phone.activity(phone.token)).status, 401);
     assert.equal((await phone.activity(replacement)).status, 401);

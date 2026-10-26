@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { runServe } from "../../../../src/adapters/cli/serve.ts";
-import type { ApiServerOptions } from "../../../../src/ports/apiServer.ts";
+import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
 import { project, thread } from "../../builders.ts";
 import { FakeT3Connector, InMemoryConfigStore } from "../../fakePorts.ts";
@@ -39,7 +39,7 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
     },
     waitForStop: () => new Promise<void>((resolve) => (stop = resolve)),
     out: (line) => lines.push(line),
-    now: () => NOW,
+    now: () => NOW.getTime(),
   });
   const listenOptions = () => started.map(({ activity: _activity, ...rest }) => rest);
   const activity = () => started[0]?.activity();
@@ -148,16 +148,32 @@ describe("runServe", () => {
           pendingRequest: { id: "r2", kind: "user_input", blocking: true },
           updatedAt: "2026-10-26T11:40:00.000Z",
         }),
-        thread("t4", { title: "Add a README", updatedAt: "2026-10-26T09:00:00.000Z" }),
+        thread("t4", {
+          title: "Add a README",
+          status: "completed",
+          updatedAt: "2026-10-26T09:00:00.000Z",
+        }),
         thread("t5", {
           title: "Deploy",
           status: "failed",
           lastError: { message: "usage limit", failureClass: "usage_limit" },
           updatedAt: "2026-10-26T10:00:00.000Z",
         }),
-        thread("old", { title: "Yesterday's work", updatedAt: "2026-10-25T11:59:59.000Z" }),
-        thread("archived", { archived: true, updatedAt: "2026-10-26T11:00:00.000Z" }),
-        thread("sub", { isSubagent: true, updatedAt: "2026-10-26T11:00:00.000Z" }),
+        thread("old", {
+          title: "Yesterday's work",
+          status: "completed",
+          updatedAt: "2026-10-25T11:59:59.000Z",
+        }),
+        thread("archived", {
+          status: "completed",
+          archived: true,
+          updatedAt: "2026-10-26T11:00:00.000Z",
+        }),
+        thread("sub", {
+          status: "completed",
+          isSubagent: true,
+          updatedAt: "2026-10-26T11:00:00.000Z",
+        }),
       ];
       const run = serve(setUpStore(), t3);
       await settle();
@@ -207,6 +223,51 @@ describe("runServe", () => {
       await run.done;
     });
 
+    test("follows T3's awareness rule: interrupted, cancelled, queued and never-run threads are left out", async () => {
+      const t3 = new FakeT3Connector();
+      const recent = "2026-10-26T11:00:00.000Z";
+      t3.backend.threads = [
+        thread("done", { status: "completed", updatedAt: recent }),
+        thread("never-run", { status: "idle", updatedAt: recent }),
+        thread("interrupted", { status: "interrupted", updatedAt: recent }),
+        thread("cancelled", { status: "cancelled", updatedAt: recent }),
+        thread("rolled-back", { status: "rolled_back", updatedAt: recent }),
+        thread("queued", { status: "queued", updatedAt: recent }),
+        thread("starting", { status: "starting", updatedAt: recent }),
+        thread("checkpoint", { status: "waiting", updatedAt: recent }),
+        thread("auth", {
+          status: "running",
+          pendingRequest: { id: "r1", kind: "auth_refresh", blocking: true },
+          updatedAt: recent,
+        }),
+        thread("async-question", {
+          status: "running",
+          pendingRequest: { id: "r2", kind: "user_input", blocking: false },
+          updatedAt: recent,
+        }),
+        thread("question-after-run", {
+          status: "completed",
+          pendingRequest: { id: "r3", kind: "user_input", blocking: false },
+          updatedAt: recent,
+        }),
+      ];
+      const run = serve(setUpStore(), t3);
+      await settle();
+
+      const states = (items: ActivityItem[] = []) =>
+        Object.fromEntries(items.map((item) => [item.threadId, item.state]));
+      assert.deepEqual(states(run.activity()?.running), {
+        starting: "running",
+        checkpoint: "running",
+        auth: "running",
+        "async-question": "running",
+        "question-after-run": "waiting_for_input",
+      });
+      assert.deepEqual(states(run.activity()?.finished), { done: "completed" });
+      run.stop();
+      await run.done;
+    });
+
     test("keeps the list small: 10 running and 10 finished threads at most, the latest first", async () => {
       const t3 = new FakeT3Connector();
       const minutesAgo = (minutes: number) =>
@@ -214,7 +275,7 @@ describe("runServe", () => {
       for (let index = 0; index < 12; index++) {
         t3.backend.threads.push(
           thread(`running-${index}`, { status: "running", updatedAt: minutesAgo(index) }),
-          thread(`done-${index}`, { updatedAt: minutesAgo(index) }),
+          thread(`done-${index}`, { status: "completed", updatedAt: minutesAgo(index) }),
         );
       }
       const run = serve(setUpStore(), t3);

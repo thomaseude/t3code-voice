@@ -2,7 +2,8 @@
 // when it pairs. Only their SHA-256 is stored. A token is long and random, so a plain
 // hash is enough: there is no weak password to protect with a slow hash.
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { randomSecret, sameHash, sha256 } from "../../core/secrets.ts";
 import type { ConfigStore } from "../../ports/configStore.ts";
 import type { Authentication, Device, DeviceAuth, PairedDevice } from "../../ports/deviceAuth.ts";
 
@@ -124,7 +125,7 @@ function summary(device: PairedDevice): Device {
 }
 
 function newToken(): string {
-  return randomBytes(32).toString("base64url");
+  return randomSecret(32);
 }
 
 /** Short, so it is easy to type in `t3-voice devices revoke <id>`. */
@@ -133,14 +134,4 @@ function newDeviceId(devices: PairedDevice[]): string {
     const id = randomBytes(4).toString("hex");
     if (!devices.some((device) => device.id === id)) return id;
   }
-}
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-function sameHash(storedHex: string, hashHex: string): boolean {
-  const stored = Buffer.from(storedHex, "hex");
-  const hash = Buffer.from(hashHex, "hex");
-  return stored.length === hash.length && timingSafeEqual(stored, hash);
 }

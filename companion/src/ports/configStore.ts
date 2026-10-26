@@ -51,7 +51,8 @@ export interface ConfigStore {
   /** The open pairing window, or null. An expired window may still be returned. */
   loadPairingWindow(): Promise<PairingWindow | null>;
   savePairingWindow(window: PairingWindow): Promise<void>;
-  clearPairingWindow(): Promise<void>;
+  /** Closes the window, unless it holds another code: a newer `t3-voice pair` replaced it. */
+  clearPairingWindow(codeSha256: string): Promise<void>;
 }
 
 export class ConfigError extends Error {

@@ -22,12 +22,13 @@ export async function listDevices({ store, out }: { store: ConfigStore; out(line
 export async function revokeDevice({
   store,
   id,
-  now = new Date(),
+  now = Date.now,
   out,
 }: {
   store: ConfigStore;
   id: string;
-  now?: Date;
+  /** Current time in milliseconds; injectable for tests. */
+  now?: () => number;
   out(line: string): void;
 }) {
   let found: PairedDevice | undefined;
@@ -36,7 +37,7 @@ export async function revokeDevice({
       if (device.id !== id) return device;
       found = device;
       if (device.revokedAt !== null) return device;
-      return { ...device, revokedAt: now.toISOString(), nextToken: null };
+      return { ...device, revokedAt: new Date(now()).toISOString(), nextToken: null };
     }),
   );
   if (found === undefined) {

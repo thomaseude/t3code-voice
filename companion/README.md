@@ -61,7 +61,7 @@ Routes:
   `waiting_for_input`, `waiting_for_approval`, `completed` or `failed`. It answers `503`
   while the companion reconnects to T3.
 
-- Every request needs a device token (`Authorization: Bearer <token>`). Without a valid
+- Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next
   request.
 - A device token is replaced the first time it is used after 30 days. The answer then

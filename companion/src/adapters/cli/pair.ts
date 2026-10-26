@@ -59,12 +59,12 @@ export async function runPair({
       return 1;
     }
     if (event === "stop") {
-      await store.clearPairingWindow();
+      await store.clearPairingWindow(window.codeSha256);
       out("Pairing cancelled.");
       return 1;
     }
     if (now() >= Date.parse(window.expiresAt)) {
-      await store.clearPairingWindow();
+      await store.clearPairingWindow(window.codeSha256);
       out('The pairing window expired. Run "t3-voice pair" again.');
       return 1;
     }

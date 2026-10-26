@@ -1,10 +1,10 @@
 // Pairing an iPhone: `t3-voice pair` opens a window with a one-time code, and the app
 // trades the code for a device token through POST /pair.
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ConfigStore, PairingWindow } from "../ports/configStore.ts";
 import type { Device, DeviceAuth } from "../ports/deviceAuth.ts";
 import { RateLimiter } from "./rateLimiter.ts";
+import { randomSecret, sameHash, sha256 } from "./secrets.ts";
 
 /** How long a pairing window stays open. */
 export const PAIRING_WINDOW_MS = 5 * 60_000;
@@ -21,7 +21,7 @@ export async function openPairingWindow(
   now: number,
 ): Promise<{ code: string; window: PairingWindow }> {
   // 128 random bits: the code travels in a QR code, so it can be long.
-  const code = randomBytes(16).toString("base64url");
+  const code = randomSecret(16);
   const window = {
     codeSha256: sha256(code),
     expiresAt: new Date(now + PAIRING_WINDOW_MS).toISOString(),
@@ -37,14 +37,14 @@ export type PairingResult =
   /** Too many wrong codes lately: nobody can pair until `retryAfterMs` has passed. */
   | { status: "limited"; retryAfterMs: number };
 
-export interface PairingDeskOptions {
+export interface DevicePairingOptions {
   store: ConfigStore;
   auth: DeviceAuth;
   /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
 }
 
-export class PairingDesk {
+export class DevicePairing {
   private readonly store: ConfigStore;
   private readonly auth: DeviceAuth;
   private readonly now: () => number;
@@ -53,7 +53,7 @@ export class PairingDesk {
   /** The attempt in progress: attempts run one at a time, so a code cannot be used twice. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor({ store, auth, now = Date.now }: PairingDeskOptions) {
+  constructor({ store, auth, now = Date.now }: DevicePairingOptions) {
     this.store = store;
     this.auth = auth;
     this.now = now;
@@ -79,20 +79,11 @@ export class PairingDesk {
       this.failures.take(FAILURES_KEY);
       return { status: "refused" };
     }
-    await this.store.clearPairingWindow();
+    // Saved first: if saving fails, the window stays open and the code can be tried again.
     const { device, token } = await this.auth.register(name);
+    await this.store.clearPairingWindow(window.codeSha256);
     return { status: "paired", device, token };
   }
 }
 
 const FAILURES_KEY = "all callers";
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-function sameHash(a: string, b: string): boolean {
-  const left = Buffer.from(a, "hex");
-  const right = Buffer.from(b, "hex");
-  return left.length === right.length && timingSafeEqual(left, right);
-}

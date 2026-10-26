@@ -4,7 +4,8 @@
 // directory that other users can open is refused. Secrets are only read from and written to
 // these files: they are never printed or logged.
 
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { chmod, link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -22,9 +23,7 @@ const T3_PAIRING_FILE = "t3-pairing.json";
 const DEVICES_FILE = "devices.json";
 const PAIRING_WINDOW_FILE = "pairing-window.json";
 
-/** A lock older than this was left by a process that died. Holding it takes milliseconds. */
-const STALE_LOCK_MS = 10_000;
-/** How long to wait for another process to release the lock. */
+/** How long to wait for another process to release a lock. Holding one takes milliseconds. */
 const LOCK_WAIT_MS = 5_000;
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -132,33 +131,28 @@ export class FileConfigStore implements ConfigStore {
   }
 
   async savePairingWindow(window: PairingWindow): Promise<void> {
-    await this.writePrivateFile(PAIRING_WINDOW_FILE, `${JSON.stringify(window, null, 2)}\n`);
+    await this.withLock(PAIRING_WINDOW_FILE, () =>
+      this.writePrivateFile(PAIRING_WINDOW_FILE, `${JSON.stringify(window, null, 2)}\n`),
+    );
   }
 
-  async clearPairingWindow(): Promise<void> {
-    await rm(join(this.location, PAIRING_WINDOW_FILE), { force: true });
+  async clearPairingWindow(codeSha256: string): Promise<void> {
+    await this.withLock(PAIRING_WINDOW_FILE, async () => {
+      if ((await this.loadPairingWindow())?.codeSha256 !== codeSha256) return;
+      await rm(join(this.location, PAIRING_WINDOW_FILE), { force: true });
+    });
   }
 
   /**
    * Runs `work` while holding `<name>.lock`, so other t3-voice processes (and other calls
-   * in this one) wait for it. The lock file is created with O_EXCL: only one creator wins.
+   * in this one) wait for it. The lock file holds the id of the process that holds it.
    */
   private async withLock<T>(name: string, work: () => Promise<T>): Promise<T> {
     await this.ensurePrivateDir();
     const lock = join(this.location, `${name}.lock`);
     const deadline = Date.now() + LOCK_WAIT_MS;
-    for (;;) {
-      try {
-        await (await open(lock, "wx", 0o600)).close();
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      const lockedAt = await modifiedAt(lock);
-      if (lockedAt !== null && Date.now() - lockedAt > STALE_LOCK_MS) {
-        await rm(lock, { force: true });
-        continue;
-      }
+    while (!(await tryLock(lock))) {
+      await removeIfHolderDied(lock);
       if (Date.now() > deadline) {
         throw new ConfigError(
           `${lock} is held by another t3-voice process. If none is running, delete the file.`,
@@ -226,14 +220,66 @@ async function modeOf(path: string): Promise<number | null> {
   }
 }
 
-/** When the file was last changed, in milliseconds, or null when it does not exist. */
-async function modifiedAt(path: string): Promise<number | null> {
+/**
+ * Creates the lock with this process's id in it, in one step: link() fails when the lock
+ * exists, so two processes can never both create it.
+ */
+async function tryLock(lock: string): Promise<boolean> {
+  const temp = uniqueName(lock);
+  await writeFile(temp, String(process.pid), { mode: 0o600 });
   try {
-    return (await stat(path)).mtimeMs;
+    await link(temp, lock);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+/**
+ * Removes a lock whose process died (killed while it held the lock). The lock is first
+ * moved to a unique name, so only one process can remove it. If the moved lock belongs to
+ * another process, it was taken again in the meantime, and it is put back.
+ */
+async function removeIfHolderDied(lock: string): Promise<void> {
+  const holder = await lockHolder(lock);
+  if (holder === null || isRunning(holder)) return;
+  const aside = uniqueName(lock);
+  try {
+    await rename(lock, aside);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if ((await lockHolder(aside)) !== holder) await link(aside, lock).catch(() => {});
+  await rm(aside, { force: true });
+}
+
+/** The process id in a lock file, or null when the file is gone or holds no id. */
+async function lockHolder(lock: string): Promise<number | null> {
+  try {
+    const pid = Number.parseInt(await readFile(lock, "utf8"), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to another user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function uniqueName(path: string): string {
+  return `${path}.${process.pid}.${randomBytes(4).toString("hex")}`;
 }
 
 function isHttpsUrl(value: unknown): boolean {

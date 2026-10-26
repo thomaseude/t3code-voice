@@ -7,7 +7,7 @@ import { defaultConfigDir, FileConfigStore } from "./adapters/config/fileConfigS
 import { OpaqueTokenAuth } from "./adapters/device-auth/opaqueTokenAuth.ts";
 import { startHttpApi } from "./adapters/http/httpApi.ts";
 import { WebSocketT3Connector } from "./adapters/t3-websocket/connector.ts";
-import { PairingDesk } from "./core/pairing.ts";
+import { DevicePairing } from "./core/pairing.ts";
 
 // `t3-voice status | head` closes stdout early; that is not an error.
 process.stdout.on("error", (error: NodeJS.ErrnoException) => {
@@ -22,5 +22,5 @@ process.exitCode = await runCli(process.argv.slice(2), {
   store,
   t3: new WebSocketT3Connector(),
   startServer: (options) =>
-    startHttpApi({ ...options, auth, pairing: new PairingDesk({ store, auth }) }),
+    startHttpApi({ ...options, auth, devicePairing: new DevicePairing({ store, auth }) }),
 });
