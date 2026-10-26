@@ -5,7 +5,9 @@ import { scrubSecrets } from "../../core/secrets.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
+import { listDevices, revokeDevice } from "./devices.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
+import { runPair } from "./pair.ts";
 import { runServe } from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
@@ -28,6 +30,9 @@ Commands:
                          Reads the T3 pairing link from the terminal or from stdin.
   status                 Show the T3 server, its projects and the running threads.
   serve                  Run the HTTP API the iPhone app calls (port 8787 by default).
+  pair                   Show a QR code to pair an iPhone; open for 5 minutes, works once.
+  devices list           List the paired iPhones.
+  devices revoke ID      Revoke an iPhone: its token is refused from its next request.
   help                   Show this help.
 
 Configuration and secrets live in ~/.config/t3voice/ (or $T3VOICE_CONFIG_DIR).`;
@@ -68,8 +73,29 @@ async function dispatch(
       await runStatus({ store, t3, out });
       return 0;
     case "serve":
-      await runServe({ store, startServer, waitForStop, out });
+      await runServe({ store, t3, startServer, waitForStop, out });
       return 0;
+    case "pair": {
+      const stopped = waitForStop().then(() => "stop" as const);
+      const wait = (ms: number) =>
+        Promise.race([
+          new Promise<"tick">((resolve) => setTimeout(() => resolve("tick"), ms)),
+          stopped,
+        ]);
+      return await runPair({ store, out, wait });
+    }
+    case "devices": {
+      const [subcommand, id] = args;
+      if (subcommand === "list") {
+        await listDevices({ store, out });
+        return 0;
+      }
+      if (subcommand === "revoke" && id) {
+        await revokeDevice({ store, id, out });
+        return 0;
+      }
+      throw new UsageError('Use "t3-voice devices list" or "t3-voice devices revoke ID".');
+    }
     case undefined:
     case "help":
     case "--help":

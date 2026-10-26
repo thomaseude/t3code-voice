@@ -37,13 +37,7 @@ export class RateLimiter {
 
   /** Counts one request for the key and says whether it may go through. */
   take(key: string): RateDecision {
-    const now = this.now();
-    // The wall clock went back (an NTP step): restart every window rather than stretch
-    // them, which also keeps the oldest window first.
-    if (now < this.lastNow) this.windows.clear();
-    this.lastNow = now;
-    this.dropEndedWindows(now);
-
+    const now = this.advanceClock();
     let window = this.windows.get(key);
     if (window === undefined) {
       // Full: forget the oldest caller. Refusing newcomers instead would let a flood of
@@ -59,8 +53,26 @@ export class RateLimiter {
     return { allowed: true };
   }
 
+  /** Says whether the key is over its limit, without counting a request. */
+  check(key: string): RateDecision {
+    const now = this.advanceClock();
+    const window = this.windows.get(key);
+    if (window === undefined || window.count < this.limit) return { allowed: true };
+    return { allowed: false, retryAfterMs: window.start + this.windowMs - now };
+  }
+
   trackedKeys(): number {
     return this.windows.size;
+  }
+
+  private advanceClock(): number {
+    const now = this.now();
+    // The wall clock went back (an NTP step): restart every window rather than stretch
+    // them, which also keeps the oldest window first.
+    if (now < this.lastNow) this.windows.clear();
+    this.lastNow = now;
+    this.dropEndedWindows(now);
+    return now;
   }
 
   /** Oldest windows come first, so this stops at the first one still running. */

@@ -1,10 +1,11 @@
 # t3-voice companion
 
 The service that runs next to a T3 Code server and lets the T3 Voice iOS app drive it.
-So far it connects to T3, reports its status and serves an HTTP API that only answers
-paired devices (none can pair yet). See the spec in issue #15.
+So far it connects to T3, reports its status, pairs iPhones with a QR code and serves an
+HTTP API that only answers paired devices. See the spec in issue #15.
 
-TypeScript on Node 22.18 or later. No runtime dependencies: it uses Node's built-in
+TypeScript on Node 22.18 or later. One runtime dependency, [`uqr`](https://github.com/unjs/uqr)
+(no dependencies of its own), draws the pairing QR code; the rest uses Node's built-in
 `fetch` and `WebSocket`.
 
 ## Set up
@@ -45,9 +46,28 @@ token to any other URL. The link also works through a pipe:
 `t3-voice serve` runs the API the iPhone app calls. It listens on `127.0.0.1:8787` by
 default and stops cleanly on `SIGTERM` or Ctrl-C.
 
+It connects to T3 first, with the token from `setup`, and fails closed: it refuses to start
+(exit code 3) when T3 is not a tested version, and stops when T3 comes back from a restart
+as an untested version. Run `setup` before `serve`.
+
+Routes:
+
+- `POST /pair` trades a one-time pairing code for a device token (see below). It is the only
+  route without a device token.
+- `GET /activity` lists what T3 runs now and what finished in the last 24 hours, 10 threads
+  per list at most:
+  `{"running": [...], "finished": [...]}`, each item
+  `{threadId, title, project, state, updatedAt}`, where `state` is `running`,
+  `waiting_for_input`, `waiting_for_approval`, `completed` or `failed`. It answers `503`
+  while the companion reconnects to T3.
+
 - Every request needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next
   request.
+- A device token is replaced the first time it is used after 30 days. The answer then
+  carries the new token in a `T3Voice-Token` header; the app must store it. The old token
+  keeps working until the new one is used. If the app missed the header, its next request
+  with the old token (a minute later at least) gets another new token.
 - Every request is rate-limited: 120 requests per minute per client IP (counted before
   the token check, so guessing tokens is throttled) and 60 per minute per device. IPv6
   callers are counted by their /64 prefix. Over the limit, the answer is `429` with a
@@ -58,9 +78,17 @@ Settings in `config.json`, all optional:
 ```json
 {
   "t3": { "baseUrl": "http://127.0.0.1:3773" },
-  "server": { "host": "127.0.0.1", "port": 8787, "clientIpHeader": "cf-connecting-ip" }
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "clientIpHeader": "cf-connecting-ip",
+    "publicUrl": "https://voice.example.com"
+  }
 }
 ```
+
+`publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
+in the QR code, and needs it.
 
 `clientIpHeader` names the header a local proxy sets to the caller's IP. Behind a
 Cloudflare Tunnel it is `cf-connecting-ip`. The companion reads it only on connections from
@@ -106,7 +134,31 @@ hostname):
    **Bypass**. Do not change the applications of your other hostnames. The companion's
    device tokens protect this hostname.
 4. Set `"clientIpHeader": "cf-connecting-ip"` in `config.json` and restart the service.
-5. Check from outside: `curl -i https://voice.example.com/activity` must answer `401`.
+5. Set `"publicUrl": "https://voice.example.com"` in `config.json`.
+6. Check from outside: `curl -i https://voice.example.com/activity` must answer `401`.
+
+## Pair an iPhone
+
+`t3-voice serve` must be running and published over HTTPS (see above). Then:
+
+```sh
+t3-voice pair             # shows a QR code; scan it with T3 Voice
+t3-voice devices list     # the paired iPhones, with their ids
+t3-voice devices revoke ID
+```
+
+- `pair` opens the pairing window for 5 minutes and shows a QR code holding
+  `t3voice://pair?url=<publicUrl>&code=<one-time code>`. The code is never printed as text.
+  The window closes when a device pairs, when it expires, or on Ctrl-C. Running `pair`
+  again replaces the code.
+- The app sends `POST /pair` with `{"code": "...", "name": "iPhone de Thomas"}` and gets
+  `{"token": "...", "device": {"id": "...", "name": "..."}}`. A wrong, used or expired code,
+  or a closed window, gets `401` with an empty body.
+- After 10 wrong codes in 10 minutes, counted for all callers together, `POST /pair`
+  answers `429` to everyone until the 10 minutes are over. The per-IP limit alone is not
+  enough: it forgets old addresses, so a caller with many addresses would escape it.
+- `devices revoke` takes effect at the device's next request: `serve` reads the device
+  list on every request.
 
 ## Files
 
@@ -119,7 +171,8 @@ open, and prints the `chmod` command that fixes it.
 |---|---|
 | `config.json` | T3 URL and optional `t3.acceptedServerVersions` |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
-| `devices.json` | Paired iPhones: id, name, SHA-256 of the device token, dates. Never the token itself |
+| `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), dates. Never a token itself. `serve` and the CLI change it under `devices.json.lock` |
+| `pairing-window.json` | While `t3-voice pair` runs: SHA-256 of the one-time code and its expiry. Never the code itself |
 | `openai.env` | OpenAI key (secret, used by later tickets) |
 
 Secrets are never printed or logged.
@@ -157,19 +210,22 @@ src/
   ports/
     t3Backend.ts             T3Backend, T3Connector, the companion's own T3 types
     configStore.ts           ConfigStore (settings, T3 token, paired devices)
-    deviceAuth.ts            DeviceAuth: which device a token belongs to
-    apiServer.ts             what `serve` needs to start and stop the HTTP API
+    deviceAuth.ts            DeviceAuth: which device a token belongs to; issuing tokens
+    apiServer.ts             what `serve` needs to start and stop the HTTP API; activity
   core/
     shellState.ts            projects and threads kept up to date; "is this thread running?"
     rateLimiter.ts           requests per key (IP, device) in fixed windows
+    pairing.ts               pairing window, one-time codes, global limit on wrong codes
+    activity.ts              the running / finished list of GET /activity
     secrets.ts               masks credentials in anything the companion prints
   adapters/
     t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
                              pairing/ticket HTTP calls, pinned version check
     config/                  ConfigStore on files in ~/.config/t3voice/
-    device-auth/             DeviceAuth with the companion's own opaque tokens (stored hashed)
+    device-auth/             DeviceAuth with the companion's own opaque tokens (stored
+                             hashed), replaced on use every 30 days
     http/                    the HTTP API: token check and rate limits on every route
-    cli/                     `t3-voice` commands (setup, status, serve)
+    cli/                     `t3-voice` commands (setup, status, serve, pair, devices)
 deploy/
   t3-voice.service           systemd user unit template
 ```

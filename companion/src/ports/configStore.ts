@@ -20,7 +20,17 @@ export interface CompanionConfig {
     port?: number;
     /** Header a local proxy sets to the caller's IP, e.g. "cf-connecting-ip". */
     clientIpHeader?: string;
+    /** HTTPS address the iPhone reaches the companion at, e.g. "https://voice.example.com". */
+    publicUrl?: string;
   };
+}
+
+/** The pairing window `t3-voice pair` opens. It holds one code, until it expires or is used. */
+export interface PairingWindow {
+  /** SHA-256 of the one-time code, in hex. The code itself is never stored. */
+  codeSha256: string;
+  /** ISO date. */
+  expiresAt: string;
 }
 
 export interface ConfigStore {
@@ -33,6 +43,15 @@ export interface ConfigStore {
   saveT3Pairing(pairing: T3Pairing): Promise<void>;
   /** Paired iPhones, revoked ones included; an empty list when none was ever paired. */
   loadDevices(): Promise<PairedDevice[]>;
+  /**
+   * Reads the device list, applies the change and saves the result, as one step: `serve`
+   * and the CLI both change the list, and neither may undo the other's change.
+   */
+  updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]): Promise<PairedDevice[]>;
+  /** The open pairing window, or null. An expired window may still be returned. */
+  loadPairingWindow(): Promise<PairingWindow | null>;
+  savePairingWindow(window: PairingWindow): Promise<void>;
+  clearPairingWindow(): Promise<void>;
 }
 
 export class ConfigError extends Error {

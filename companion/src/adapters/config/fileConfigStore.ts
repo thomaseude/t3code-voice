@@ -4,16 +4,28 @@
 // directory that other users can open is refused. Secrets are only read from and written to
 // these files: they are never printed or logged.
 
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type CompanionConfig, ConfigError, type ConfigStore } from "../../ports/configStore.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  type CompanionConfig,
+  ConfigError,
+  type ConfigStore,
+  type PairingWindow,
+} from "../../ports/configStore.ts";
 import type { PairedDevice } from "../../ports/deviceAuth.ts";
 import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
 const DEVICES_FILE = "devices.json";
+const PAIRING_WINDOW_FILE = "pairing-window.json";
+
+/** A lock older than this was left by a process that died. Holding it takes milliseconds. */
+const STALE_LOCK_MS = 10_000;
+/** How long to wait for another process to release the lock. */
+const LOCK_WAIT_MS = 5_000;
 
 export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.T3VOICE_CONFIG_DIR ?? join(homedir(), ".config", "t3voice");
@@ -55,6 +67,12 @@ export class FileConfigStore implements ConfigStore {
     if (server.clientIpHeader !== undefined && typeof server.clientIpHeader !== "string") {
       throw new ConfigError(`${path}: "server.clientIpHeader" must be a header name.`);
     }
+    if (server.publicUrl !== undefined && !isHttpsUrl(server.publicUrl)) {
+      // The phone sends its device token to this address.
+      throw new ConfigError(
+        `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
+      );
+    }
     return data as CompanionConfig;
   }
 
@@ -93,12 +111,71 @@ export class FileConfigStore implements ConfigStore {
     return devices;
   }
 
+  async updateDevices(
+    change: (devices: PairedDevice[]) => PairedDevice[],
+  ): Promise<PairedDevice[]> {
+    return this.withLock(DEVICES_FILE, async () => {
+      const devices = change(await this.loadDevices());
+      await this.writePrivateFile(DEVICES_FILE, `${JSON.stringify({ devices }, null, 2)}\n`);
+      return devices;
+    });
+  }
+
+  async loadPairingWindow(): Promise<PairingWindow | null> {
+    const path = join(this.location, PAIRING_WINDOW_FILE);
+    const data = await this.readPrivateJson(path);
+    if (data === null) return null;
+    if (typeof data?.codeSha256 !== "string" || Number.isNaN(Date.parse(data?.expiresAt))) {
+      throw new ConfigError(`${path} is damaged; run "t3-voice pair" again.`);
+    }
+    return { codeSha256: data.codeSha256, expiresAt: data.expiresAt };
+  }
+
+  async savePairingWindow(window: PairingWindow): Promise<void> {
+    await this.writePrivateFile(PAIRING_WINDOW_FILE, `${JSON.stringify(window, null, 2)}\n`);
+  }
+
+  async clearPairingWindow(): Promise<void> {
+    await rm(join(this.location, PAIRING_WINDOW_FILE), { force: true });
+  }
+
+  /**
+   * Runs `work` while holding `<name>.lock`, so other t3-voice processes (and other calls
+   * in this one) wait for it. The lock file is created with O_EXCL: only one creator wins.
+   */
+  private async withLock<T>(name: string, work: () => Promise<T>): Promise<T> {
+    await this.ensurePrivateDir();
+    const lock = join(this.location, `${name}.lock`);
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        await (await open(lock, "wx", 0o600)).close();
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const lockedAt = await modifiedAt(lock);
+      if (lockedAt !== null && Date.now() - lockedAt > STALE_LOCK_MS) {
+        await rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new ConfigError(
+          `${lock} is held by another t3-voice process. If none is running, delete the file.`,
+        );
+      }
+      await sleep(5 + Math.random() * 20);
+    }
+    try {
+      return await work();
+    } finally {
+      await rm(lock, { force: true });
+    }
+  }
+
   /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
   private async writePrivateFile(name: string, content: string): Promise<void> {
-    // Tighten the directory only if we created it. An existing one is checked, never changed.
-    const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
-    if (created !== undefined) await chmod(this.location, 0o700);
-    else await this.assertPrivateDir();
+    await this.ensurePrivateDir();
     const path = join(this.location, name);
     const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, content, { mode: 0o600 });
@@ -122,6 +199,13 @@ export class FileConfigStore implements ConfigStore {
     }
   }
 
+  private async ensurePrivateDir(): Promise<void> {
+    // Tighten the directory only if we created it. An existing one is checked, never changed.
+    const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
+    if (created !== undefined) await chmod(this.location, 0o700);
+    else await this.assertPrivateDir();
+  }
+
   private async assertPrivateDir(): Promise<void> {
     const mode = (await modeOf(this.location)) ?? 0;
     if ((mode & 0o077) !== 0) {
@@ -142,12 +226,29 @@ async function modeOf(path: string): Promise<number | null> {
   }
 }
 
+/** When the file was last changed, in milliseconds, or null when it does not exist. */
+async function modifiedAt(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function isHttpsUrl(value: unknown): boolean {
+  return typeof value === "string" && URL.canParse(value) && new URL(value).protocol === "https:";
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: checks an untyped JSON value.
 function isPairedDevice(value: any): value is PairedDevice {
+  const next = value?.nextToken;
   return (
     typeof value?.id === "string" &&
     typeof value?.name === "string" &&
     typeof value?.tokenSha256 === "string" &&
+    (next === null || (typeof next?.sha256 === "string" && typeof next?.issuedAt === "string")) &&
+    typeof value?.tokenIssuedAt === "string" &&
     typeof value?.pairedAt === "string" &&
     (typeof value?.revokedAt === "string" || value?.revokedAt === null)
   );

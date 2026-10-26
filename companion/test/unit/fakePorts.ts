@@ -1,6 +1,6 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
-import type { CompanionConfig, ConfigStore } from "../../src/ports/configStore.ts";
+import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
   type Project,
@@ -20,6 +20,7 @@ export class InMemoryConfigStore implements ConfigStore {
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
   devices: PairedDevice[] = [];
+  pairingWindow: PairingWindow | null = null;
 
   async loadConfig() {
     return this.config;
@@ -35,6 +36,19 @@ export class InMemoryConfigStore implements ConfigStore {
   }
   async loadDevices() {
     return this.devices;
+  }
+  async updateDevices(change: (devices: PairedDevice[]) => PairedDevice[]) {
+    this.devices = change(this.devices);
+    return this.devices;
+  }
+  async loadPairingWindow() {
+    return this.pairingWindow;
+  }
+  async savePairingWindow(window: PairingWindow) {
+    this.pairingWindow = window;
+  }
+  async clearPairingWindow() {
+    this.pairingWindow = null;
   }
 }
 
@@ -52,7 +66,11 @@ export class FakeT3Backend implements T3Backend {
   async getConfig(): Promise<T3Config> {
     return { providers: [], defaultRuntimeMode: "full-access", defaultModel: null };
   }
+  /** The last subscriber, to push events, reconnections and failures to it. */
+  subscriber: ShellSubscriber | null = null;
+
   subscribeShell(subscriber: ShellSubscriber): ShellSubscription {
+    this.subscriber = subscriber;
     setImmediate(() =>
       subscriber.onEvent({
         type: "snapshot",
@@ -101,9 +119,10 @@ export class FakeT3Connector implements T3Connector {
   }
 }
 
-/** Knows the tokens it was given; anything else is rejected. */
+/** Knows the tokens it was given or issued; anything else is rejected. */
 export class FakeDeviceAuth implements DeviceAuth {
   readonly devices = new Map<string, Device>();
+  private registered = 0;
 
   addDevice(token: string, device: Device = { id: "d1", name: "iPhone" }): Device {
     this.devices.set(token, device);
@@ -113,6 +132,12 @@ export class FakeDeviceAuth implements DeviceAuth {
     this.devices.delete(token);
   }
   async authenticate(token: string) {
-    return this.devices.get(token) ?? null;
+    const device = this.devices.get(token);
+    return device === undefined ? null : { device, replacementToken: null };
+  }
+  async register(name: string) {
+    this.registered++;
+    const token = `issued-token-${this.registered}`;
+    return { device: this.addDevice(token, { id: `new${this.registered}`, name }), token };
   }
 }

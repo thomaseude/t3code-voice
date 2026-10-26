@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -196,6 +205,134 @@ describe("FileConfigStore", () => {
     await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
 
     await assert.rejects(new FileConfigStore(dir).loadConfig(), /"server.host"/);
+  });
+
+  test("reads the public URL of the companion", async () => {
+    const dir = await tempDir();
+    const server = { publicUrl: "https://voice.example.com" };
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, server });
+
+    assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.server, server);
+  });
+
+  test("refuses a public URL that is not HTTPS: the device token would travel in clear", async () => {
+    for (const publicUrl of ["http://voice.example.com", "voice.example.com", 42]) {
+      const dir = await privateDir();
+      const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, server: { publicUrl } };
+      await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+
+      await assert.rejects(
+        new FileConfigStore(dir).loadConfig(),
+        /"server.publicUrl" must be an https:\/\/ address/,
+        String(publicUrl),
+      );
+    }
+  });
+
+  test("reads a device with a pending replacement token", async () => {
+    const dir = await privateDir();
+    const device = pairedDevice({
+      nextToken: { sha256: "b".repeat(64), issuedAt: "2026-10-26T11:00:00.000Z" },
+    });
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [device] }), {
+      mode: 0o600,
+    });
+
+    assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [device]);
+  });
+
+  test("refuses a device without the date of its token", async () => {
+    const dir = await privateDir();
+    const { tokenIssuedAt: _, ...withoutDate } = DEVICE;
+    await writeFile(join(dir, "devices.json"), JSON.stringify({ devices: [withoutDate] }), {
+      mode: 0o600,
+    });
+
+    await assert.rejects(new FileConfigStore(dir).loadDevices(), /damaged/);
+  });
+
+  describe("updating the device list", () => {
+    test("saves the changed list, readable by the owner only", async () => {
+      const dir = await tempDir();
+      const store = new FileConfigStore(dir);
+
+      const result = await store.updateDevices((devices) => [...devices, DEVICE]);
+
+      assert.deepEqual(result, [DEVICE]);
+      assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
+      assert.equal((await stat(join(dir, "devices.json"))).mode & 0o777, 0o600);
+      assert.deepEqual(await readdir(dir), ["devices.json"], "no lock file left behind");
+    });
+
+    test("changes made at the same time by `serve` and the CLI are all kept", async () => {
+      const dir = await tempDir();
+      // Two stores on one directory, like two processes.
+      const serve = new FileConfigStore(dir);
+      const cli = new FileConfigStore(dir);
+
+      await Promise.all(
+        Array.from({ length: 20 }, (_, index) =>
+          (index % 2 === 0 ? serve : cli).updateDevices((devices) => [
+            ...devices,
+            pairedDevice({ id: `d${index}` }),
+          ]),
+        ),
+      );
+
+      const ids = (await serve.loadDevices()).map((device) => device.id).sort();
+      assert.equal(ids.length, 20);
+    });
+
+    test("takes over a lock left by a process that died", async () => {
+      const dir = await privateDir();
+      const lock = join(dir, "devices.json.lock");
+      await writeFile(lock, "", { mode: 0o600 });
+      const longAgo = new Date(Date.now() - 60_000);
+      await utimes(lock, longAgo, longAgo);
+
+      await new FileConfigStore(dir).updateDevices((devices) => [...devices, DEVICE]);
+
+      assert.deepEqual(await new FileConfigStore(dir).loadDevices(), [DEVICE]);
+    });
+
+    test("does not save a list the change cannot read", async () => {
+      const dir = await privateDir();
+      await writeFile(join(dir, "devices.json"), "{oops", { mode: 0o600 });
+
+      await assert.rejects(
+        new FileConfigStore(dir).updateDevices(() => [DEVICE]),
+        /not valid JSON/,
+      );
+      assert.equal(await readFile(join(dir, "devices.json"), "utf8"), "{oops");
+    });
+  });
+
+  describe("the pairing window", () => {
+    const WINDOW = { codeSha256: "c".repeat(64), expiresAt: "2026-10-26T12:05:00.000Z" };
+
+    test("is closed when nothing opened it", async () => {
+      assert.equal(await new FileConfigStore(await tempDir()).loadPairingWindow(), null);
+    });
+
+    test("is saved readable by the owner only, read back, then cleared", async () => {
+      const dir = await tempDir();
+      await new FileConfigStore(dir).savePairingWindow(WINDOW);
+
+      assert.equal((await stat(join(dir, "pairing-window.json"))).mode & 0o777, 0o600);
+      assert.deepEqual(await new FileConfigStore(dir).loadPairingWindow(), WINDOW);
+      await new FileConfigStore(dir).clearPairingWindow();
+      assert.equal(await new FileConfigStore(dir).loadPairingWindow(), null);
+      await new FileConfigStore(dir).clearPairingWindow();
+    });
+
+    test("refuses a damaged window rather than opening it", async () => {
+      const dir = await privateDir();
+      await writeFile(join(dir, "pairing-window.json"), JSON.stringify({ expiresAt: "x" }), {
+        mode: 0o600,
+      });
+
+      await assert.rejects(new FileConfigStore(dir).loadPairingWindow(), /damaged/);
+    });
   });
 });
 

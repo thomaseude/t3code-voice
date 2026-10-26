@@ -1,4 +1,5 @@
-// Checks the token a paired iPhone sends with every request.
+// Checks the token a paired iPhone sends with every request, and gives a token to a
+// device that pairs.
 //
 // Today the companion issues its own opaque tokens; a future cloud could issue signed ones
 // behind the same port.
@@ -9,18 +10,32 @@ export interface Device {
   name: string;
 }
 
-export interface DeviceAuth {
-  /** The device the token belongs to, or null when the token is unknown or revoked. */
-  authenticate(token: string): Promise<Device | null>;
+export interface Authentication {
+  device: Device;
+  /**
+   * A new token for the device, when its token is old enough to be replaced. The device
+   * must store it; its old token keeps working until the new one is used.
+   */
+  replacementToken: string | null;
 }
 
-/** A device as the companion stores it. Only a hash of its token is kept. */
+export interface DeviceAuth {
+  /** The device the token belongs to, or null when the token is unknown or revoked. */
+  authenticate(token: string): Promise<Authentication | null>;
+  /** Adds a device and returns its first token. The token is a secret: never log it. */
+  register(name: string): Promise<{ device: Device; token: string }>;
+}
+
+/** A device as the companion stores it. Only hashes of its tokens are kept. */
 export interface PairedDevice {
   id: string;
   name: string;
   /** SHA-256 of the device token, in hex. The token itself is never stored. */
   tokenSha256: string;
-  /** ISO dates. */
+  /** A replacement token sent to the device but not used yet (its SHA-256), or null. */
+  nextToken: { sha256: string; issuedAt: string } | null;
+  /** ISO dates. The token is replaced on use once it is 30 days old. */
+  tokenIssuedAt: string;
   pairedAt: string;
   revokedAt: string | null;
 }
