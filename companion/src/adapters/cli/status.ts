@@ -106,8 +106,11 @@ function describeState(thread: Thread): string {
 }
 
 function describeExpiry(expiresAt: string, now: Date): string {
-  const days = Math.floor((Date.parse(expiresAt) - now.getTime()) / 86_400_000);
-  if (Number.isNaN(days)) return "at an unknown date";
-  if (days < 0) return `on ${expiresAt.slice(0, 10)} (expired; run "t3-voice setup")`;
-  return `on ${expiresAt.slice(0, 10)} (in ${days} day${days === 1 ? "" : "s"})`;
+  const remainingMs = Date.parse(expiresAt) - now.getTime();
+  if (Number.isNaN(remainingMs)) return "at an unknown date";
+  const date = expiresAt.slice(0, 10);
+  if (remainingMs <= 0) return `on ${date} (expired; run "t3-voice setup")`;
+  const days = Math.floor(remainingMs / 86_400_000);
+  if (days === 0) return `on ${date} (in less than a day; run "t3-voice setup" soon)`;
+  return `on ${date} (in ${days} day${days === 1 ? "" : "s"})`;
 }

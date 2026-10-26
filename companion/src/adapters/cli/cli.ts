@@ -3,6 +3,7 @@
 
 import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
+import { HiddenLineEditor } from "./hiddenLineEditor.ts";
 import { scrubSecrets } from "./secrets.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
@@ -101,25 +102,19 @@ function readSecretLine(prompt: string): Promise<string> {
 
   process.stdout.write(prompt);
   return new Promise((resolve, reject) => {
-    let line = "";
+    const editor = new HiddenLineEditor();
     stdin.setRawMode(true);
     stdin.setEncoding("utf8");
     stdin.resume();
-    const finish = (error?: Error) => {
+    const onData = (chunk: string) => {
+      const result = editor.feed(chunk);
+      if (result === null) return;
       stdin.setRawMode(false);
       stdin.pause();
       stdin.off("data", onData);
       process.stdout.write("\n");
-      if (error) reject(error);
-      else resolve(line);
-    };
-    const onData = (chunk: string) => {
-      for (const char of chunk) {
-        if (char === "\r" || char === "\n") return finish();
-        if (char === "\u0003") return finish(new Error("Cancelled."));
-        if (char === "\u007f" || char === "\b") line = line.slice(0, -1);
-        else line += char;
-      }
+      if (result === "cancelled") reject(new Error("Cancelled."));
+      else resolve(editor.line);
     };
     stdin.on("data", onData);
   });

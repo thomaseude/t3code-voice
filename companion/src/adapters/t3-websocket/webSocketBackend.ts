@@ -17,7 +17,7 @@ import {
   SUPPORTED_ORCHESTRATION_PROTOCOL,
   type T3Pin,
 } from "./compatibility.ts";
-import { fetchDescriptor, issueWebSocketTicket } from "./http.ts";
+import { fetchDescriptor, issueWebSocketTicket, T3HttpError } from "./http.ts";
 import { openRpcConnection, type RpcConnection, RpcError } from "./rpcConnection.ts";
 import { toConfig, toShellEvent } from "./wire.ts";
 
@@ -201,6 +201,14 @@ class ShellStream {
       connection = await this.backend.connection();
     } catch (error) {
       if (error instanceof T3IncompatibleError) return this.fail(error);
+      if (error instanceof T3HttpError && (error.status === 401 || error.status === 403)) {
+        // The session was revoked or expired: retrying won't help, the owner must re-pair.
+        return this.fail(
+          new Error(
+            `T3 refused the companion's session (${error.status}); run "t3-voice setup" again.`,
+          ),
+        );
+      }
       return this.retryLater();
     }
     if (this.stopped) return;

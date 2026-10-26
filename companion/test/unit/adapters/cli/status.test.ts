@@ -74,6 +74,28 @@ describe("formatStatus", () => {
   });
 });
 
+describe("session expiry", () => {
+  const expiryLine = (expiresAt: string) =>
+    formatStatus({
+      baseUrl: "http://127.0.0.1:3773",
+      server: SERVER,
+      tokenExpiresAt: expiresAt,
+      state: stateWith([]),
+      now: new Date("2026-10-26T14:00:00.000Z"),
+    })[1];
+
+  test("warns when less than a day is left", () => {
+    assert.equal(
+      expiryLine("2026-10-26T19:00:00.000Z"),
+      'T3 session expires on 2026-10-26 (in less than a day; run "t3-voice setup" soon).',
+    );
+  });
+
+  test("says when T3 gave no expiry", () => {
+    assert.equal(expiryLine(""), "T3 session expires at an unknown date.");
+  });
+});
+
 describe("runStatus", () => {
   test("asks to run setup first", async () => {
     await assert.rejects(

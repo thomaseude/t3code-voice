@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { DEFAULT_T3_PIN } from "../../../../src/adapters/t3-websocket/compatibility.ts";
+import { T3HttpError } from "../../../../src/adapters/t3-websocket/http.ts";
 import { RpcError } from "../../../../src/adapters/t3-websocket/rpcConnection.ts";
 import { WebSocketT3Backend } from "../../../../src/adapters/t3-websocket/webSocketBackend.ts";
 import type { ShellEvent } from "../../../../src/ports/t3Backend.ts";
@@ -8,7 +9,9 @@ import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
 import { FakeTransport, settle, shellSnapshot, wireProject, wireThread } from "./fakes.ts";
 
 function makeBackend(transport: FakeTransport) {
-  return new WebSocketT3Backend({ transport, pin: DEFAULT_T3_PIN, wait: () => Promise.resolve() });
+  // Retries wait one turn of the event loop instead of real seconds.
+  const wait = () => new Promise<void>((resolve) => setImmediate(resolve));
+  return new WebSocketT3Backend({ transport, pin: DEFAULT_T3_PIN, wait });
 }
 
 function recordShell(backend: WebSocketT3Backend, options?: { afterSequence?: number }) {
@@ -256,6 +259,38 @@ describe("subscribeShell", () => {
     assert.equal(transport.connections.length, 1, "no socket is opened to the untested server");
     assert.equal(fatalErrors.length, 1);
     assert.ok(fatalErrors[0] instanceof T3IncompatibleError);
+  });
+
+  test("stops for good when T3 refuses the session token after a disconnect", async () => {
+    const transport = new FakeTransport();
+    const { fatalErrors } = recordShell(makeBackend(transport));
+    await settle();
+    transport.lastConnection().lastStream().push(shellSnapshot(10, []));
+
+    transport.openError = new T3HttpError("T3 answered 401 on /api/auth/websocket-ticket", 401);
+    transport.lastConnection().close();
+    await settle();
+
+    assert.equal(transport.openAttempts, 2, "no retry once the token is refused");
+    assert.equal(fatalErrors.length, 1);
+    assert.match(fatalErrors[0]?.message ?? "", /run "t3-voice setup" again/);
+  });
+
+  test("keeps retrying while T3 is unreachable", async () => {
+    const transport = new FakeTransport();
+    const { fatalErrors } = recordShell(makeBackend(transport));
+    await settle();
+    transport.lastConnection().lastStream().push(shellSnapshot(10, []));
+
+    transport.openError = new T3HttpError("Cannot reach T3 at http://127.0.0.1:3773");
+    transport.lastConnection().close();
+    await settle();
+    assert.ok(transport.openAttempts > 2, `attempts: ${transport.openAttempts}`);
+
+    transport.openError = null;
+    await settle();
+    assert.deepEqual(transport.lastConnection().lastStream().payload, { afterSequence: 10 });
+    assert.equal(fatalErrors.length, 0);
   });
 
   test("close() stops the stream and reconnects no more", async () => {

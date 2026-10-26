@@ -30,6 +30,14 @@ export class FileConfigStore implements ConfigStore {
     if (typeof data?.t3?.baseUrl !== "string") {
       throw new ConfigError(`${path} has no "t3.baseUrl".`);
     }
+    const accepted = data.t3.acceptedServerVersions;
+    if (
+      accepted !== undefined &&
+      !(Array.isArray(accepted) && accepted.every((version) => typeof version === "string"))
+    ) {
+      // A malformed list must never loosen the version check.
+      throw new ConfigError(`${path}: "t3.acceptedServerVersions" must be a list of versions.`);
+    }
     return data as CompanionConfig;
   }
 
@@ -53,8 +61,9 @@ export class FileConfigStore implements ConfigStore {
 
   /** Writes atomically (temp file + rename) so a crash never leaves a half-written secret. */
   private async writePrivateFile(name: string, content: string): Promise<void> {
-    await mkdir(this.location, { recursive: true, mode: 0o700 });
-    await chmod(this.location, 0o700);
+    // Tighten the directory only if we created it: never change a directory the user owns.
+    const created = await mkdir(this.location, { recursive: true, mode: 0o700 });
+    if (created !== undefined) await chmod(this.location, 0o700);
     const path = join(this.location, name);
     const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, content, { mode: 0o600 });

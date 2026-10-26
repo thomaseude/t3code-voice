@@ -66,11 +66,17 @@ export async function exchangePairingCredential(
   if (typeof body?.access_token !== "string" || body.token_type !== "Bearer") {
     throw new T3HttpError("T3 answered the pairing exchange with an unexpected token.");
   }
-  const expiresInSeconds = typeof body.expires_in === "number" ? body.expires_in : 0;
   return {
     token: body.access_token,
-    scopes: typeof body.scope === "string" ? body.scope.split(" ").filter(Boolean) : [],
-    expiresAt: new Date(now.getTime() + expiresInSeconds * 1000).toISOString(),
+    // OAuth may leave `scope` out when it grants exactly what was requested.
+    scopes:
+      typeof body.scope === "string"
+        ? body.scope.split(" ").filter(Boolean)
+        : [...REQUIRED_T3_SCOPES],
+    expiresAt:
+      typeof body.expires_in === "number"
+        ? new Date(now.getTime() + body.expires_in * 1000).toISOString()
+        : "",
   };
 }
 

@@ -113,6 +113,7 @@ export interface T3Backend {
 export interface T3Session {
   token: string;
   scopes: string[];
+  /** ISO date, or "" when T3 did not say. */
   expiresAt: string;
 }
 

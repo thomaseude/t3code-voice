@@ -125,6 +125,18 @@ describe("exchangePairingCredential", () => {
     assert.equal(form.get("scope"), "orchestration:read orchestration:operate");
   });
 
+  test("assumes the requested scopes and an unknown expiry when T3 leaves them out", async () => {
+    routes = {
+      "POST /oauth/token": (_request, _body, response) =>
+        json(response, 200, { access_token: "issued-token", token_type: "Bearer" }),
+    };
+
+    const session = await exchangePairingCredential(baseUrl, "PAIR1234");
+
+    assert.deepEqual(session.scopes, ["orchestration:read", "orchestration:operate"]);
+    assert.equal(session.expiresAt, "");
+  });
+
   test("reports a refused pairing with T3's error code only", async () => {
     routes = {
       "POST /oauth/token": (_request, _body, response) =>

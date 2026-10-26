@@ -92,7 +92,13 @@ export class FakeTransport implements T3Transport {
     return this.descriptor;
   }
 
+  /** When set, opening a socket fails with this error (and counts the attempt). */
+  openError: Error | null = null;
+  openAttempts = 0;
+
   async openConnection(): Promise<RpcConnection> {
+    this.openAttempts += 1;
+    if (this.openError) throw this.openError;
     const connection = new FakeConnection();
     this.connections.push(connection);
     return connection;

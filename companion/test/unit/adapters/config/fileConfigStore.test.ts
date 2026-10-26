@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -66,6 +66,28 @@ describe("FileConfigStore", () => {
 
     await new FileConfigStore(dir).saveT3Session(SESSION);
 
+    assert.equal((await stat(join(dir, "t3-session.json"))).mode & 0o777, 0o600);
+  });
+
+  test("refuses a malformed list of accepted T3 versions", async () => {
+    const dir = await tempDir();
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" } });
+    await writeFile(
+      join(dir, "config.json"),
+      JSON.stringify({ t3: { baseUrl: "http://127.0.0.1:3773", acceptedServerVersions: "0.2.0" } }),
+    );
+
+    await assert.rejects(new FileConfigStore(dir).loadConfig(), /must be a list of versions/);
+  });
+
+  test("leaves the permissions of an existing directory alone", async () => {
+    const dir = await tempDir();
+    await mkdir(dir, { mode: 0o755 });
+    await chmod(dir, 0o755);
+
+    await new FileConfigStore(dir).saveT3Session(SESSION);
+
+    assert.equal((await stat(dir)).mode & 0o777, 0o755);
     assert.equal((await stat(join(dir, "t3-session.json"))).mode & 0o777, 0o600);
   });
 });
