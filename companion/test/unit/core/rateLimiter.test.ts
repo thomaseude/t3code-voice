@@ -86,4 +86,23 @@ describe("RateLimiter", () => {
     limiter.take("ip:3");
     assert.equal(limiter.take("ip:1").allowed, false, "ip:1 is still counted");
   });
+
+  test("a clock that steps back ends the window instead of stretching it", () => {
+    const { clock, limiter } = limiterAt(1_000_000, 1);
+
+    limiter.take("ip:1");
+    assert.equal(limiter.take("ip:1").allowed, false);
+    clock.now = 900_000;
+    assert.deepEqual(limiter.take("ip:1"), { allowed: true });
+  });
+
+  test("a key's own window ends on time even behind an older-looking window", () => {
+    const { clock, limiter } = limiterAt(1_000_000, 1);
+
+    limiter.take("ip:1");
+    clock.now = 500_000;
+    limiter.take("ip:2");
+    clock.now = 560_000;
+    assert.deepEqual(limiter.take("ip:2"), { allowed: true });
+  });
 });

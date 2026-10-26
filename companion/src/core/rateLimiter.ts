@@ -6,7 +6,7 @@ export interface RateLimiterOptions {
   windowMs: number;
   /** Keys tracked at most; past it, the oldest key is forgotten. */
   maxKeys?: number;
-  /** Milliseconds from a monotonic clock; injectable for tests. */
+  /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
 }
 
@@ -20,16 +20,11 @@ export class RateLimiter {
   /**
    * Per key: when its window started and how many requests it counted. A Map keeps
    * insertion order, and a key is re-inserted when its window restarts, so the first
-   * entry is always the oldest window.
+   * entry is the oldest window (unless the clock stepped back).
    */
   private readonly windows = new Map<string, { start: number; count: number }>();
 
-  constructor({
-    limit,
-    windowMs,
-    maxKeys = 10_000,
-    now = () => performance.now(),
-  }: RateLimiterOptions) {
+  constructor({ limit, windowMs, maxKeys = 10_000, now = Date.now }: RateLimiterOptions) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.maxKeys = maxKeys;
@@ -42,6 +37,10 @@ export class RateLimiter {
     this.dropEndedWindows(now);
 
     let window = this.windows.get(key);
+    if (window !== undefined && this.hasEnded(window, now)) {
+      this.windows.delete(key);
+      window = undefined;
+    }
     if (window === undefined) {
       // Full: forget the oldest caller. Refusing newcomers instead would let a flood of
       // addresses lock everyone else out.
@@ -60,10 +59,18 @@ export class RateLimiter {
     return this.windows.size;
   }
 
+  /**
+   * A window ends after its length, or at once if the wall clock went back before its
+   * start (an NTP step). The wall clock keeps counting while the host is suspended.
+   */
+  private hasEnded(window: { start: number }, now: number): boolean {
+    return now - window.start >= this.windowMs || now < window.start;
+  }
+
   /** Oldest windows come first, so this stops at the first one still running. */
   private dropEndedWindows(now: number) {
     for (const [key, window] of this.windows) {
-      if (now - window.start < this.windowMs) return;
+      if (!this.hasEnded(window, now)) return;
       this.windows.delete(key);
     }
   }
