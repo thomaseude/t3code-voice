@@ -49,8 +49,9 @@ default and stops cleanly on `SIGTERM` or Ctrl-C.
   one, the answer is `401` with an empty body. A revoked device is refused on its next
   request.
 - Every request is rate-limited: 120 requests per minute per client IP (counted before
-  the token check, so guessing tokens is throttled) and 60 per minute per device. Over the
-  limit, the answer is `429` with a `Retry-After` header.
+  the token check, so guessing tokens is throttled) and 60 per minute per device. IPv6
+  callers are counted by their /64 prefix. Over the limit, the answer is `429` with a
+  `Retry-After` header.
 
 Settings in `config.json`, all optional:
 
@@ -63,8 +64,10 @@ Settings in `config.json`, all optional:
 
 `clientIpHeader` names the header a local proxy sets to the caller's IP. Behind a
 Cloudflare Tunnel it is `cf-connecting-ip`. The companion reads it only on connections from
-loopback, so a remote caller cannot pick its own IP. Without it, every request through the
-proxy counts as one IP.
+loopback, so a remote caller cannot pick its own IP. When the header lists several
+addresses, only the last one counts, since the proxy appends the one it saw. Prefer a
+header that holds one address the proxy overwrites. Without it, every request through the
+proxy counts as one IP, and the companion logs a warning on the first proxied request.
 
 ### As a systemd user service
 
@@ -155,9 +158,11 @@ src/
     t3Backend.ts             T3Backend, T3Connector, the companion's own T3 types
     configStore.ts           ConfigStore (settings, T3 token, paired devices)
     deviceAuth.ts            DeviceAuth: which device a token belongs to
+    apiServer.ts             what `serve` needs to start and stop the HTTP API
   core/
     shellState.ts            projects and threads kept up to date; "is this thread running?"
     rateLimiter.ts           requests per key (IP, device) in fixed windows
+    secrets.ts               masks credentials in anything the companion prints
   adapters/
     t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
                              pairing/ticket HTTP calls, pinned version check

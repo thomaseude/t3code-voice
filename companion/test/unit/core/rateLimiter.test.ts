@@ -48,4 +48,22 @@ describe("RateLimiter", () => {
     limiter.take("ip:new");
     assert.equal(limiter.trackedKeys(), 1);
   });
+
+  test("refuses new keys once it tracks the maximum, so a flood of callers cannot fill memory", () => {
+    const clock = { now: 0 };
+    const limiter = new RateLimiter({
+      limit: 5,
+      windowMs: 60_000,
+      maxKeys: 2,
+      now: () => clock.now,
+    });
+
+    limiter.take("ip:1");
+    limiter.take("ip:2");
+    assert.deepEqual(limiter.take("ip:3"), { allowed: false, retryAfterMs: 60_000 });
+    assert.deepEqual(limiter.take("ip:1"), { allowed: true });
+
+    clock.now = 60_000;
+    assert.deepEqual(limiter.take("ip:3"), { allowed: true });
+  });
 });

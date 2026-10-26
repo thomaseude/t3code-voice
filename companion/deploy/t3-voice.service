@@ -2,8 +2,6 @@
 # and install it in ~/.config/systemd/user/.
 [Unit]
 Description=t3-voice companion (HTTP API for the T3 Voice app)
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 ExecStart=@NODE@ @MAIN@ serve

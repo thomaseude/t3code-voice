@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import { FileConfigStore } from "../../../../src/adapters/config/fileConfigStore.ts";
 import { ConfigError } from "../../../../src/ports/configStore.ts";
+import { pairedDevice } from "../../builders.ts";
+
+const DEVICE = pairedDevice();
 
 async function tempDir(): Promise<string> {
   return join(await mkdtemp(join(tmpdir(), "t3voice-test-")), "t3voice");
@@ -177,22 +180,24 @@ describe("FileConfigStore", () => {
     assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.server, server);
   });
 
-  test("refuses a port that is not a number", async () => {
+  test("refuses a port that is not a port number", async () => {
+    for (const port of ["8787", 0, 70000, 87.5]) {
+      const dir = await privateDir();
+      const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, server: { port } };
+      await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+
+      await assert.rejects(new FileConfigStore(dir).loadConfig(), /"server.port"/, String(port));
+    }
+  });
+
+  test("refuses an empty host, which would listen on every interface", async () => {
     const dir = await privateDir();
-    const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, server: { port: "8787" } };
+    const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, server: { host: "" } };
     await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
 
-    await assert.rejects(new FileConfigStore(dir).loadConfig(), /"server.port"/);
+    await assert.rejects(new FileConfigStore(dir).loadConfig(), /"server.host"/);
   });
 });
-
-const DEVICE = {
-  id: "d1",
-  name: "iPhone",
-  tokenSha256: "a".repeat(64),
-  pairedAt: "2026-10-26T10:00:00.000Z",
-  revokedAt: null,
-};
 
 async function privateDir(): Promise<string> {
   const dir = await tempDir();

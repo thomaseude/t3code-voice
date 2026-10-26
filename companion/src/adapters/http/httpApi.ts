@@ -1,8 +1,10 @@
 // Driving adapter: the HTTP API the iPhone app calls (JSON, behind HTTPS at the tunnel).
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, isIPv6 } from "node:net";
 import { type RateDecision, RateLimiter } from "../../core/rateLimiter.ts";
+import { scrubSecrets } from "../../core/secrets.ts";
+import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import type { DeviceAuth } from "../../ports/deviceAuth.ts";
 
 export interface RateLimit {
@@ -10,41 +12,33 @@ export interface RateLimit {
   windowMs: number;
 }
 
-export interface HttpApiOptions {
-  host: string;
-  port: number;
+export interface HttpApiOptions extends ApiServerOptions {
   auth: DeviceAuth;
-  /**
-   * Header that carries the caller's IP when a local proxy forwards the request, e.g.
-   * "cf-connecting-ip" behind a Cloudflare Tunnel. Read only on loopback connections.
-   */
-  clientIpHeader?: string;
   limits?: { perIp: RateLimit; perDevice: RateLimit };
   /** Current time in milliseconds; injectable for tests. */
   now?: () => number;
+  /** Where operational warnings go; stderr by default. */
+  log?: (line: string) => void;
 }
 
-export const DEFAULT_LIMITS = {
+const DEFAULT_LIMITS = {
   perIp: { limit: 120, windowMs: 60_000 },
   perDevice: { limit: 60, windowMs: 60_000 },
 };
 
-export interface RunningHttpApi {
-  url: string;
-  close(): Promise<void>;
-}
-
-export async function startHttpApi(options: HttpApiOptions): Promise<RunningHttpApi> {
+export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiServer> {
   const limits = options.limits ?? DEFAULT_LIMITS;
   const now = options.now ?? Date.now;
   const perIp = new RateLimiter({ ...limits.perIp, now });
   const perDevice = new RateLimiter({ ...limits.perDevice, now });
+  const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  let warnedAboutProxy = false;
 
   const server = createServer((request, response) => {
     handle(request, response).catch((error: unknown) => {
       // For example a device list with loose permissions. The caller learns nothing.
       const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`t3-voice: request failed: ${message}\n`);
+      log(`t3-voice: request failed: ${scrubSecrets(message)}`);
       if (!response.headersSent) response.writeHead(500);
       response.end();
     });
@@ -70,7 +64,14 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningHttp
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
     // Counted before the token check, so guessing tokens is throttled too.
-    if (refused(response, perIp.take(clientIp(request, options.clientIpHeader)))) return;
+    if (options.clientIpHeader === undefined && !warnedAboutProxy && isProxied(request)) {
+      warnedAboutProxy = true;
+      log(
+        't3-voice: requests come through a proxy, but "server.clientIpHeader" is not set, ' +
+          "so every caller shares one per-IP limit. Set it (cf-connecting-ip behind Cloudflare).",
+      );
+    }
+    if (refused(response, perIp.take(rateKey(clientIp(request, options.clientIpHeader))))) return;
 
     const token = bearerToken(request);
     const device = token === null ? null : await options.auth.authenticate(token);
@@ -99,7 +100,36 @@ function clientIp(request: IncomingMessage, header: string | undefined): string 
   // Only a local proxy (cloudflared) may say who the caller is; anyone else could lie.
   if (header === undefined || !isLoopback(peer)) return peer;
   const forwarded = request.headers[header.toLowerCase()];
-  return typeof forwarded === "string" && forwarded !== "" ? forwarded : peer;
+  if (typeof forwarded !== "string") return peer;
+  // A list ("client, proxy") may start with values the caller wrote; the proxy appends
+  // the address it saw, so only the last one can be trusted.
+  const last = forwarded.split(",").at(-1)?.trim() ?? "";
+  return last === "" ? peer : last;
+}
+
+/** IPv6 callers usually hold a whole /64, so they are counted by that prefix. */
+function rateKey(ip: string): string {
+  const address = ip.split("%")[0] ?? ip;
+  if (!isIPv6(address) || address.includes(".")) return ip;
+  const [head = "", tail] = address.split("::");
+  const headGroups = head === "" ? [] : head.split(":");
+  const tailGroups = tail === undefined || tail === "" ? [] : tail.split(":");
+  const zeros = Array(8 - headGroups.length - tailGroups.length).fill("0");
+  const groups = tail === undefined ? headGroups : [...headGroups, ...zeros, ...tailGroups];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toLowerCase().replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
+}
+
+function isProxied(request: IncomingMessage): boolean {
+  const headers = request.headers;
+  return (
+    isLoopback(request.socket.remoteAddress ?? "") &&
+    (headers["cf-connecting-ip"] !== undefined ||
+      headers["x-forwarded-for"] !== undefined ||
+      headers.forwarded !== undefined)
+  );
 }
 
 function isLoopback(address: string): boolean {

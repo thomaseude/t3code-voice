@@ -42,14 +42,18 @@ export class FileConfigStore implements ConfigStore {
       throw new ConfigError(`${path}: "t3.acceptedServerVersions" must be a list of versions.`);
     }
     const server = data.server ?? {};
-    for (const [key, type] of [
-      ["host", "string"],
-      ["port", "number"],
-      ["clientIpHeader", "string"],
-    ]) {
-      if (server[key as string] !== undefined && typeof server[key as string] !== type) {
-        throw new ConfigError(`${path}: "server.${key}" must be a ${type}.`);
-      }
+    if (server.host !== undefined && !(typeof server.host === "string" && server.host !== "")) {
+      // Node listens on every interface when the host is empty.
+      throw new ConfigError(`${path}: "server.host" must be a non-empty address.`);
+    }
+    if (
+      server.port !== undefined &&
+      !(Number.isInteger(server.port) && server.port >= 1 && server.port <= 65535)
+    ) {
+      throw new ConfigError(`${path}: "server.port" must be a port number (1 to 65535).`);
+    }
+    if (server.clientIpHeader !== undefined && typeof server.clientIpHeader !== "string") {
+      throw new ConfigError(`${path}: "server.clientIpHeader" must be a header name.`);
     }
     return data as CompanionConfig;
   }

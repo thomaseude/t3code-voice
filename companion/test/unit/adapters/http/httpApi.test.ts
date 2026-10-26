@@ -6,10 +6,13 @@ import { afterEach, describe, test } from "node:test";
 import { OpaqueTokenAuth } from "../../../../src/adapters/device-auth/opaqueTokenAuth.ts";
 import { type HttpApiOptions, startHttpApi } from "../../../../src/adapters/http/httpApi.ts";
 import type { PairedDevice } from "../../../../src/ports/deviceAuth.ts";
+import { pairedDevice } from "../../builders.ts";
 import { FakeDeviceAuth, InMemoryConfigStore } from "../../fakePorts.ts";
 
-// Every route of the spec (#15, "HTTP API"). POST /pair has its own check (a one-time code).
+// Every route of the spec (#15, "HTTP API"). POST /pair stays closed until #18 opens a
+// pairing window.
 const ROUTES: Array<[string, string]> = [
+  ["POST", "/pair"],
   ["POST", "/sessions"],
   ["POST", "/sessions/s1/events"],
   ["DELETE", "/sessions/s1"],
@@ -92,16 +95,8 @@ describe("HTTP API authentication", () => {
 describe("HTTP API with opaque device tokens", () => {
   const TOKEN = "kq3V8o2Yc1rJm0bT6wXpZf4hN9sL7dAeGuQiRyEvOtM";
 
-  function storedDevice(fields: Partial<PairedDevice> = {}): PairedDevice {
-    return {
-      id: "d1",
-      name: "iPhone",
-      tokenSha256: createHash("sha256").update(TOKEN).digest("hex"),
-      pairedAt: "2026-10-26T10:00:00.000Z",
-      revokedAt: null,
-      ...fields,
-    };
-  }
+  const storedDevice = (fields: Partial<PairedDevice> = {}) =>
+    pairedDevice({ tokenSha256: createHash("sha256").update(TOKEN).digest("hex"), ...fields });
 
   async function requestWith(devices: PairedDevice[], token: string): Promise<number> {
     const store = new InMemoryConfigStore();
@@ -168,6 +163,41 @@ describe("HTTP API rate limits", () => {
 
     assert.equal((await from("203.0.113.1")).status, 401);
     assert.equal((await from("203.0.113.2")).status, 429);
+  });
+
+  test("IPv6 callers in the same /64 share one count", async () => {
+    const url = await startApi({
+      clientIpHeader: "cf-connecting-ip",
+      limits: { perIp: { limit: 1, windowMs: 60_000 }, perDevice: generous },
+    });
+    const from = (ip: string) => fetch(`${url}/activity`, { headers: { "cf-connecting-ip": ip } });
+
+    assert.equal((await from("2001:db8:1:2::1")).status, 401);
+    assert.equal((await from("2001:db8:1:2:ffff:ffff:ffff:ffff")).status, 429);
+    assert.equal((await from("2001:db8:1:3::1")).status, 401);
+  });
+
+  test("a header that lists several IPs counts the last one, which the proxy added", async () => {
+    const url = await startApi({
+      clientIpHeader: "x-forwarded-for",
+      limits: { perIp: { limit: 1, windowMs: 60_000 }, perDevice: generous },
+    });
+    const from = (ip: string) => fetch(`${url}/activity`, { headers: { "x-forwarded-for": ip } });
+
+    assert.equal((await from("198.51.100.1, 203.0.113.9")).status, 401);
+    assert.equal((await from("198.51.100.2, 203.0.113.9")).status, 429);
+  });
+
+  test("warns once when a proxy forwards requests but no client IP header is configured", async () => {
+    const logs: string[] = [];
+    const url = await startApi({ log: (line) => logs.push(line) });
+    const viaProxy = () =>
+      fetch(`${url}/activity`, { headers: { "cf-connecting-ip": "203.0.113.1" } });
+
+    await viaProxy();
+    await viaProxy();
+    assert.equal(logs.length, 1);
+    assert.match(logs[0] ?? "", /server\.clientIpHeader/);
   });
 
   test("a device that sends too many requests gets 429 from any IP; other devices are not affected", async () => {

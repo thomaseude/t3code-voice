@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { runServe, type ServerOptions } from "../../../../src/adapters/cli/serve.ts";
+import { runServe } from "../../../../src/adapters/cli/serve.ts";
+import type { ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { InMemoryConfigStore } from "../../fakePorts.ts";
 
 function serve(store: InMemoryConfigStore) {
   const lines: string[] = [];
-  const started: ServerOptions[] = [];
+  const started: ApiServerOptions[] = [];
   let closed = false;
   let stop = () => {};
   const done = runServe({

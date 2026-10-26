@@ -1,5 +1,6 @@
 // `t3-voice serve`: runs the HTTP API the iPhone calls, until the process is asked to stop.
 
+import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import {
   ConfigError,
   type ConfigStore,
@@ -7,21 +8,10 @@ import {
   DEFAULT_SERVER_PORT,
 } from "../../ports/configStore.ts";
 
-export interface ServerOptions {
-  host: string;
-  port: number;
-  clientIpHeader?: string;
-}
-
-export interface RunningServer {
-  url: string;
-  close(): Promise<void>;
-}
-
 export interface ServeOptions {
   store: ConfigStore;
   /** main.ts plugs the HTTP adapter in here. */
-  startServer(options: ServerOptions): Promise<RunningServer>;
+  startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
   waitForStop(): Promise<void>;
   out(line: string): void;

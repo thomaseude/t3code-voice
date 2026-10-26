@@ -1,18 +1,19 @@
 // Driving adapter: the `t3-voice` command line. It only knows the ports; main.ts wires
 // the real adapters in.
 
+import { scrubSecrets } from "../../core/secrets.ts";
+import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
-import { scrubSecrets } from "./secrets.ts";
-import { type RunningServer, runServe, type ServerOptions } from "./serve.ts";
+import { runServe } from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
 
 export interface CliDependencies {
   store: ConfigStore;
   t3: T3Connector;
-  startServer(options: ServerOptions): Promise<RunningServer>;
+  startServer(options: ApiServerOptions): Promise<RunningApiServer>;
 }
 
 const EXIT_ERROR = 1;
