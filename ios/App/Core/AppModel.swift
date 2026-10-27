@@ -65,7 +65,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshActivity() async {
-        let startedAfter = forgottenCount
+        let forgottenCountAtStart = forgottenCount
         let result: Result<Activity, Error>
         do {
             result = .success(try await client.activity())
@@ -73,7 +73,7 @@ final class AppModel: ObservableObject {
             result = .failure(error)
         }
         // "Oublier" ran while the request was out, and another companion may be paired now.
-        guard startedAfter == forgottenCount else { return }
+        guard forgottenCountAtStart == forgottenCount else { return }
         switch result {
         case let .success(activity):
             activityStatus = .loaded(activity)
