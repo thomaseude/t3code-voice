@@ -68,6 +68,18 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(feedback.shown, [.authenticating, .idle])
     }
 
+    func testWithoutPairingNeitherFaceIDNorTheMicrophoneIsAsked() async {
+        store.connection = nil
+
+        await controller.start()
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(authenticator.askCount, 0)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertTrue(transport.requests.isEmpty)
+        XCTAssertTrue(feedback.shown.isEmpty)
+    }
+
     func testEveryStartAsksForFaceIDAgain() async {
         await startLiveSession()
         await controller.end()

@@ -145,8 +145,9 @@ final class VoiceSessionController: ObservableObject {
     }
 
     /// Returns once the call waits for `session.started`, or when the start failed.
+    /// Before pairing it does nothing: the app shows the pairing screen.
     func start() async {
-        guard state == .idle else { return }
+        guard state == .idle, client.isPaired else { return }
         lastFailure = nil
         show(.authenticating)
         guard await authenticator.authenticate() else {

@@ -40,6 +40,11 @@ struct CompanionClient {
     let transport: HTTPTransport
     let store: ConnectionStore
 
+    /// A connection is stored. A failed Keychain read counts as not paired.
+    var isPaired: Bool {
+        (try? store.load()) != nil
+    }
+
     func pair(with qrCode: PairingQRCode, deviceName: String) async throws -> PairingResult {
         var request = URLRequest(url: qrCode.companionURL.appending(path: "pair"))
         request.httpMethod = "POST"

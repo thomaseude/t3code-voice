@@ -3,6 +3,8 @@
 name: T3Voice
 options:
   bundleIdPrefix: co.joombo
+  # The UI and the Siri phrases are in French.
+  developmentLanguage: fr
   deploymentTarget:
     iOS: "18.0"
 settings:
@@ -37,12 +39,16 @@ targets:
         NSMicrophoneUsageDescription: T3 Voice sends your voice to the voice engine your companion opens, to talk to T3.
         NSFaceIDUsageDescription: T3 Voice asks for Face ID before each conversation, so that nobody else can drive T3 from your phone.
         NSSupportsLiveActivities: true
+        # Siri hears "T3 Voix" as the name of the app.
+        INAlternativeAppNames:
+          - INAlternativeAppName: T3 Voix
         # Keeps the conversation going with the screen locked.
         UIBackgroundModes: [audio]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.joombo.t3voice
-  # The Live Activity (lock screen and Dynamic Island) with its End button.
+  # The Live Activity (lock screen and Dynamic Island) with its End button, and the
+  # Control Center control.
   T3VoiceWidget:
     type: app-extension
     platform: iOS
