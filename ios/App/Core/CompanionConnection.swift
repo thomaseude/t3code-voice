@@ -5,6 +5,9 @@ import Foundation
 struct CompanionConnection: Codable, Equatable {
     var companionURL: URL
     var token: String
+    /// The token this one replaced, kept to close a voice session opened with it. Nil until
+    /// the first rotation, and in connections stored before it existed.
+    var replacedToken: String?
 }
 
 /// Where the connection is kept between launches.

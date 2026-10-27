@@ -82,10 +82,7 @@ struct CompanionClient {
         switch response.status {
         case 201:
             let answer = try JSONDecoder().decode(SessionAnswer.self, from: response.body)
-            // The session is closed with the token the companion expects from now on.
-            var opener = connection
-            if let replacement = response.headers["t3voice-token"], !replacement.isEmpty { opener.token = replacement }
-            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: opener)
+            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
         case 502:
             throw CompanionError.voiceEngineFailed
         case 503:
@@ -96,17 +93,28 @@ struct CompanionClient {
     }
 
     /// Ends the conversation on the companion. A session it no longer has is already ended.
-    /// It uses the connection that opened the session, never the stored one: the companion
-    /// closes a session only for the device that opened it, and the stored connection may be
-    /// gone ("Oublier") or another device's (paired again).
     func closeSession(_ session: OpenedSession) async throws {
-        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: session.connection)
+        let connection = newestConnection(of: session)
+        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: connection)
         switch response.status {
         case 204, 404:
             return
         default:
             throw commonError(response)
         }
+    }
+
+    /// The newest token of the device that opened the session: the companion closes a session
+    /// only for that device, and refuses an old token once its replacement was used. The
+    /// stored connection is that device's when it holds the session's token or its
+    /// replacement. Otherwise it is gone ("Oublier") or another device's (paired again), and
+    /// the session's own connection is used.
+    private func newestConnection(of session: OpenedSession) -> CompanionConnection {
+        guard let stored = try? store.load(),
+              stored.companionURL == session.connection.companionURL,
+              stored.token == session.connection.token || stored.replacedToken == session.connection.token
+        else { return session.connection }
+        return stored
     }
 
     private func storedConnection() throws -> CompanionConnection {
@@ -135,6 +143,7 @@ struct CompanionClient {
            try store.load() == connection {
             var rotated = connection
             rotated.token = replacement
+            rotated.replacedToken = connection.token
             try store.save(rotated)
         }
         return response
