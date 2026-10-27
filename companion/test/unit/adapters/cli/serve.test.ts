@@ -3,8 +3,13 @@ import { describe, test } from "node:test";
 import { runServe, type VoiceEngineSettings } from "../../../../src/adapters/cli/serve.ts";
 import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
-import { project, thread } from "../../builders.ts";
-import { FakeT3Connector, FakeVoiceEngine, InMemoryConfigStore } from "../../fakePorts.ts";
+import { pairedDevice, project, thread } from "../../builders.ts";
+import {
+  FakeClock,
+  FakeT3Connector,
+  FakeVoiceEngine,
+  InMemoryConfigStore,
+} from "../../fakePorts.ts";
 
 const NOW = new Date("2026-10-26T12:00:00.000Z");
 
@@ -46,7 +51,7 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
       return engine;
     },
     out: (line) => lines.push(line),
-    now: () => NOW.getTime(),
+    clock: new FakeClock(NOW.getTime()),
   });
   const listenOptions = () =>
     started.map(({ activity: _activity, voiceSessions: _voiceSessions, ...rest }) => rest);
@@ -373,5 +378,44 @@ describe("voice sessions", () => {
     await run.done;
 
     assert.equal(run.engine.last.closed, true);
+  });
+
+  test("while T3 reconnects, the voice tools say T3 is unavailable", async () => {
+    const store = setUpStore();
+    store.devices = [pairedDevice({ id: "d1" })];
+    const t3 = new FakeT3Connector();
+    t3.backend.projects = [project("p1", "Joombo")];
+    const run = serve(store, t3);
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    t3.backend.subscriber?.onConnectionChange?.("reconnecting");
+    run.engine.last.emit({ type: "tool_call", callId: "c1", name: "list_projects", arguments: {} });
+    await settle();
+
+    assert.deepEqual(run.engine.last.toolResults, [
+      { callId: "c1", result: { error: "t3_unavailable" } },
+    ]);
+    run.stop();
+    await run.done;
+  });
+
+  test("a device revoked by the CLI gets no T3 data from its open session", async () => {
+    const store = setUpStore();
+    store.devices = [pairedDevice({ id: "d1" })];
+    const run = serve(store);
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    await store.revokeDevice("d1", "2026-10-26T12:00:00.000Z");
+    run.engine.last.emit({ type: "tool_call", callId: "c1", name: "list_projects", arguments: {} });
+    await settle();
+
+    assert.deepEqual(run.engine.last.toolResults, [
+      { callId: "c1", result: { error: "device_revoked" } },
+    ]);
+    assert.equal(run.engine.last.closed, true);
+    run.stop();
+    await run.done;
   });
 });

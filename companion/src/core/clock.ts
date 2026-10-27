@@ -1,4 +1,4 @@
-// The real clock, for main.ts and the defaults.
+// The real clock, used wherever a test does not inject a fake one.
 
 import type { Clock } from "../ports/clock.ts";
 

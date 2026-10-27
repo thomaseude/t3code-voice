@@ -64,17 +64,27 @@ Routes:
   "timeZone": "Europe/Paris"}` (`timeZone` is optional; it sets what "today" means, and
   defaults to the server's). The companion sends the offer to GPT-Live with its own OpenAI
   key and answers `201` with `{"sessionId", "sdp": "<SDP answer>"}` as soon as GPT-Live
-  answers: the app applies the answer and does not wait for full ICE gathering. A device
+  answers and the companion's control channel is attached (3 s at most): the app applies
+  the answer and does not wait for full ICE gathering. A device
   has one session at most: a new `POST /sessions` closes the one it still had. Errors:
   `400` `invalid_offer`, `502` `voice_engine_failed` (OpenAI refused or cannot be
   reached), `503` `voice_unavailable` (no OpenAI key).
 - `DELETE /sessions/:id` ends the device's session: `204`, or `404` when the device has no
   session with this id.
 
-During a session the companion answers the voice model's tools from T3's state
-(`list_projects`, `get_activity` with `scope` `running`, `today` or `finished`, and
-`end_session` when the user says "fin" or "c'est bon, merci"). The logs say when a session
-opens and ends, never what was said, asked or answered.
+During a session the companion answers the voice model's tools from T3's state:
+
+- `list_projects`;
+- `get_activity` with `scope` `running`, `today` (the device's calendar day) or `finished`
+  (the last 24 hours): the 10 latest tasks and the `total`;
+- `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
+
+While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no T3 data:
+the companion checks the device before each tool call and every 30 s, and closes the
+session of a revoked one. When `serve` stops, it closes every session, those still opening
+included. If the companion's control channel to GPT-Live drops, it attaches again (after
+1, 2 and 4 s) before it gives up. The logs say when a session opens and ends, never what
+was said, asked or answered.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next

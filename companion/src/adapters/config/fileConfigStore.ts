@@ -11,6 +11,7 @@ import {
   type CompanionConfig,
   ConfigError,
   type ConfigStore,
+  DEFAULT_VOICE,
   type PairingWindow,
 } from "../../ports/configStore.ts";
 import type { PairedDevice } from "../../ports/deviceAuth.ts";
@@ -81,14 +82,14 @@ export class FileConfigStore implements ConfigStore {
         `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
       );
     }
-    for (const field of ["model", "voice", "delegationModel"]) {
+    for (const field of ["model", "voice", "delegationModel"] as const) {
       const value = data.voice?.[field];
       if (
         value !== undefined &&
         !(typeof value === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(value))
       ) {
         throw new ConfigError(
-          `${path}: "voice.${field}" must be a name, e.g. "${field === "voice" ? "brise" : "gpt-live-1"}".`,
+          `${path}: "voice.${field}" must be a name, e.g. "${DEFAULT_VOICE[field]}".`,
         );
       }
     }

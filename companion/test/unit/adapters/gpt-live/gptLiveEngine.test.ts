@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { GptLiveEngine } from "../../../../src/adapters/gpt-live/gptLiveEngine.ts";
 import type { VoiceEvent, VoiceSessionRequest } from "../../../../src/ports/voiceEngine.ts";
-import { FakeClock } from "../../fakeClock.ts";
+import { FakeClock } from "../../fakePorts.ts";
 import { FakeGptLiveTransport } from "./fakes.ts";
 
 const REQUEST: VoiceSessionRequest = {
@@ -72,6 +72,8 @@ describe("opening a GPT-Live session", () => {
                 },
               ],
               tool_choice: "auto",
+              // One call per turn: the companion resumes the model after each result.
+              parallel_tool_calls: false,
             },
           },
         },
@@ -102,7 +104,7 @@ describe("when OpenAI refuses", () => {
 
   test("a control channel that cannot attach fails the open", async () => {
     const { transport, open } = setup();
-    transport.failAttach = true;
+    transport.attachFailures = 1;
 
     await assert.rejects(open(), {
       name: "VoiceEngineError",
@@ -149,23 +151,18 @@ describe("tool calls", () => {
     ]);
   });
 
-  test("results go back as function outputs; the model resumes once every pending call has one", async () => {
+  test("a result goes back as a function output, then the model resumes", async () => {
     const { transport, open } = setup();
     const session = await open();
     transport.socket.receive(functionCall("call_1", "list_projects", "{}"));
-    transport.socket.receive(functionCall("call_2", "get_activity", '{"scope":"today"}'));
 
-    session.resolveToolCall("call_2", { tasks: [] });
     session.resolveToolCall("call_1", { projects: ["Joombo"] });
     // A call that is not pending (unknown, or already answered) is not sent.
     session.resolveToolCall("call_1", { projects: [] });
+    session.resolveToolCall("call_9", { projects: [] });
 
     const sent = transport.socket.sent.map(({ event_id: _id, ...event }) => event);
     assert.deepEqual(sent, [
-      {
-        type: "response.item.create",
-        item: { type: "function_call_output", call_id: "call_2", output: '{"tasks":[]}' },
-      },
       {
         type: "response.item.create",
         item: {
@@ -177,7 +174,7 @@ describe("tool calls", () => {
       { type: "response.create" },
     ]);
     const ids = transport.socket.sent.map((event) => event.event_id);
-    assert.equal(new Set(ids).size, 3);
+    assert.equal(new Set(ids).size, 2);
   });
 });
 
@@ -228,16 +225,68 @@ describe("speaking and closing", () => {
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
 
-  test("OpenAI closing the session, or the channel dropping, ends it", async () => {
-    const first = setup();
-    await first.open();
-    first.transport.socket.receive({ type: "session.closed" });
-    assert.deepEqual(first.events, [{ type: "closed", reason: "closed" }]);
-    assert.equal(first.transport.socket.closed, true);
+  test("OpenAI closing the session ends it", async () => {
+    const { transport, events, open } = setup();
+    await open();
 
-    const second = setup();
-    await second.open();
-    second.transport.socket.drop();
-    assert.deepEqual(second.events, [{ type: "closed", reason: "failed" }]);
+    transport.socket.receive({ type: "session.closed" });
+
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+    assert.equal(transport.socket.closed, true);
+  });
+});
+
+describe("when the control channel drops", () => {
+  /** Lets an attach promise settle after the clock fired. */
+  const settle = async () => {
+    for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
+  };
+
+  test("the adapter attaches again, and tool calls arrive on the new channel", async () => {
+    const { transport, clock, events, open } = setup();
+    await open();
+    const first = transport.socket;
+
+    first.drop();
+    clock.advance(1_000);
+    await settle();
+    transport.socket.receive(functionCall("call_1", "list_projects", "{}"));
+
+    assert.notEqual(transport.socket, first);
+    assert.deepEqual(transport.attached, ["live_123", "live_123"]);
+    assert.deepEqual(events, [
+      { type: "tool_call", callId: "call_1", name: "list_projects", arguments: {} },
+    ]);
+  });
+
+  test("after 3 failed attaches (1, 2 and 4 s apart) the session counts as failed", async () => {
+    const { transport, clock, events, open } = setup();
+    await open();
+    transport.attachFailures = 3;
+
+    transport.socket.drop();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      assert.deepEqual(events, []);
+      clock.advance(delay);
+      await settle();
+    }
+
+    assert.equal(transport.attached.length, 4);
+    assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
+  });
+
+  test("a close asked while the channel is down is sent once it is back", async () => {
+    const { transport, clock, events, open } = setup();
+    const session = await open();
+    transport.socket.drop();
+
+    const closing = session.close();
+    clock.advance(1_000);
+    await settle();
+
+    assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
+    transport.socket.receive({ type: "session.closed" });
+    await closing;
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
 });

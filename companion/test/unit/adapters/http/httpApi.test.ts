@@ -10,8 +10,12 @@ import { DevicePairing, openPairingWindow } from "../../../../src/core/pairing.t
 import { VoiceSessionManager } from "../../../../src/core/voiceSessions.ts";
 import type { PairedDevice } from "../../../../src/ports/deviceAuth.ts";
 import { pairedDevice } from "../../builders.ts";
-import { FakeClock } from "../../fakeClock.ts";
-import { FakeDeviceAuth, FakeVoiceEngine, InMemoryConfigStore } from "../../fakePorts.ts";
+import {
+  FakeClock,
+  FakeDeviceAuth,
+  FakeVoiceEngine,
+  InMemoryConfigStore,
+} from "../../fakePorts.ts";
 
 // Every route of the spec (#15, "HTTP API"). POST /pair takes a pairing code instead of a
 // token, and answers 401 the same way while no pairing window is open.
@@ -45,6 +49,7 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
     voiceSessions: new VoiceSessionManager({
       engine: new FakeVoiceEngine(),
       shell: () => null,
+      isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},
     }),
@@ -557,6 +562,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
     const voiceSessions = new VoiceSessionManager({
       engine,
       shell: () => null,
+      isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},
     });
@@ -608,6 +614,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
     const voiceSessions = new VoiceSessionManager({
       engine: null,
       shell: () => null,
+      isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},
     });

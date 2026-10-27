@@ -9,7 +9,7 @@ import type {
 } from "../ports/apiServer.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
-import { activityOf } from "./activity.ts";
+import { allActivity } from "./activity.ts";
 import { randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
@@ -19,12 +19,17 @@ export interface VoiceSessionManagerOptions {
   engine: VoiceEngine | null;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
+  /**
+   * Whether the device was revoked (`t3-voice devices revoke` runs in another process).
+   * A device that is not paired counts as revoked. A failure counts as revoked too.
+   */
+  isRevoked(deviceId: string): Promise<boolean>;
   clock: Clock;
   /** Operational lines only: never audio, transcripts, prompts or tool results. */
   log(line: string): void;
 }
 
-interface OpenSession {
+interface ActiveSession {
   id: string;
   deviceId: string;
   engineSession: VoiceSession;
@@ -36,15 +41,25 @@ interface OpenSession {
   cancelEnd?: () => void;
 }
 
+/** How often open sessions are checked for a revoked device, when no tool is called. */
+const REVOCATION_CHECK_MS = 30_000;
+
+/** Tasks per tool answer: a longer list is too long to listen to. */
+const SPOKEN_TASKS = 10;
+const FINISHED_SINCE_MS = 24 * 3_600_000;
+
 /** Time the model gets to say goodbye after end_session, before the session closes. */
 const GOODBYE_MS = 5_000;
 
 export class VoiceSessionManager implements VoiceSessions {
   private readonly options: VoiceSessionManagerOptions;
   /** The open session of each device, by device id. */
-  private readonly byDevice = new Map<string, OpenSession>();
+  private readonly byDevice = new Map<string, ActiveSession>();
   /** Per device, the open or close in progress: they run one at a time. */
   private readonly queues = new Map<string, Promise<unknown>>();
+  /** Set by closeAll: the companion is stopping, so no session opens any more. */
+  private stopping = false;
+  private cancelRevocationCheck: (() => void) | null = null;
 
   constructor(options: VoiceSessionManagerOptions) {
     this.options = options;
@@ -63,8 +78,12 @@ export class VoiceSessionManager implements VoiceSessions {
     });
   }
 
-  /** Ends every open session: `serve` calls it before it stops. */
+  /** Ends every session, those still opening included: `serve` calls it before it stops. */
   async closeAll(): Promise<void> {
+    this.stopping = true;
+    this.cancelRevocationCheck?.();
+    this.cancelRevocationCheck = null;
+    await Promise.all([...this.queues.values()]);
     await Promise.all(
       [...this.byDevice.values()].map((session) =>
         this.close(session.deviceId, session.id).catch(() => {}),
@@ -74,7 +93,7 @@ export class VoiceSessionManager implements VoiceSessions {
 
   private async openNow(deviceId: string, request: OpenSessionRequest): Promise<OpenSessionResult> {
     const engine = this.options.engine;
-    if (engine === null) return { status: "unavailable" };
+    if (engine === null || this.stopping) return { status: "unavailable" };
     // One session per device: a new start (after an app crash, say) replaces the old one,
     // which would otherwise keep costing until it ends on its own.
     const previous = this.byDevice.get(deviceId);
@@ -85,7 +104,7 @@ export class VoiceSessionManager implements VoiceSessions {
         ? request.timeZone
         : serverTimeZone();
     // Events can only arrive once the engine answered, so `session` is set by then.
-    let session: OpenSession | null = null;
+    let session: ActiveSession | null = null;
     let engineSession: VoiceSession;
     try {
       engineSession = await engine.openSession(
@@ -114,13 +133,47 @@ export class VoiceSessionManager implements VoiceSessions {
     };
     this.byDevice.set(deviceId, session);
     this.options.log(`t3-voice: voice session opened for device ${deviceId}.`);
+    this.watchRevocations();
     return { status: "opened", sessionId: session.id, sdpAnswer: engineSession.sdpAnswer };
   }
 
-  private async end(session: OpenSession) {
+  private async end(session: ActiveSession) {
+    this.forget(session);
+    await session.engineSession.close();
+  }
+
+  private forget(session: ActiveSession) {
     session.cancelEnd?.();
     if (this.byDevice.get(session.deviceId) === session) this.byDevice.delete(session.deviceId);
-    await session.engineSession.close();
+  }
+
+  /** While a session is open, checks every 30 s that no open session's device was revoked. */
+  private watchRevocations() {
+    if (this.cancelRevocationCheck !== null || this.stopping || this.byDevice.size === 0) return;
+    this.cancelRevocationCheck = this.options.clock.schedule(REVOCATION_CHECK_MS, () => {
+      this.cancelRevocationCheck = null;
+      this.closeRevoked().finally(() => this.watchRevocations());
+    });
+  }
+
+  private async closeRevoked() {
+    for (const session of [...this.byDevice.values()]) {
+      if (await this.revoked(session.deviceId)) await this.closeAsRevoked(session);
+    }
+  }
+
+  private async revoked(deviceId: string): Promise<boolean> {
+    try {
+      return await this.options.isRevoked(deviceId);
+    } catch {
+      // Fail closed: a device list we cannot read must not let a device through.
+      return true;
+    }
+  }
+
+  private async closeAsRevoked(session: ActiveSession) {
+    this.options.log(`t3-voice: device ${session.deviceId} is revoked; closing its voice session.`);
+    await this.close(session.deviceId, session.id).catch(() => {});
   }
 
   private inTurn<T>(deviceId: string, step: () => Promise<T>): Promise<T> {
@@ -134,10 +187,9 @@ export class VoiceSessionManager implements VoiceSessions {
     return run;
   }
 
-  private onEvent(session: OpenSession, event: VoiceEvent) {
+  private onEvent(session: ActiveSession, event: VoiceEvent) {
     if (event.type === "closed") {
-      session.cancelEnd?.();
-      if (this.byDevice.get(session.deviceId) === session) this.byDevice.delete(session.deviceId);
+      this.forget(session);
       const minutes = (this.options.clock.now() - session.openedAt) / 60_000;
       this.options.log(
         `t3-voice: voice session of device ${session.deviceId} ${event.reason === "failed" ? "failed" : "ended"} after ${minutes.toFixed(1)} min.`,
@@ -145,14 +197,26 @@ export class VoiceSessionManager implements VoiceSessions {
       return;
     }
     if (event.type === "tool_call") {
-      session.engineSession.resolveToolCall(
-        event.callId,
-        this.runTool(session, event.name, event.arguments),
-      );
+      this.answerToolCall(session, event.callId, event.name, event.arguments).catch(() => {});
     }
   }
 
-  private runTool(session: OpenSession, name: string, args: unknown): unknown {
+  private async answerToolCall(
+    session: ActiveSession,
+    callId: string,
+    name: string,
+    args: unknown,
+  ) {
+    // Checked on every call: a revoked phone must not hear one more thing about T3.
+    if (await this.revoked(session.deviceId)) {
+      session.engineSession.resolveToolCall(callId, { error: "device_revoked" });
+      await this.closeAsRevoked(session);
+      return;
+    }
+    session.engineSession.resolveToolCall(callId, this.runTool(session, name, args));
+  }
+
+  private runTool(session: ActiveSession, name: string, args: unknown): unknown {
     const shell = this.options.shell();
     switch (name) {
       case "list_projects":
@@ -172,21 +236,23 @@ export class VoiceSessionManager implements VoiceSessions {
     }
   }
 
-  private activity(session: OpenSession, shell: ShellState, args: unknown): unknown {
+  private activity(session: ActiveSession, shell: ShellState, args: unknown): unknown {
     const now = new Date(this.options.clock.now());
-    const activity = activityOf(shell, now);
+    const { running, finished } = allActivity(shell);
     const scope = (args as { scope?: unknown } | null)?.scope;
     switch (scope) {
       case "running":
-        return { tasks: activity.running.map(spokenTask) };
-      case "finished":
-        return { tasks: activity.finished.map(spokenTask) };
+        return spokenList(running);
+      case "finished": {
+        const since = new Date(now.getTime() - FINISHED_SINCE_MS).toISOString();
+        return spokenList(finished.filter((item) => item.updatedAt >= since));
+      }
       case "today": {
+        // The device's calendar day, which can last 23 or 25 hours.
         const today = dayIn(session.timeZone, now);
-        const tasks = activity.finished.filter(
-          (item) => dayIn(session.timeZone, new Date(item.updatedAt)) === today,
+        return spokenList(
+          finished.filter((item) => dayIn(session.timeZone, new Date(item.updatedAt)) === today),
         );
-        return { tasks: tasks.map(spokenTask) };
       }
       default:
         return { error: "invalid_arguments" };
@@ -201,6 +267,14 @@ export class VoiceSessionManager implements VoiceSessions {
 
 function projectNamesOf(shell: ShellState): string[] {
   return [...shell.projects.values()].map((project) => project.title).sort();
+}
+
+/**
+ * The latest tasks, and how many there are in all: the model can then say there are more
+ * instead of presenting a short list as the whole.
+ */
+function spokenList(items: ActivityItem[]) {
+  return { tasks: items.slice(0, SPOKEN_TASKS).map(spokenTask), total: items.length };
 }
 
 /** A task as the voice model gets it: no ids, it only speaks about tasks. */

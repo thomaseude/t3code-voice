@@ -6,6 +6,7 @@ import { systemClock } from "../../core/clock.ts";
 import { ShellState } from "../../core/shellState.ts";
 import { VoiceSessionManager } from "../../core/voiceSessions.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
+import type { Clock } from "../../ports/clock.ts";
 import {
   type ConfigStore,
   DEFAULT_SERVER_HOST,
@@ -34,8 +35,8 @@ export interface ServeOptions {
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
   waitForStop(): Promise<void>;
   out(line: string): void;
-  /** Current time in milliseconds; injectable for tests. */
-  now?: () => number;
+  /** Injectable for tests. */
+  clock?: Clock;
 }
 
 export async function runServe({
@@ -45,7 +46,7 @@ export async function runServe({
   voiceEngine,
   waitForStop,
   out,
-  now = Date.now,
+  clock = systemClock,
 }: ServeOptions) {
   const { config, pairing } = await loadT3Setup(store);
   // Read once now, so a damaged or loose device list stops the start, not the first request.
@@ -80,7 +81,12 @@ export async function runServe({
   const voiceSessions = new VoiceSessionManager({
     engine,
     shell,
-    clock: { now, schedule: systemClock.schedule },
+    // `t3-voice devices revoke` writes the revocation; serve reads it from the store.
+    isRevoked: async (deviceId) => {
+      const device = (await store.loadDevices()).find((candidate) => candidate.id === deviceId);
+      return device === undefined || device.revokedAt !== null;
+    },
+    clock,
     log: out,
   });
 
@@ -98,7 +104,7 @@ export async function runServe({
       // While T3 is away, its last known state could be stale: say so instead.
       activity: () => {
         const current = shell();
-        return current === null ? null : activityOf(current, new Date(now()));
+        return current === null ? null : activityOf(current, new Date(clock.now()));
       },
       voiceSessions,
     });

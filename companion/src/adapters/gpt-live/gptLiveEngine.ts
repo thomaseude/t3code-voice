@@ -70,6 +70,9 @@ export class GptLiveEngine implements VoiceEngine {
             instructions: request.instructions,
             tools: request.tools.map((tool) => ({ type: "function", ...tool })),
             tool_choice: "auto",
+            // One call per turn, so each result can resume the model at once. With parallel
+            // calls, a result sent before the turn's other calls arrived would resume it early.
+            parallel_tool_calls: false,
           },
         },
       },
@@ -95,39 +98,90 @@ export class GptLiveEngine implements VoiceEngine {
       // session. Its WebRTC peer then never connects, and OpenAI is expected to drop it.
       throw new VoiceEngineError("Could not attach the control channel to the GPT-Live session.");
     }
-    return new LiveSession(sdpAnswer, socket, this.options.clock, onEvent);
+    return new LiveSession({
+      sdpAnswer,
+      sessionId,
+      socket,
+      transport,
+      clock: this.options.clock,
+      onEvent,
+    });
   }
 }
 
 /** How long close() waits for OpenAI's `session.closed` before it drops the channel. */
 const CLOSE_TIMEOUT_MS = 5_000;
+/**
+ * Waits before each new attach when the control channel drops. Only the companion's channel
+ * dropped: the phone's call goes on, and only this channel can still close it.
+ */
+const REATTACH_DELAYS_MS = [1_000, 2_000, 4_000];
+
+interface LiveSessionOptions {
+  sdpAnswer: string;
+  sessionId: string;
+  socket: LiveSocket;
+  transport: GptLiveTransport;
+  clock: Clock;
+  onEvent: (event: VoiceEvent) => void;
+}
 
 class LiveSession implements VoiceSession {
   readonly sdpAnswer: string;
-  private readonly socket: LiveSocket;
+  private readonly sessionId: string;
+  private readonly transport: GptLiveTransport;
   private readonly clock: Clock;
   private readonly onEvent: (event: VoiceEvent) => void;
+  /** The attached control channel, or null while it is attached again. */
+  private socket: LiveSocket | null = null;
   private ended = false;
   private closing: Promise<void> | null = null;
   private resolveClosing: () => void = () => {};
   private cancelCloseTimeout: () => void = () => {};
-  /** Calls of the delegation model still waiting for a result. */
+  private cancelReattach: () => void = () => {};
+  /** Calls of the delegation model still waiting for a result (one at most per turn). */
   private readonly pendingCalls = new Set<string>();
   private nextEventId = 1;
 
-  constructor(
-    sdpAnswer: string,
-    socket: LiveSocket,
-    clock: Clock,
-    onEvent: (event: VoiceEvent) => void,
-  ) {
-    this.sdpAnswer = sdpAnswer;
+  constructor(options: LiveSessionOptions) {
+    this.sdpAnswer = options.sdpAnswer;
+    this.sessionId = options.sessionId;
+    this.transport = options.transport;
+    this.clock = options.clock;
+    this.onEvent = options.onEvent;
+    this.use(options.socket);
+  }
+
+  private use(socket: LiveSocket) {
     this.socket = socket;
-    this.clock = clock;
-    this.onEvent = onEvent;
-    socket.onMessage((text) => this.receive(text));
-    // A channel that drops while we are not closing is a failure: tools can no longer answer.
-    socket.onClose(() => this.end(this.closing === null ? "failed" : "closed"));
+    socket.onMessage((text) => {
+      if (this.socket === socket) this.receive(text);
+    });
+    socket.onClose(() => {
+      if (this.socket !== socket) return;
+      this.socket = null;
+      this.reattach(0);
+    });
+  }
+
+  private reattach(attempt: number) {
+    if (this.ended) return;
+    const delay = REATTACH_DELAYS_MS[attempt];
+    if (delay === undefined) {
+      this.end(this.closing === null ? "failed" : "closed");
+      return;
+    }
+    this.cancelReattach = this.clock.schedule(delay, () => {
+      this.transport.attach(this.sessionId).then(
+        (socket) => {
+          if (this.ended) return socket.close();
+          this.use(socket);
+          // A close asked while the channel was down: OpenAI has not received it yet.
+          if (this.closing !== null) this.send({ type: "session.close" });
+        },
+        () => this.reattach(attempt + 1),
+      );
+    });
   }
 
   speak(text: string): void {
@@ -141,8 +195,8 @@ class LiveSession implements VoiceSession {
       type: "response.item.create",
       item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) },
     });
-    // Appending results does not resume the delegation model; it waits for every result.
-    if (this.pendingCalls.size === 0) this.send({ type: "response.create" });
+    // Appending a result does not resume the delegation model: response.create does.
+    this.send({ type: "response.create" });
   }
 
   close(): Promise<void> {
@@ -162,13 +216,17 @@ class LiveSession implements VoiceSession {
     if (this.ended) return;
     this.ended = true;
     this.cancelCloseTimeout();
-    this.socket.close();
+    this.cancelReattach();
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close();
     this.resolveClosing();
     this.onEvent({ type: "closed", reason });
   }
 
+  /** Drops the event while the channel is down: a result sent then is lost. */
   private send(event: WireJson) {
-    if (this.ended) return;
+    if (this.ended || this.socket === null) return;
     this.socket.send(JSON.stringify({ ...event, event_id: `t3voice_${this.nextEventId++}` }));
   }
 

@@ -455,6 +455,19 @@ describe("OpenAI key and voice settings", () => {
 
     const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { voice: "" } };
     await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
-    await assert.rejects(new FileConfigStore(dir).loadConfig(), /"voice.voice"/);
+    await assert.rejects(
+      new FileConfigStore(dir).loadConfig(),
+      /"voice.voice" must be a name, e.g. "brise"/,
+    );
+
+    const delegation = {
+      t3: { baseUrl: "http://127.0.0.1:3773" },
+      voice: { delegationModel: "a b" },
+    };
+    await writeFile(join(dir, "config.json"), JSON.stringify(delegation), { mode: 0o600 });
+    await assert.rejects(
+      new FileConfigStore(dir).loadConfig(),
+      /"voice.delegationModel" must be a name, e.g. "gpt-5.6-terra"/,
+    );
   });
 });

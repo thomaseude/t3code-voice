@@ -49,7 +49,8 @@ export class FakeGptLiveTransport implements GptLiveTransport {
     status: 201,
     body: { session: { id: "live_123" }, transport: { type: "webrtc", sdp: "v=0 answer" } },
   };
-  failAttach = false;
+  /** The next attaches that fail, like a network that refuses the connection. */
+  attachFailures = 0;
 
   async createSession(body: WireJson) {
     this.created.push(body);
@@ -58,7 +59,10 @@ export class FakeGptLiveTransport implements GptLiveTransport {
 
   async attach(sessionId: string): Promise<LiveSocket> {
     this.attached.push(sessionId);
-    if (this.failAttach) throw new Error("connection refused");
+    if (this.attachFailures > 0) {
+      this.attachFailures--;
+      throw new Error("connection refused");
+    }
     const socket = new FakeLiveSocket();
     this.sockets.push(socket);
     return socket;

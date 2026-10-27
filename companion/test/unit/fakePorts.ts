@@ -1,5 +1,6 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
+import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
@@ -195,6 +196,8 @@ export class FakeVoiceEngine implements VoiceEngine {
   readonly sessions: FakeVoiceSession[] = [];
   /** Makes the next openSession() fail, like an engine that refuses the offer. */
   failNextOpen = false;
+  /** While set, openSession() waits for it, like an engine slow to answer. */
+  answerGate: Promise<void> | null = null;
 
   get last(): FakeVoiceSession {
     const session = this.sessions.at(-1);
@@ -207,6 +210,7 @@ export class FakeVoiceEngine implements VoiceEngine {
       this.failNextOpen = false;
       throw new VoiceEngineError("The engine answered 400.");
     }
+    if (this.answerGate !== null) await this.answerGate;
     const session: FakeVoiceSession = {
       request,
       sdpAnswer: `answer to ${request.sdpOffer}`,
@@ -228,5 +232,40 @@ export class FakeVoiceEngine implements VoiceEngine {
     };
     this.sessions.push(session);
     return session;
+  }
+}
+
+/** A clock the test moves by hand: scheduled callbacks run only when `advance` passes them. */
+export class FakeClock implements Clock {
+  private time: number;
+  private timers: Array<{ at: number; callback: () => void }> = [];
+
+  constructor(start = Date.parse("2026-10-26T10:00:00.000Z")) {
+    this.time = start;
+  }
+
+  now(): number {
+    return this.time;
+  }
+
+  schedule(delayMs: number, callback: () => void): () => void {
+    const timer = { at: this.time + delayMs, callback };
+    this.timers.push(timer);
+    return () => {
+      this.timers = this.timers.filter((other) => other !== timer);
+    };
+  }
+
+  /** Moves time forward and runs, in order, the callbacks that fall due. */
+  advance(ms: number): void {
+    const end = this.time + ms;
+    for (;;) {
+      const next = this.timers.filter((timer) => timer.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (next === undefined) break;
+      this.timers = this.timers.filter((timer) => timer !== next);
+      this.time = next.at;
+      next.callback();
+    }
+    this.time = end;
   }
 }
