@@ -176,7 +176,7 @@ export class AnnouncementQueue {
       .find((each) => each.threadId === item.threadId);
     if (task === undefined || task.lastEventKey === item.eventKey) return false;
     const shell = this.options.shell();
-    // While T3 is away, the last news known is still the best there is.
+    // While T3 is away, nothing shows that the news is old, so it is still told.
     if (shell === null) return true;
     const thread = shell.threads.get(item.threadId);
     return thread !== undefined && eventKeyOf(thread) === item.eventKey;

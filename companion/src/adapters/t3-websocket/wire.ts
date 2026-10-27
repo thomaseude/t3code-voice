@@ -72,7 +72,7 @@ export function toThread(wire: WireJson, location: "active" | "archive" = "activ
       ? {
           message: String(wire.lastError),
           failureClass: wire.lastErrorClass ?? null,
-          // A limit recovery is newer than the usage limit it recovers from.
+          // T3 writes the limit recovery after the usage limit, so its time is the newer one.
           resumesAt: recovery?.resetAt ?? wire.usageLimitResetAt ?? null,
           autoResume: recovery?.autoResume === true,
         }

@@ -124,10 +124,7 @@ export class FakeT3Backend implements T3Backend {
   }
   /** Messages of each thread, by thread id. */
   readonly messages = new Map<string, ThreadMessage[]>();
-  /** Thread ids readThread was called with, in order. */
-  readonly reads: string[] = [];
   async readThread(threadId: string) {
-    this.reads.push(threadId);
     if (this.failNextCommand === "read") {
       this.failNextCommand = false;
       throw new Error("T3 did not answer.");

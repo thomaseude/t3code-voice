@@ -1,7 +1,7 @@
 // Watches the followed tasks in T3's state and announces their news: a run that completed,
 // a run that failed, a question or a permission request that waits for the user.
 //
-// A completion is announced only once it stayed so for 5 s: a run can end moments before
+// A completion is announced only once it stayed completed for 5 s: a run can end moments before
 // its continuation starts (T3's own relay waits the same). Each event has a key made of T3's
 // ids, kept in the registry once told, so a reconnect or a restart never tells it again.
 

@@ -15,7 +15,7 @@ export type Awareness =
 /** Statuses of a run still doing work. In `waiting`, only the checkpoint capture is left. */
 export const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
-/** Run statuses during which the agent's turn is still going. */
+/** Run statuses during which the agent's turn is still going: not `waiting`, where only the checkpoint is left. */
 const LIVE_TURN_STATUSES = new Set(["preparing", "starting", "running"]);
 
 /**
