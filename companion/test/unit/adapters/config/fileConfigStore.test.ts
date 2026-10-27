@@ -413,3 +413,48 @@ async function privateDir(): Promise<string> {
   await chmod(dir, 0o700);
   return dir;
 }
+
+describe("OpenAI key and voice settings", () => {
+  test("reads the key from openai.env; none when the file is missing", async () => {
+    const dir = await privateDir();
+    assert.equal(await new FileConfigStore(dir).loadOpenAiKey(), null);
+
+    await writeFile(join(dir, "openai.env"), '# OpenAI\nOPENAI_API_KEY="sk-test-key-123456"\n', {
+      mode: 0o600,
+    });
+    assert.equal(await new FileConfigStore(dir).loadOpenAiKey(), "sk-test-key-123456");
+  });
+
+  test("refuses a key file other users can read, or one without the key, without printing it", async () => {
+    const dir = await privateDir();
+    await writeFile(join(dir, "openai.env"), "OPENAI_API_KEY=sk-test-key-123456\n", {
+      mode: 0o644,
+    });
+    await chmod(join(dir, "openai.env"), 0o644);
+    await assert.rejects(new FileConfigStore(dir).loadOpenAiKey(), (error: Error) => {
+      assert.match(error.message, /chmod 600/);
+      assert.doesNotMatch(error.message, /sk-test/);
+      return true;
+    });
+
+    await writeFile(join(dir, "openai.env"), "OPENAI_KEY=sk-test-key-123456\n", { mode: 0o600 });
+    await chmod(join(dir, "openai.env"), 0o600);
+    await assert.rejects(new FileConfigStore(dir).loadOpenAiKey(), (error: Error) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, /no OPENAI_API_KEY/);
+      assert.doesNotMatch(error.message, /sk-test/);
+      return true;
+    });
+  });
+
+  test("reads the voice settings, and refuses one that is not a name", async () => {
+    const dir = await privateDir();
+    const voice = { model: "gpt-live-1", voice: "brise", delegationModel: "gpt-5.6-terra" };
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, voice });
+    assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.voice, voice);
+
+    const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { voice: "" } };
+    await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+    await assert.rejects(new FileConfigStore(dir).loadConfig(), /"voice.voice"/);
+  });
+});

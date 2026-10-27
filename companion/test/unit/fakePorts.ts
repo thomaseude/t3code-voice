@@ -14,12 +14,20 @@ import {
   type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
+import {
+  type VoiceEngine,
+  VoiceEngineError,
+  type VoiceEvent,
+  type VoiceSession,
+  type VoiceSessionRequest,
+} from "../../src/ports/voiceEngine.ts";
 import { pairedDevice } from "./builders.ts";
 
 export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
+  openAiKey: string | null = null;
   devices: PairedDevice[] = [];
   /** Open pairing windows, by code hash. */
   readonly pairingWindows = new Map<string, PairingWindow>();
@@ -35,6 +43,9 @@ export class InMemoryConfigStore implements ConfigStore {
   }
   async saveT3Pairing(pairing: T3Pairing) {
     this.pairing = pairing;
+  }
+  async loadOpenAiKey() {
+    return this.openAiKey;
   }
   async loadDevices() {
     return this.devices;
@@ -167,5 +178,55 @@ export class FakeDeviceAuth implements DeviceAuth {
     const device = this.addDevice(token, { id: `new${this.registered}`, name });
     this.store?.devices.push(pairedDevice({ ...device, pairingCodeSha256 }));
     return { device, token };
+  }
+}
+
+/** A voice session the fake engine opened: what the core sent to it. */
+export interface FakeVoiceSession extends VoiceSession {
+  readonly request: VoiceSessionRequest;
+  readonly spoken: string[];
+  readonly toolResults: Array<{ callId: string; result: unknown }>;
+  closed: boolean;
+  /** Sends an event to the core, as the engine would. */
+  emit(event: VoiceEvent): void;
+}
+
+export class FakeVoiceEngine implements VoiceEngine {
+  readonly sessions: FakeVoiceSession[] = [];
+  /** Makes the next openSession() fail, like an engine that refuses the offer. */
+  failNextOpen = false;
+
+  get last(): FakeVoiceSession {
+    const session = this.sessions.at(-1);
+    if (session === undefined) throw new Error("No voice session was opened.");
+    return session;
+  }
+
+  async openSession(request: VoiceSessionRequest, onEvent: (event: VoiceEvent) => void) {
+    if (this.failNextOpen) {
+      this.failNextOpen = false;
+      throw new VoiceEngineError("The engine answered 400.");
+    }
+    const session: FakeVoiceSession = {
+      request,
+      sdpAnswer: `answer to ${request.sdpOffer}`,
+      spoken: [],
+      toolResults: [],
+      closed: false,
+      emit: onEvent,
+      speak: (text) => {
+        session.spoken.push(text);
+      },
+      resolveToolCall: (callId, result) => {
+        session.toolResults.push({ callId, result });
+      },
+      close: async () => {
+        if (session.closed) return;
+        session.closed = true;
+        onEvent({ type: "closed", reason: "closed" });
+      },
+    };
+    this.sessions.push(session);
+    return session;
   }
 }

@@ -78,7 +78,8 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
     const ip = clientIp(request, peer, options.clientIpHeader);
     if (refused(response, perIp.take(rateKey(ip)))) return;
 
-    const route = `${request.method} ${new URL(request.url ?? "/", "http://companion").pathname}`;
+    const path = new URL(request.url ?? "/", "http://companion").pathname;
+    const route = `${request.method} ${path}`;
     // The only route a device calls before it has a token.
     if (route === "POST /pair") return pair(request, response);
 
@@ -93,13 +94,43 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
     }
 
     switch (route) {
+      case "POST /sessions":
+        return openSession(request, response, authentication.device.id);
       case "GET /activity": {
         const activity = options.activity();
         if (activity === null) return sendJson(response, 503, { error: "t3_unavailable" });
         return sendJson(response, 200, activity);
       }
-      default:
-        return sendJson(response, 404, { error: "not_found" });
+    }
+    const sessionId = /^\/sessions\/([A-Za-z0-9_-]{1,64})$/.exec(path)?.[1];
+    if (request.method === "DELETE" && sessionId !== undefined) {
+      const closed = await options.voiceSessions.close(authentication.device.id, sessionId);
+      if (!closed) return sendJson(response, 404, { error: "not_found" });
+      response.writeHead(204);
+      return response.end();
+    }
+    return sendJson(response, 404, { error: "not_found" });
+  }
+
+  async function openSession(request: IncomingMessage, response: ServerResponse, deviceId: string) {
+    const body = await readJson(request, MAX_OFFER_BYTES);
+    const sdpOffer = body?.sdp;
+    if (typeof sdpOffer !== "string" || !sdpOffer.startsWith("v=0")) {
+      return sendJson(response, 400, { error: "invalid_offer" });
+    }
+    const timeZone = typeof body?.timeZone === "string" ? body.timeZone : null;
+    const result = await options.voiceSessions.open(deviceId, { sdpOffer, timeZone });
+    switch (result.status) {
+      case "opened":
+        response.writeHead(201, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        return response.end(JSON.stringify({ sessionId: result.sessionId, sdp: result.sdpAnswer }));
+      case "unavailable":
+        return sendJson(response, 503, { error: "voice_unavailable" });
+      case "failed":
+        return sendJson(response, 502, { error: "voice_engine_failed" });
     }
   }
 
@@ -123,15 +154,17 @@ function unauthorized(response: ServerResponse) {
 }
 
 const MAX_BODY_BYTES = 4096;
+/** A WebRTC offer with its ICE candidates takes a few kilobytes. */
+const MAX_OFFER_BYTES = 64 * 1024;
 
 /** The JSON body, or null when it is missing, too big or not JSON. */
 // biome-ignore lint/suspicious/noExplicitAny: the caller checks the fields it needs.
-async function readJson(request: IncomingMessage): Promise<any | null> {
+async function readJson(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<any | null> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) return null;
+    if (size > maxBytes) return null;
     chunks.push(chunk);
   }
   try {

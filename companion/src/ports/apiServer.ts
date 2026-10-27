@@ -7,6 +7,7 @@ export interface ApiServerOptions {
   clientIpHeader?: string;
   /** What GET /activity answers, or null while the companion is not connected to T3. */
   activity(): Activity | null;
+  voiceSessions: VoiceSessions;
 }
 
 export interface RunningApiServer {
@@ -29,3 +30,28 @@ export interface ActivityItem {
   /** ISO date of the thread's last change. */
   updatedAt: string;
 }
+
+/** Voice sessions, as the HTTP API opens and ends them for a paired device. */
+export interface VoiceSessions {
+  /**
+   * Opens a session for the device with its SDP offer. A session the device still has open
+   * is closed first: a device has one session at most.
+   */
+  open(deviceId: string, request: OpenSessionRequest): Promise<OpenSessionResult>;
+  /** Ends the device's session. False when the device has no session with this id. */
+  close(deviceId: string, sessionId: string): Promise<boolean>;
+}
+
+export interface OpenSessionRequest {
+  /** The iPhone's WebRTC SDP offer. */
+  sdpOffer: string;
+  /** The device's IANA time zone ("Europe/Paris"), for "today"; null for the server's own. */
+  timeZone: string | null;
+}
+
+export type OpenSessionResult =
+  | { status: "opened"; sessionId: string; sdpAnswer: string }
+  /** No voice engine is configured (no OpenAI key). */
+  | { status: "unavailable" }
+  /** The engine refused or could not be reached. */
+  | { status: "failed" };

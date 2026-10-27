@@ -18,6 +18,8 @@ import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
+/** `OPENAI_API_KEY=<key>`, in the shell `.env` format the benchmark used. */
+const OPENAI_KEY_FILE = "openai.env";
 const DEVICES_FILE = "devices.json";
 /** One file per revoked device: `<device id>.json`. */
 const REVOKED_DIR = "revoked";
@@ -79,6 +81,17 @@ export class FileConfigStore implements ConfigStore {
         `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
       );
     }
+    for (const field of ["model", "voice", "delegationModel"]) {
+      const value = data.voice?.[field];
+      if (
+        value !== undefined &&
+        !(typeof value === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(value))
+      ) {
+        throw new ConfigError(
+          `${path}: "voice.${field}" must be a name, e.g. "${field === "voice" ? "brise" : "gpt-live-1"}".`,
+        );
+      }
+    }
     return data as CompanionConfig;
   }
 
@@ -103,6 +116,23 @@ export class FileConfigStore implements ConfigStore {
 
   async saveT3Pairing(pairing: T3Pairing): Promise<void> {
     await this.writePrivateFile(T3_PAIRING_FILE, `${JSON.stringify(pairing, null, 2)}\n`);
+  }
+
+  async loadOpenAiKey(): Promise<string | null> {
+    const path = join(this.location, OPENAI_KEY_FILE);
+    const text = await this.readPrivateText(path);
+    if (text === null) return null;
+    const line = text
+      .split("\n")
+      .find((candidate) => candidate.trim().startsWith("OPENAI_API_KEY="));
+    const key = line
+      ?.trim()
+      .slice("OPENAI_API_KEY=".length)
+      .trim()
+      .replace(/^(["'])(.*)\1$/, "$2");
+    if (key === undefined || key === "")
+      throw new ConfigError(`${path} has no OPENAI_API_KEY line.`);
+    return key;
   }
 
   async loadDevices(): Promise<PairedDevice[]> {

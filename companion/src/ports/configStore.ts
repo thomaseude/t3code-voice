@@ -7,6 +7,13 @@ export const DEFAULT_T3_URL = "http://127.0.0.1:3773";
 export const DEFAULT_SERVER_HOST = "127.0.0.1";
 export const DEFAULT_SERVER_PORT = 8787;
 
+/** The voice engine the companion opens sessions with (spec #15, decided with Thomas in #12 and #19). */
+export const DEFAULT_VOICE = {
+  model: "gpt-live-1",
+  voice: "brise",
+  delegationModel: "gpt-5.6-terra",
+};
+
 export interface CompanionConfig {
   t3: {
     baseUrl: string;
@@ -22,6 +29,13 @@ export interface CompanionConfig {
     clientIpHeader?: string;
     /** HTTPS address the iPhone reaches the companion at, e.g. "https://voice.example.com". */
     publicUrl?: string;
+  };
+  /** GPT-Live settings; each one missing takes its DEFAULT_VOICE value. */
+  voice?: {
+    model?: string;
+    voice?: string;
+    /** The Responses model GPT-Live hands the user's requests and the tool calls to. */
+    delegationModel?: string;
   };
 }
 
@@ -41,6 +55,8 @@ export interface ConfigStore {
   /** The pairing holds a secret: implementations must keep it private and never log it. */
   loadT3Pairing(): Promise<T3Pairing | null>;
   saveT3Pairing(pairing: T3Pairing): Promise<void>;
+  /** The OpenAI API key (a secret, never logged), or null when none is set up. */
+  loadOpenAiKey(): Promise<string | null>;
   // Each file has one writer process, so no process can overwrite another's change:
   // `serve` writes the device list, the CLI writes revocations and pairing windows.
 
