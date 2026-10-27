@@ -84,7 +84,8 @@ While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no
 the companion checks the device before each tool call and every 30 s, and closes the
 session of a revoked one. When `serve` stops, it closes every session, those still opening
 included. If the companion's control channel to GPT-Live drops, it attaches again (after
-1, 2 and 4 s) before it gives up. The logs say when a session opens and ends, never what
+1, 2 and 4 s) before it gives up. A new channel is usable once it has stayed up 10 s; until
+then, tool results and a close wait, and a drop counts as a failed attach. The logs say when a session opens and ends, never what
 was said, asked or answered.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid

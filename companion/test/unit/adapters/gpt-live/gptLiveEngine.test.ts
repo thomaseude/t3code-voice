@@ -270,22 +270,7 @@ describe("when the control channel drops", () => {
     assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
   });
 
-  test("a close asked while the channel is down is sent once it is back", async () => {
-    const { transport, clock, events, open } = setup();
-    const session = await open();
-    transport.socket.drop();
-
-    const closing = session.close();
-    clock.advance(1_000);
-    await settle();
-
-    assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
-    transport.socket.receive({ type: "session.closed" });
-    await closing;
-    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
-  });
-
-  test("a tool result sent while the channel is down goes out once it is back", async () => {
+  test("events sent while the channel is down go out once a new one has stayed up 10 s", async () => {
     const { transport, clock, open } = setup();
     const session = await open();
     transport.socket.receive(functionCall("call_1", "list_projects", "{}"));
@@ -294,11 +279,32 @@ describe("when the control channel drops", () => {
     session.resolveToolCall("call_1", { projects: ["Joombo"] });
     clock.advance(1_000);
     await settle();
+    assert.deepEqual(transport.socket.sentTypes(), []);
+    clock.advance(10_000);
 
     assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
   });
 
-  test("a close asked while the channel is down waits for the attaches, not 5 s", async () => {
+  test("events stay queued when the new channel drops before it is usable", async () => {
+    const { transport, clock, open } = setup();
+    const session = await open();
+    transport.socket.receive(functionCall("call_1", "list_projects", "{}"));
+    transport.socket.drop();
+    session.resolveToolCall("call_1", { projects: ["Joombo"] });
+
+    clock.advance(1_000);
+    await settle();
+    // A short-lived channel: it even sends an event, then drops.
+    transport.socket.receive({ type: "error", error: { code: "server_error" } });
+    transport.socket.drop();
+    clock.advance(2_000);
+    await settle();
+    clock.advance(10_000);
+
+    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
+  });
+
+  test("a close asked while the channel is down waits for a usable channel, not 5 s", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
     transport.attachFailures = 1;
@@ -309,6 +315,7 @@ describe("when the control channel drops", () => {
     await settle();
     clock.advance(2_000);
     await settle();
+    clock.advance(10_000);
     clock.advance(4_000);
     assert.deepEqual(events, []);
 
@@ -318,7 +325,7 @@ describe("when the control channel drops", () => {
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
 
-  test("channels that open then drop at once count as failed attaches", async () => {
+  test("channels that drop within 10 s count as failed attaches, even if they sent an event", async () => {
     const { transport, clock, events, open } = setup();
     await open();
 
@@ -326,11 +333,26 @@ describe("when the control channel drops", () => {
     for (const delay of [1_000, 2_000, 4_000]) {
       clock.advance(delay);
       await settle();
-      // OpenAI accepts the socket, then closes it before any event.
-      if (events.length === 0) transport.socket.drop();
+      transport.socket.receive({ type: "error", error: { code: "server_error" } });
+      transport.socket.drop();
     }
 
     assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
     assert.equal(transport.attached.length, 4);
+  });
+
+  test("a quiet channel that stayed up 10 s counts as back, so drops hours apart never use up the attaches", async () => {
+    const { transport, clock, events, open } = setup();
+    await open();
+
+    for (let drop = 0; drop < 5; drop++) {
+      transport.socket.drop();
+      clock.advance(1_000);
+      await settle();
+      clock.advance(30 * 60_000);
+    }
+
+    assert.deepEqual(events, []);
+    assert.equal(transport.attached.length, 6);
   });
 });
