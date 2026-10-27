@@ -29,7 +29,7 @@ final class AppModel: ObservableObject {
     private let client: CompanionClient
     /// The name iOS gives the device ("iPhone"), used when the field is left empty.
     private let modelName: String
-    /// Changes on each "Oublier": an answer to a request sent before it is for nobody.
+    /// Goes up on each "Oublier": a refresh drops its answer if it went up meanwhile.
     private var forgottenCount = 0
 
     init(store: ConnectionStore, transport: HTTPTransport, modelName: String) {
@@ -92,7 +92,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Deletes the connection on this iPhone only (decided by Thomas in #18). To revoke the
+    /// Deletes the connection on this iPhone only (kept by Thomas in PR #33). To revoke the
     /// device on the server, run `t3-voice devices revoke` there.
     func forget() {
         forgottenCount += 1
