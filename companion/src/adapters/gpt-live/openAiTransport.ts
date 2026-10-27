@@ -7,7 +7,7 @@ import type { GptLiveTransport, LiveSocket, WireJson } from "./gptLiveEngine.ts"
 
 const API = "https://api.openai.com/v1/live/sessions";
 const REQUEST_TIMEOUT_MS = 15_000;
-/** The phone waits for the answer meanwhile: a slow attach gives up rather than stall the start. */
+/** POST /sessions waits for the attach: after 3 s it gives up rather than delay the start. */
 const ATTACH_TIMEOUT_MS = 3_000;
 
 export function openAiTransport(apiKey: string): GptLiveTransport {

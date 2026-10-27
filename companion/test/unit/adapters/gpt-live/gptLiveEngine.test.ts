@@ -365,7 +365,7 @@ describe("when the control channel drops", () => {
     const session = await open();
 
     const closing = session.close();
-    // Each new channel lives 11 s: long enough to be usable, too short to close.
+    // Each new channel drops 11 s after it attached, and OpenAI never confirms the close.
     for (let flap = 0; flap < 2; flap++) {
       transport.socket.drop();
       clock.advance(1_000);

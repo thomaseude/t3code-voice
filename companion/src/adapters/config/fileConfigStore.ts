@@ -19,7 +19,7 @@ import type { T3Pairing } from "../../ports/t3Backend.ts";
 
 const CONFIG_FILE = "config.json";
 const T3_PAIRING_FILE = "t3-pairing.json";
-/** `OPENAI_API_KEY=<key>`, in the shell `.env` format the benchmark used. */
+/** One line `OPENAI_API_KEY=<key>`, in the shell `.env` format. */
 const OPENAI_KEY_FILE = "openai.env";
 const DEVICES_FILE = "devices.json";
 /** One file per revoked device: `<device id>.json`. */

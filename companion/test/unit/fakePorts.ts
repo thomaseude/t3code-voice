@@ -185,7 +185,6 @@ export class FakeDeviceAuth implements DeviceAuth {
 /** A voice session the fake engine opened: what the core sent to it. */
 export interface FakeVoiceSession extends VoiceSession {
   readonly request: VoiceSessionRequest;
-  readonly spoken: string[];
   readonly toolResults: Array<{ callId: string; result: unknown }>;
   closed: boolean;
   /** Sends an event to the core, as the engine would. */
@@ -214,13 +213,10 @@ export class FakeVoiceEngine implements VoiceEngine {
     const session: FakeVoiceSession = {
       request,
       sdpAnswer: `answer to ${request.sdpOffer}`,
-      spoken: [],
       toolResults: [],
       closed: false,
       emit: onEvent,
-      speak: (text) => {
-        session.spoken.push(text);
-      },
+      speak: () => {},
       resolveToolCall: (callId, result) => {
         session.toolResults.push({ callId, result });
       },

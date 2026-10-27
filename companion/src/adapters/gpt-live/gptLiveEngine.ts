@@ -179,7 +179,7 @@ class LiveSession implements VoiceSession {
     });
     socket.onClose(() => {
       if (this.socket !== socket) return;
-      // Everything the channel armed waits for the next usable one.
+      // Until the next channel, outgoing events wait in the queue.
       this.socket = null;
       this.usable = false;
       this.cancelUsable();
@@ -239,8 +239,8 @@ class LiveSession implements VoiceSession {
       this.closing = new Promise((resolve) => {
         this.resolveClosing = resolve;
       });
-      // Only the control channel can stop the billing: a channel still on trial is used now,
-      // and without one the close goes out on the next channel that attaches.
+      // Only the control channel can stop the billing: a channel still in its 10 s wait is
+      // used now, and without one the close goes out on the next channel that attaches.
       if (this.socket !== null) this.becomeUsable();
     }
     return this.closing;

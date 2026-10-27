@@ -37,7 +37,7 @@ interface ActiveSession {
   timeZone: string;
   /** Clock time when the engine answered. */
   openedAt: number;
-  /** Cancels the close end_session scheduled, if any. */
+  /** Cancels the close that end_session scheduled, if any. */
   cancelEnd?: () => void;
 }
 
