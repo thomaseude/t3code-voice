@@ -166,9 +166,10 @@ at most after the first close sent. The logs say when a session opens and ends, 
 cost, never what was said, asked or answered.
 
 A session stops by itself after a silence: 3 minutes (`voice.idleMinutes`), or 20 minutes
-(`voice.idleMinutesWhileTasksRun`) while a followed task runs or while T3 is away. The user
-speaking, a tool call, an announcement and unmuting start the silence again; the assistant
-speaking alone does not, and neither does the user while the app is muted. 30 s before the
+(`voice.idleMinutesWhileTasksRun`) while a followed task runs. While T3 is away, the limit
+it had when T3 was last reachable holds. The user speaking, a tool call, an announcement and
+unmuting start the silence again; the assistant speaking alone does not. A muted phone sends
+no audio, so muted time counts as silence. 30 s before the
 stop, the assistant says it is about to stop; a word keeps the session open. At the limit,
 it says it stops, and the session closes 5 s later.
 
@@ -177,7 +178,8 @@ GPT-Live's $0.05 per minute, silence included. The delegation model's tokens are
 counted. An open session saves its record every minute. Once today's sessions (the
 server's calendar day) cost 80 % of the daily budget (`voice.dailyBudgetUsd`, default $10),
 each open session hears a warning once, at a gap. At 100 %, the open sessions say so and
-close 5 s later, and `POST /sessions` answers `403` until the next day.
+close 5 s later, and `POST /sessions` answers `403` until the next day. A session still
+open after midnight counts against the day it started on.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next

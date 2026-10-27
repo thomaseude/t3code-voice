@@ -126,6 +126,8 @@ protocol VoiceCall: AnyObject {
 @MainActor
 protocol SessionFeedback {
     func show(_ state: SessionState)
+    /// Once per session, when the user can talk.
+    func playStartSound()
 }
 
 /// Runs a voice conversation from "Parler" to its end: Face ID, the WebRTC call, and the
@@ -146,6 +148,8 @@ final class VoiceSessionController: ObservableObject {
     /// The call of the current session, and the session on the companion once it answered.
     private var call: VoiceCall?
     private var session: OpenedSession?
+    /// The AirPods went away or were muted while connecting: the session goes live muted.
+    private var muteWhenLive = false
 
     init(
         client: CompanionClient,
@@ -172,6 +176,7 @@ final class VoiceSessionController: ObservableObject {
             return
         }
         show(.connecting)
+        muteWhenLive = false
         let call = makeCall()
         self.call = call
         do {
@@ -216,7 +221,10 @@ final class VoiceSessionController: ObservableObject {
         guard call === self.call else { return }
         switch event {
         case .sessionStarted:
-            if state == .connecting { show(.live(muted: false)) }
+            guard state == .connecting else { return }
+            show(.live(muted: false))
+            feedback.playStartSound()
+            if muteWhenLive { await setMuted(true) }
         case .sessionClosed:
             await finish(.voice)
         case .lost:
@@ -232,6 +240,10 @@ final class VoiceSessionController: ObservableObject {
     /// Mutes or unmutes the microphone at once. The companion is told so it counts muted
     /// time as silence; a failed request leaves the microphone as the user asked.
     private func setMuted(_ muted: Bool) async {
+        if state == .connecting {
+            muteWhenLive = muted
+            return
+        }
         guard case let .live(current) = state, current != muted, let call else { return }
         call.setMuted(muted)
         show(.live(muted: muted))

@@ -40,12 +40,12 @@ export interface VoiceSessions {
   open(deviceId: string, request: OpenSessionRequest): Promise<OpenSessionResult>;
   /** Ends the device's session. False when the device has no session with this id. */
   close(deviceId: string, sessionId: string): Promise<boolean>;
-  /** A signal from the app about its session. False when the device has no session with this id. */
-  signal(deviceId: string, sessionId: string, signal: SessionSignal): boolean;
+  /** An event from the app about its session. False when the device has no session with this id. */
+  handleEvent(deviceId: string, sessionId: string, event: SessionEvent): boolean;
 }
 
 /** "mute": the app turned its microphone off (the user, the AirPods, or the AirPods removed). */
-export type SessionSignal = "mute" | "unmute";
+export type SessionEvent = "mute" | "unmute";
 
 export interface OpenSessionRequest {
   /** The iPhone's WebRTC SDP offer. */

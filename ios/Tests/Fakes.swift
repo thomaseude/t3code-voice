@@ -91,8 +91,13 @@ final class FakeVoiceCall: VoiceCall {
 @MainActor
 final class FakeFeedback: SessionFeedback {
     private(set) var shown: [SessionState] = []
+    private(set) var startSounds = 0
 
     func show(_ state: SessionState) {
         shown.append(state)
+    }
+
+    func playStartSound() {
+        startSounds += 1
     }
 }

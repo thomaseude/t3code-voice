@@ -16,6 +16,7 @@ final class WebRTCCall: VoiceCall {
     private var dataChannel: RTCDataChannel?
     private var microphone: RTCAudioTrack?
     private var routeObserver: NSObjectProtocol?
+    private var muteObserver: NSObjectProtocol?
     /// WebRTC keeps only a weak reference to its delegate.
     private var observer: CallObserver?
     private var hungUp = false
@@ -77,14 +78,18 @@ final class WebRTCCall: VoiceCall {
             let reason = (info[AVAudioSessionRouteChangeReasonKey] as? UInt)
                 .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
             let previous = info[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
-            let headsets: [AVAudioSession.Port] = [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .headphones]
-            let hadHeadset = previous?.outputs.contains { headsets.contains($0.portType) } ?? false
-            if reason == .oldDeviceUnavailable, hadHeadset { observer?.report(.headsetLost) }
+            let outputs = previous?.outputs.map(\.portType) ?? []
+            if AudioRoute.headsetLost(reason: reason, previousOutputs: outputs) { observer?.report(.headsetLost) }
         }
-        // Best effort: iOS passes the stem press only to some apps (T8 of the prototype).
-        try? AVAudioApplication.shared.setInputMuteStateChangeHandler { [weak observer] muted in
+        // On iOS the system mutes the input itself on a stem press, then posts this. Best
+        // effort: whether it reaches this app is unverified (T8 of the prototype).
+        muteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioApplication.inputMuteStateChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] notification in
+            guard let muted = notification.userInfo?[AVAudioApplication.muteStateKey] as? Bool else { return }
             observer?.report(.headsetMuteChanged(muted: muted))
-            return true
         }
     }
 
@@ -96,9 +101,11 @@ final class WebRTCCall: VoiceCall {
 
     /// Closes the connection and the microphone, and deactivates the audio session.
     private func release() {
-        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+        for token in [routeObserver, muteObserver].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(token)
+        }
         routeObserver = nil
-        try? AVAudioApplication.shared.setInputMuteStateChangeHandler(nil)
+        muteObserver = nil
         try? AVAudioApplication.shared.setInputMuted(false)
         microphone = nil
         dataChannel?.delegate = nil

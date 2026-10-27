@@ -1,6 +1,7 @@
 // The tasks the user follows: the threads whose news the assistant speaks about, with the
 // short French name the user calls them by. It survives restarts. T3 stays the only source
 // of truth for their status: the registry never stores one as current.
+// It also keeps what each voice session cost, for the daily budget.
 
 import type { TaskSummary } from "./summarizer.ts";
 

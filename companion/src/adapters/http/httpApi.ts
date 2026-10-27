@@ -140,7 +140,7 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
     }
   }
 
-  /** Mute and unmute; the other signals of the spec come with #26. */
+  /** Mute and unmute; the other events of the spec come with #26. */
   async function sessionEvent(
     request: IncomingMessage,
     response: ServerResponse,
@@ -151,7 +151,7 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
     if (type !== "mute" && type !== "unmute") {
       return sendJson(response, 400, { error: "invalid_event" });
     }
-    if (!options.voiceSessions.signal(deviceId, sessionId, type)) {
+    if (!options.voiceSessions.handleEvent(deviceId, sessionId, type)) {
       return sendJson(response, 404, { error: "not_found" });
     }
     response.writeHead(204);

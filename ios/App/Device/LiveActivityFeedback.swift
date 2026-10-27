@@ -9,7 +9,6 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
-    private var startSoundPlayed = false
 
     func show(_ state: SessionState) {
         switch state {
@@ -20,11 +19,6 @@ final class LiveActivityFeedback: SessionFeedback {
         case .connecting:
             start(status: state.label ?? "")
         case let .live(muted):
-            // Once per session: muting and unmuting play no sound of their own.
-            if !startSoundPlayed {
-                startSoundPlayed = true
-                playStartSound()
-            }
             update(status: state.label ?? "", muted: muted)
         case .ending:
             update(status: state.label ?? "")
@@ -33,7 +27,6 @@ final class LiveActivityFeedback: SessionFeedback {
 
     private func start(status: String) {
         end()
-        startSoundPlayed = false
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(status: status, muted: false), staleDate: nil),
@@ -56,7 +49,7 @@ final class LiveActivityFeedback: SessionFeedback {
         }
     }
 
-    private func playStartSound() {
+    func playStartSound() {
         player = try? AVAudioPlayer(data: Self.startSound)
         player?.play()
     }

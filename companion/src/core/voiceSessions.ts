@@ -6,7 +6,7 @@ import type {
   ActivityItem,
   OpenSessionRequest,
   OpenSessionResult,
-  SessionSignal,
+  SessionEvent,
   VoiceSessions,
 } from "../ports/apiServer.ts";
 import type { Clock } from "../ports/clock.ts";
@@ -61,9 +61,7 @@ interface ActiveSession {
   usageSavedAt: number;
   /** Clock time of the user's last sign: speech, a tool call, an announcement, unmuting. */
   lastActivityAt: number;
-  /** Clock time anyone last spoke, the assistant included. */
-  lastSpeechAt: number;
-  /** Whether the app turned its microphone off: that time counts as silence. */
+  /** Whether the app says its microphone is off: the silence warning then says how to go on. */
   muted: boolean;
   /** Clock time of the "je coupe dans 30 secondes" warning, or null since the last activity. */
   idleWarnedAt: number | null;
@@ -102,9 +100,6 @@ const USAGE_SAVE_MS = 60_000;
 /** The warning comes this long before a silence stops the session (decided by Thomas in #24). */
 const IDLE_WARNING_MS = 30_000;
 
-/** The budget warning waits until nobody spoke for this long, so it cuts no one off. */
-const QUIET_MS = 2_000;
-
 /** Share of the daily budget at which the assistant warns once per session. */
 const BUDGET_WARNING_SHARE = 0.8;
 
@@ -125,6 +120,8 @@ export class VoiceSessionManager implements VoiceSessions {
   private stopping = false;
   private cancelRevocationCheck: (() => void) | null = null;
   private cancelLimitCheck: (() => void) | null = null;
+  /** Whether a followed task ran when T3 was last reachable: kept while T3 is away. */
+  private taskRanWhenLastSeen = false;
 
   constructor(options: VoiceSessionManagerOptions) {
     this.options = options;
@@ -143,11 +140,11 @@ export class VoiceSessionManager implements VoiceSessions {
     });
   }
 
-  signal(deviceId: string, sessionId: string, signal: SessionSignal): boolean {
+  handleEvent(deviceId: string, sessionId: string, event: SessionEvent): boolean {
     const session = this.byDevice.get(deviceId);
     if (session === undefined || session.id !== sessionId) return false;
-    session.muted = signal === "mute";
-    if (signal === "unmute") this.heardUser(session);
+    session.muted = event === "mute";
+    if (event === "unmute") this.markActivity(session);
     return true;
   }
 
@@ -218,7 +215,6 @@ export class VoiceSessionManager implements VoiceSessions {
       day: this.dayOf(openedAt),
       usageSavedAt: openedAt,
       lastActivityAt: openedAt,
-      lastSpeechAt: openedAt,
       muted: false,
       idleWarnedAt: null,
       budgetWarned: false,
@@ -230,7 +226,7 @@ export class VoiceSessionManager implements VoiceSessions {
       // An announcement counts as activity: the silence starts again after it.
       speak: (text) => {
         engineSession.speak(text);
-        this.heardUser(opened);
+        this.markActivity(opened);
       },
       timeZone,
     });
@@ -299,9 +295,11 @@ export class VoiceSessionManager implements VoiceSessions {
       if (now - session.usageSavedAt >= USAGE_SAVE_MS) this.saveUsage(session);
     }
     const budget = this.options.limits.dailyBudgetUsd;
-    const spent = this.spentToday();
+    const today = this.dayOf(now);
     const silenceLimitMs = this.silenceLimitMs();
     for (const session of sessions) {
+      // A session still open after midnight also counts against the day it started on.
+      const spent = Math.max(this.spentOn(today), this.spentOn(session.day));
       if (spent >= budget) {
         this.stop(session, BUDGET_STOP, "the daily budget is reached");
         continue;
@@ -309,7 +307,7 @@ export class VoiceSessionManager implements VoiceSessions {
       if (
         spent >= budget * BUDGET_WARNING_SHARE &&
         !session.budgetWarned &&
-        now - session.lastSpeechAt >= QUIET_MS
+        this.options.announcements.isQuiet(session.id)
       ) {
         session.budgetWarned = true;
         this.say(session, BUDGET_WARNING);
@@ -337,18 +335,19 @@ export class VoiceSessionManager implements VoiceSessions {
   }
 
   /**
-   * The longer limit while a followed task runs, and while T3 is away: one may be running.
+   * The longer limit while a followed task runs. While T3 is away, the last known answer
+   * holds (decided by Thomas in #24): a short restart of T3 does not cut a wait.
    */
   private silenceLimitMs(): number {
     const { idleMinutes, idleMinutesWhileTasksRun } = this.options.limits;
     const shell = this.options.shell();
-    const taskRuns =
-      shell === null ||
-      this.options.registry.followedTasks().some((task) => {
+    if (shell !== null) {
+      this.taskRanWhenLastSeen = this.options.registry.followedTasks().some((task) => {
         const thread = shell.threads.get(task.threadId);
         return thread !== undefined && awarenessOf(thread) === "running";
       });
-    return (taskRuns ? idleMinutesWhileTasksRun : idleMinutes) * MINUTE_MS;
+    }
+    return (this.taskRanWhenLastSeen ? idleMinutesWhileTasksRun : idleMinutes) * MINUTE_MS;
   }
 
   /** Says why the session stops, then closes it after a short goodbye. */
@@ -356,6 +355,10 @@ export class VoiceSessionManager implements VoiceSessions {
     session.stopping = true;
     this.say(session, text);
     this.options.log(`t3-voice: voice session of device ${session.deviceId} stops: ${reason}.`);
+    this.closeAfterGoodbye(session);
+  }
+
+  private closeAfterGoodbye(session: ActiveSession) {
     session.cancelEnd?.();
     session.cancelEnd = this.options.clock.schedule(GOODBYE_MS, () => {
       this.close(session.deviceId, session.id).catch(() => {});
@@ -364,14 +367,12 @@ export class VoiceSessionManager implements VoiceSessions {
 
   private say(session: ActiveSession, text: string) {
     session.engineSession.speak(text);
-    session.lastSpeechAt = this.options.clock.now();
+    this.options.announcements.heardSpeech(session.id);
   }
 
-  /** The user is there: the silence starts again. */
-  private heardUser(session: ActiveSession) {
-    const now = this.options.clock.now();
-    session.lastActivityAt = now;
-    session.lastSpeechAt = now;
+  /** The user is there, or just heard news: the silence starts again. */
+  private markActivity(session: ActiveSession) {
+    session.lastActivityAt = this.options.clock.now();
     session.idleWarnedAt = null;
   }
 
@@ -381,18 +382,21 @@ export class VoiceSessionManager implements VoiceSessions {
     this.options.registry.saveUsage(usageOf(session, now));
   }
 
-  /** What today's sessions cost: the saved ones, and the open ones until now. */
   private spentToday(): number {
+    return this.spentOn(this.dayOf(this.options.clock.now()));
+  }
+
+  /** What the sessions of a day cost: the saved ones, and the open ones until now. */
+  private spentOn(day: string): number {
     const now = this.options.clock.now();
-    const today = this.dayOf(now);
     const open = [...this.byDevice.values()];
     const openIds = new Set(open.map((session) => session.id));
     let spent = 0;
-    for (const record of this.options.registry.usageOn(today)) {
+    for (const record of this.options.registry.usageOn(day)) {
       if (!openIds.has(record.sessionId)) spent += record.estimatedCostUsd;
     }
     for (const session of open) {
-      if (session.day === today) spent += usageOf(session, now).estimatedCostUsd;
+      if (session.day === day) spent += usageOf(session, now).estimatedCostUsd;
     }
     return roundUsd(spent);
   }
@@ -424,19 +428,19 @@ export class VoiceSessionManager implements VoiceSessions {
       return;
     }
     if (event.type === "speech") {
-      // The assistant speaking alone, its own warnings included, does not show the user is there.
+      // The assistant speaking alone, its own warnings included, does not show the user is
+      // there. A muted phone sends no audio, so a user transcript means the user speaks.
       if (event.speaker === "user") {
         session.confirmations.heard(event.text);
-        if (!session.muted) this.heardUser(session);
+        this.markActivity(session);
       } else {
         session.confirmations.assistantSpoke();
-        session.lastSpeechAt = this.options.clock.now();
       }
       this.options.announcements.heardSpeech(session.id);
       return;
     }
     if (event.type === "tool_call") {
-      this.heardUser(session);
+      this.markActivity(session);
       const { announcements } = this.options;
       // The model speaks the result next: announcements wait until it is done.
       announcements.toolCallStarted(session.id);
@@ -503,10 +507,7 @@ export class VoiceSessionManager implements VoiceSessions {
         if (name === "list_projects") return { projects: projectNamesOf(shell) };
         return this.activity(session, shell, args);
       case "end_session":
-        session.cancelEnd?.();
-        session.cancelEnd = this.options.clock.schedule(GOODBYE_MS, () => {
-          this.close(session.deviceId, session.id).catch(() => {});
-        });
+        this.closeAfterGoodbye(session);
         return { status: "ending" };
       default:
         return { error: "unknown_tool" };

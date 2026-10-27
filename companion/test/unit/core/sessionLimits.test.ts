@@ -33,12 +33,13 @@ const running = (id: string) => thread(id, { status: "running", latestRunId: "r1
 const completed = (id: string) => thread(id, { status: "completed", latestRunId: "r1" });
 
 function setup({
+  start = undefined as number | undefined,
   limits = {} as Partial<SessionLimits>,
   usage = [] as UsageRecord[],
   followed = [] as string[],
   threads = [] as Thread[],
 } = {}) {
-  const clock = new FakeClock();
+  const clock = new FakeClock(start);
   const engine = new FakeVoiceEngine();
   const registry = new InMemoryTaskRegistry();
   for (const record of usage) registry.saveUsage(record);
@@ -235,14 +236,32 @@ describe("stopping after a silence", () => {
     assert.match(engine.last.spoken[1] ?? "", IDLE_STOP);
   });
 
-  test("while T3 is away, it waits 20 minutes: a followed task may be running", async () => {
-    const { clock, engine, open, setThreads } = setup({ followed: ["t1"] });
+  test("while T3 is away, a followed task that ran when T3 left keeps the 20 minutes", async () => {
+    const { clock, engine, open, setThreads } = setup({
+      followed: ["t1"],
+      threads: [running("t1")],
+    });
     await open();
+    clock.advance(10 * SECOND);
     setThreads(null);
 
     clock.advance(10 * MINUTE);
 
     assert.deepEqual(engine.last.spoken, []);
+  });
+
+  test("while T3 is away with no followed task running when it left, it waits 3 minutes", async () => {
+    const { clock, engine, open, setThreads } = setup({
+      followed: ["t1"],
+      threads: [completed("t1")],
+    });
+    await open();
+    clock.advance(10 * SECOND);
+    setThreads(null);
+
+    clock.advance(140 * SECOND);
+
+    assert.match(engine.last.spoken[0] ?? "", WARNING);
   });
 
   test("the durations come from the settings", async () => {
@@ -260,23 +279,32 @@ describe("mute", () => {
     const { clock, engine, sessions, open } = setup();
     const sessionId = await open();
 
-    assert.equal(sessions.signal("d1", sessionId, "mute"), true);
-    clock.advance(100 * SECOND);
-    // What the engine may still hear does not count while the app says it is muted.
-    engine.last.emit({ type: "speech", speaker: "user", text: "Je suis là." });
-    clock.advance(50 * SECOND);
+    assert.equal(sessions.handleEvent("d1", sessionId, "mute"), true);
+    clock.advance(150 * SECOND);
 
     assert.match(engine.last.spoken[0] ?? "", /sourdine/);
     assert.match(engine.last.spoken[0] ?? "", /Réactive le micro/);
   });
 
+  test("the user speaking counts, even when the unmute never reached the companion", async () => {
+    const { clock, engine, sessions, open } = setup();
+    const sessionId = await open();
+    sessions.handleEvent("d1", sessionId, "mute");
+
+    clock.advance(140 * SECOND);
+    engine.last.emit({ type: "speech", speaker: "user", text: "Je suis là." });
+    clock.advance(140 * SECOND);
+
+    assert.deepEqual(engine.last.spoken, []);
+  });
+
   test("unmuting starts the silence again", async () => {
     const { clock, engine, sessions, open } = setup();
     const sessionId = await open();
-    sessions.signal("d1", sessionId, "mute");
+    sessions.handleEvent("d1", sessionId, "mute");
 
     clock.advance(160 * SECOND);
-    sessions.signal("d1", sessionId, "unmute");
+    sessions.handleEvent("d1", sessionId, "unmute");
     clock.advance(60 * SECOND);
     await settle();
 
@@ -290,7 +318,7 @@ describe("mute", () => {
       threads: [completed("t1")],
     });
     const sessionId = await open();
-    sessions.signal("d1", sessionId, "mute");
+    sessions.handleEvent("d1", sessionId, "mute");
 
     announcements.announce({
       threadId: "t1",
@@ -309,10 +337,10 @@ describe("mute", () => {
     const { sessions, open } = setup();
     const sessionId = await open("d1");
 
-    assert.equal(sessions.signal("d2", sessionId, "mute"), false);
-    assert.equal(sessions.signal("d1", "unknown", "mute"), false);
+    assert.equal(sessions.handleEvent("d2", sessionId, "mute"), false);
+    assert.equal(sessions.handleEvent("d1", "unknown", "mute"), false);
     await sessions.close("d1", sessionId);
-    assert.equal(sessions.signal("d1", sessionId, "mute"), false);
+    assert.equal(sessions.handleEvent("d1", sessionId, "mute"), false);
   });
 });
 
@@ -412,6 +440,37 @@ describe("the daily budget", () => {
     engine.last.emit({ type: "speech", speaker: "user", text: "Je suis là." });
     clock.advance(MINUTE);
     assert.equal(engine.last.spoken.length, 1);
+  });
+
+  test("the warning waits for the result of a tool call the model is waiting for", async () => {
+    const { clock, engine, announcements, open } = setup({
+      usage: [usageRecord({ estimatedCostUsd: 8 })],
+    });
+    const sessionId = await open();
+
+    announcements.toolCallStarted(sessionId);
+    clock.advance(30 * SECOND);
+    assert.deepEqual(engine.last.spoken, []);
+
+    announcements.toolCallEnded(sessionId);
+    clock.advance(5 * SECOND);
+    assert.match(engine.last.spoken[0] ?? "", /80 % du budget voix du jour/);
+  });
+
+  test("a session still open after midnight counts against the day it started on", async () => {
+    // 23:55 in Paris; the day already cost $9.60, so $10 is reached at 00:03.
+    const { clock, engine, open } = setup({
+      start: Date.parse("2026-10-26T22:55:00.000Z"),
+      usage: [usageRecord({ estimatedCostUsd: 9.6 })],
+    });
+    await open();
+
+    for (let minute = 0; minute < 8; minute++) {
+      engine.last.emit({ type: "speech", speaker: "user", text: "Je suis là." });
+      clock.advance(MINUTE);
+    }
+
+    assert.match(engine.last.spoken.at(-1) ?? "", /budget voix du jour est atteint/);
   });
 
   test("at 100 %, the session says so and stops, and no new one opens", async () => {

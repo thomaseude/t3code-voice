@@ -242,6 +242,29 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertFalse(call.muted)
     }
 
+    func testTheStartSoundPlaysOnceWhenTheSessionGoesLive() async {
+        await startLiveSession()
+        transport.responses = [response(204), response(204)]
+
+        await controller.toggleMute()
+        await controller.toggleMute()
+
+        XCTAssertEqual(feedback.startSounds, 1)
+    }
+
+    func testAirPodsTakenOutWhileConnectingMuteTheSessionOnceLive() async throws {
+        transport.responses = [opened, response(204)]
+        await controller.start()
+
+        await call.emit(.headsetLost)
+        XCTAssertEqual(controller.state, .connecting)
+        await call.emit(.sessionStarted)
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+        XCTAssertEqual(transport.jsonBody(of: try XCTUnwrap(transport.requests.last)), ["type": "mute"])
+    }
+
     func testMuteBeforeTheSessionIsLiveDoesNothing() async {
         transport.responses = [opened]
         await controller.start()
