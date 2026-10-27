@@ -17,7 +17,7 @@ final class AudioRouteTests: XCTestCase {
     }
 
     func testLosingAnotherOutputIsNotAHeadsetLost() {
-        // A car's or a TV's audio leaving does not put the phone's microphone near strangers' ears.
+        // Only a headset counts: losing car audio does not mute the session.
         XCTAssertFalse(AudioRoute.headsetLost(reason: .oldDeviceUnavailable, previousOutputs: [.carAudio]))
         XCTAssertFalse(AudioRoute.headsetLost(reason: nil, previousOutputs: [.bluetoothHFP]))
     }

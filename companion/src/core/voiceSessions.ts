@@ -59,7 +59,7 @@ interface ActiveSession {
   day: string;
   /** Clock time the usage was last saved. */
   usageSavedAt: number;
-  /** Clock time of the user's last sign: speech, a tool call, an announcement, unmuting. */
+  /** Clock time of the last activity: user speech, a tool call, an announcement or unmuting. */
   lastActivityAt: number;
   /** Whether the app says its microphone is off: the silence warning then says how to go on. */
   muted: boolean;
