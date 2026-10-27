@@ -57,13 +57,11 @@ final class FakeVoiceCall: VoiceCall {
     var offer = "v=0 offer"
     var startError: Error?
     var acceptError: Error?
-    private(set) var started = false
     private(set) var acceptedAnswer: String?
     private(set) var hungUp = false
     private var onEvent: (@MainActor (VoiceCallEvent) async -> Void)?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
-        started = true
         self.onEvent = onEvent
         if let startError { throw startError }
         return offer

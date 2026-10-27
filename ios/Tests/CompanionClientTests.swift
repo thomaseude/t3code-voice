@@ -224,7 +224,7 @@ final class CompanionClientTests: XCTestCase {
     }
 
     func testClosingASessionAfterTheConnectionWasForgottenUsesTheConnectionThatOpenedIt() async throws {
-        // "Oublier" during a conversation deletes the token before the session is closed.
+        // "Oublier" while the companion opens the session deletes the token before the close.
         let transport = FakeTransport()
         transport.responses = [response(204)]
 
