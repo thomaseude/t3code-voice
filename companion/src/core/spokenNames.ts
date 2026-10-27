@@ -59,14 +59,20 @@ export function chooseSpokenName({ proposed, source, project, taken }: SpokenNam
       ? proposedWords.join(" ")
       : nameFrom(source, project);
 
-  const takenKeys = new Set(taken.map(keyOf));
-  if (!takenKeys.has(keyOf(name))) return name;
+  // Two names that findByName cannot tell apart count as the same name.
+  const takenKeys = new Set(taken.map(spokenKey));
+  if (!takenKeys.has(spokenKey(name))) return name;
   const withProject = `${name} ${project}`;
-  if (!takenKeys.has(keyOf(withProject))) return withProject;
+  if (!takenKeys.has(spokenKey(withProject))) return withProject;
   for (let ordinal = 2; ; ordinal++) {
     const candidate = `${name} ${ordinal}`;
-    if (!takenKeys.has(keyOf(candidate))) return candidate;
+    if (!takenKeys.has(spokenKey(candidate))) return candidate;
   }
+}
+
+/** What findByName compares: the meaningful words, without order, plurals or accents. */
+function spokenKey(name: string): string {
+  return [...meaningfulStems(name)].sort().join(" ");
 }
 
 export type NameMatch<T> =

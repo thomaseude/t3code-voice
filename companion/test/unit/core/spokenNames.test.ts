@@ -57,6 +57,19 @@ describe("choosing a spoken name", () => {
   });
 });
 
+test("a name findByName could not tell from a taken one counts as taken", () => {
+  const base = { source: "", project: "joombo" };
+
+  assert.equal(
+    chooseSpokenName({ ...base, proposed: "tests de la review", taken: ["tests Reviews"] }),
+    "tests de la review joombo",
+  );
+  assert.equal(
+    chooseSpokenName({ ...base, proposed: "tests joombo", taken: ["tests joombo"] }),
+    "tests joombo 2",
+  );
+});
+
 describe("finding a task by its spoken name", () => {
   const tasks = [
     { name: "tests Reviews", id: "t1" },

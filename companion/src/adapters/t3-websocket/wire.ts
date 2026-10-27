@@ -3,6 +3,7 @@
 // T3 adds fields often and marks many as optional ("absent from older servers"), so every
 // reader below tolerates missing fields and ignores unknown ones.
 
+import { LIVE_RUN_STATUSES } from "../../core/activity.ts";
 import type {
   LaunchThreadRequest,
   ModelSelection,
@@ -13,6 +14,12 @@ import type {
   T3Config,
   Thread,
 } from "../../ports/t3Backend.ts";
+
+/** T3's `defaultThreadEnvMode` values, in the companion's words. */
+const THREAD_ENV_MODES: Record<string, Project["newThreadWorkspace"]> = {
+  local: "project_folder",
+  worktree: "new_worktree",
+};
 
 /** What T3 records as the origin of the threads and messages the companion sends. */
 const CREATION_SOURCE = "mobile";
@@ -26,10 +33,7 @@ export function toProject(wire: WireJson): Project {
     id: String(wire.id),
     title: String(wire.title ?? ""),
     workspaceRoot: String(wire.workspaceRoot ?? ""),
-    newThreadWorkspace:
-      wire.defaultThreadEnvMode === "local" || wire.defaultThreadEnvMode === "worktree"
-        ? wire.defaultThreadEnvMode
-        : null,
+    newThreadWorkspace: THREAD_ENV_MODES[wire.defaultThreadEnvMode] ?? null,
     defaultModel: toModelSelection(wire.defaultModelSelection),
   };
 }
@@ -193,14 +197,18 @@ export function toMessageDispatch(request: SendMessageRequest): WireJson {
   };
 }
 
-/** Run statuses during which an agent works on the thread, from preparing its folder on. */
-const ACTIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
-
-/** The id of the run an agent works on now, from a thread projection, or null. */
-export function activeRunOf(projection: WireJson): string | null {
+/**
+ * The runs to stop on a thread, from a thread projection: the one an agent works on now,
+ * and those still waiting in the queue, which would start after it.
+ */
+export function runsToStop(projection: WireJson): { active: string | null; queued: string[] } {
   const runs: WireJson[] = Array.isArray(projection?.runs) ? projection.runs : [];
-  const run = runs.find((each) => ACTIVE_RUN_STATUSES.has(each?.status));
-  return typeof run?.id === "string" ? run.id : null;
+  const ids = (keep: (run: WireJson) => boolean) =>
+    runs.filter((run) => keep(run) && typeof run.id === "string").map((run) => String(run.id));
+  return {
+    active: ids((run) => LIVE_RUN_STATUSES.has(run?.status))[0] ?? null,
+    queued: ids((run) => run?.status === "queued"),
+  };
 }
 
 /** The id of the run still waiting to deliver the message, from a thread projection. */

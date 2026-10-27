@@ -178,6 +178,17 @@ describe("start_task", () => {
     });
   });
 
+  test("a model named alone picks its agent", async () => {
+    const { backend, call } = await setup();
+
+    await call("start_task", { project: "joombo", prompt: "Corriger le build", model: "codex" });
+
+    assert.deepEqual(backend.commands[0]?.type === "launch" && backend.commands[0].model, {
+      providerInstanceId: "codex",
+      model: "gpt-5.6-codex",
+    });
+  });
+
   test("an unknown agent or model starts nothing and lists the choices", async () => {
     const { backend, call } = await setup();
 
@@ -262,6 +273,43 @@ describe("start_task", () => {
     assert.deepEqual(backend.commands, []);
   });
 
+  test("a launched thread the registry cannot follow is stopped and archived", async () => {
+    const { backend, registry, call } = await setup();
+    registry.failNextFollow = true;
+
+    assert.deepEqual(await call("start_task", startArgs), { error: "internal_error" });
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ["launch", "stop", "archive"],
+    );
+  });
+
+  test("two starts at once in a free project: the second gets a new worktree", async () => {
+    const { backend, engine, call } = await setup();
+    let release = () => {};
+    backend.launchGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({ type: "tool_call", callId: "a", name: "start_task", arguments: startArgs });
+    engine.last.emit({
+      type: "tool_call",
+      callId: "b",
+      name: "start_task",
+      arguments: { ...startArgs, spoken_name: "autre tâche" },
+    });
+    await settle();
+    release();
+    await call("list_projects");
+
+    assert.deepEqual(
+      backend.commands
+        .map((command) => (command.type === "launch" ? command.workspace.type : ""))
+        .sort(),
+      ["new_worktree", "project_folder"],
+    );
+  });
+
   test("when T3 refuses the launch, the assistant says it failed and nothing is followed", async () => {
     const { backend, registry, call } = await setup();
     backend.failNextCommand = true;
@@ -276,7 +324,7 @@ describe("start_task: where the agent works", () => {
 
   test("a project set to worktree in T3 always gets a new worktree, from its default branch", async () => {
     const { backend, call } = await setup({
-      projects: [project("p1", "joombo", { newThreadWorkspace: "worktree" })],
+      projects: [project("p1", "joombo", { newThreadWorkspace: "new_worktree" })],
     });
     backend.repositories.set("/home/me/joombo", { isGitRepository: true, defaultBranch: "master" });
 
@@ -328,6 +376,16 @@ describe("start_task: where the agent works", () => {
     });
   });
 
+  test("a new worktree asked for in a repository with no branch: nothing starts", async () => {
+    const { backend, call } = await setup();
+    backend.repositories.set("/home/me/joombo", { isGitRepository: true, defaultBranch: null });
+
+    assert.deepEqual(await call("start_task", { ...startArgs, workspace: "new_worktree" }), {
+      error: "worktree_unavailable",
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
   test("a busy project that is not a git repository: nothing starts, and the assistant says why", async () => {
     const { backend, call } = await setup({ threads: [busyRoot] });
     backend.repositories.set("/home/me/joombo", { isGitRepository: false, defaultBranch: null });
@@ -338,7 +396,7 @@ describe("start_task: where the agent works", () => {
 
   test("a worktree project that is not a git repository runs in its folder when it is free", async () => {
     const { backend, call } = await setup({
-      projects: [project("p1", "notes", { newThreadWorkspace: "worktree" })],
+      projects: [project("p1", "notes", { newThreadWorkspace: "new_worktree" })],
     });
     backend.repositories.set("/home/me/notes", { isGitRepository: false, defaultBranch: null });
 
@@ -408,6 +466,14 @@ describe("send_message", () => {
     await call("send_message", { task: "tests reviews", message: "Stop", mode: "steer" });
 
     assert.equal(backend.commands[0]?.type === "send" && backend.commands[0].mode, "steer");
+  });
+
+  test("the project said with the name finds the task too", async () => {
+    const { backend, call } = await withFollowedTask();
+
+    await call("send_message", { task: "tests reviews de joombo", message: "Go" });
+
+    assert.equal(backend.commands[0]?.type === "send" && backend.commands[0].threadId, "t1");
   });
 
   test("a reference that fits several tasks lists them, and sends nothing", async () => {
@@ -550,6 +616,19 @@ describe("cancel_last_action: « non, arrête » right after a read-back", () =>
     assert.deepEqual(backend.commands.at(-1), { type: "stop", commandId: "id-3", threadId: "t1" });
   });
 
+  test("a thread with only a question pending has no run: the message starts one, and undo stops it", async () => {
+    const pending = { id: "r1", kind: "user_input", blocking: false };
+    const { backend, registry, call } = await setup({
+      threads: [thread("t1", { projectId: "p1", status: "completed", pendingRequest: pending })],
+    });
+    registry.follow(followedTask("t1", { spokenName: "tests Reviews" }));
+    await call("send_message", { task: "tests reviews", message: "Supprime le test" });
+
+    await call("cancel_last_action");
+
+    assert.deepEqual(backend.commands.at(-1), { type: "stop", commandId: "id-3", threadId: "t1" });
+  });
+
   test("a steered message cannot be cancelled: the agent already read it", async () => {
     const { backend, registry, call } = await setup({
       threads: [thread("t1", { projectId: "p1", status: "running" })],
@@ -573,6 +652,26 @@ describe("cancel_last_action: « non, arrête » right after a read-back", () =>
 
     assert.deepEqual(await call("cancel_last_action"), { error: "nothing_to_cancel" });
     assert.equal(backend.commands.length, 1);
+  });
+
+  test("a start that started nothing ends the window of the start before it", async () => {
+    const { backend, call } = await setup();
+    await call("start_task", startArgs);
+    await call("start_task", { ...startArgs, project: "locallab" });
+
+    assert.deepEqual(await call("cancel_last_action"), { error: "nothing_to_cancel" });
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("an undo that failed halfway can be asked again", async () => {
+    const { backend, registry, call } = await setup();
+    await call("start_task", startArgs);
+    backend.failNextCommand = "archive";
+
+    assert.deepEqual(await call("cancel_last_action"), { error: "t3_failed" });
+    assert.equal(((await call("cancel_last_action")) as { status: string }).status, "cancelled");
+    assert.equal(backend.commands.at(-1)?.type, "archive");
+    assert.deepEqual(registry.followedTasks(), []);
   });
 
   test("an action is cancelled once", async () => {

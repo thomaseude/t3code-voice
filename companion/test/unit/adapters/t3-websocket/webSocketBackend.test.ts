@@ -641,6 +641,40 @@ describe("commands", () => {
     ]);
   });
 
+  test("stopThread also cancels the runs still waiting in the queue", async () => {
+    const { backend, connection } = await connected();
+    connection.answer = (tag) =>
+      tag === "orchestration.getThreadProjection"
+        ? { runs: [{ id: "run-1", status: "queued" }] }
+        : { sequence: 6 };
+
+    await backend.stopThread("c1", "t1");
+
+    assert.deepEqual(connection.requests.at(-1)?.payload, {
+      type: "queued-run.cancel",
+      commandId: "c1:run-1",
+      threadId: "t1",
+      runId: "run-1",
+    });
+  });
+
+  test("when T3 does not answer a command in time, it is sent again with the same id", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const { backend, connection } = await connected();
+    connection.silent = true;
+
+    const archive = backend.archiveThread("c2", "t1");
+    await settle();
+    connection.silent = false;
+    t.mock.timers.tick(15_000);
+    await archive;
+
+    assert.deepEqual(
+      connection.requests.map((request) => (request.payload as { commandId: string }).commandId),
+      ["c2", "c2"],
+    );
+  });
+
   test("stopThread sends nothing when no run is active", async () => {
     const { backend, connection } = await connected();
     connection.answer = () => ({ runs: [{ id: "run-1", status: "failed" }] });

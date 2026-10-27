@@ -37,18 +37,24 @@ export class ShellState {
     }
   }
 
+  /** Threads the user sees in T3's list (not archived, not subagents), the latest first. */
+  topLevelThreads(): Thread[] {
+    return [...this.threads.values()]
+      .filter((thread) => !thread.archived && !thread.isSubagent)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
   /** Top-level threads an agent is working on, including those waiting for the user. */
   runningThreads(): Thread[] {
-    return [...this.threads.values()]
-      .filter((thread) => !thread.archived && !thread.isSubagent && isRunning(thread))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return this.topLevelThreads().filter(isRunning);
   }
 }
 
+/** Whether a run is queued or under way, leaving aside a request that waits for the user. */
+export function hasLiveRun(thread: Thread): boolean {
+  return LIVE_STATUSES.has(thread.status) || thread.activeRunStatus !== null;
+}
+
 export function isRunning(thread: Thread): boolean {
-  return (
-    LIVE_STATUSES.has(thread.status) ||
-    thread.activeRunStatus !== null ||
-    thread.pendingRequest !== null
-  );
+  return hasLiveRun(thread) || thread.pendingRequest !== null;
 }

@@ -10,7 +10,7 @@ const MAX_PER_LIST = 10;
 const FINISHED_SINCE_MS = 24 * 3_600_000;
 
 /** Run statuses that upstream awareness reports as running. In `waiting`, only the checkpoint capture is left. */
-const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+export const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
 export function activityOf(state: ShellState, now: Date): Activity {
   const { running, finished } = allActivity(state);
@@ -30,11 +30,7 @@ export function finishedSince24Hours(items: ActivityItem[], now: Date): Activity
 export function allActivity(state: ShellState): Activity {
   const running: ActivityItem[] = [];
   const finished: ActivityItem[] = [];
-  const threads = [...state.threads.values()]
-    .filter((thread) => !thread.archived && !thread.isSubagent)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-
-  for (const thread of threads) {
+  for (const thread of state.topLevelThreads()) {
     const threadState = stateOf(thread);
     if (threadState === null) continue;
     const item: ActivityItem = {

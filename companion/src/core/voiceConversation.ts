@@ -145,7 +145,7 @@ export function voiceInstructions(projectNames: string[]): string {
     'Un simple "stop", "tais-toi" ou "attends" veut seulement dire : arrête de parler.',
     "Après start_task ou send_message, relis toujours ce qui a été fait : pour un lancement, l'agent, le modèle, le projet, la demande et le nom de la tâche ; pour un message, la tâche et le message.",
     'Si l\'utilisateur dit "non, arrête" ou "annule" juste après cette relecture, appelle cancel_last_action.',
-    "Appelle les tâches par leur nom court. Quand un outil renvoie plusieurs choix, lis-les et demande lequel ; ne choisis jamais à la place de l'utilisateur.",
+    "Appelle les tâches par leur nom court. Quand un outil renvoie plusieurs choix, lis-les et demande lequel ; ne choisis jamais à la place de l'utilisateur. S'il répond par une position (« la deuxième »), rappelle l'outil avec le nom à cette position.",
     'Quand l\'utilisateur dit "fin" ou "c\'est bon, merci", dis au revoir en quelques mots et appelle end_session.',
   ].join("\n");
 }

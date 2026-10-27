@@ -103,7 +103,7 @@ describe("toProject", () => {
       defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-codex" },
     });
 
-    assert.equal(project.newThreadWorkspace, "worktree");
+    assert.equal(project.newThreadWorkspace, "new_worktree");
     assert.deepEqual(project.defaultModel, { providerInstanceId: "codex", model: "gpt-5.6-codex" });
   });
 

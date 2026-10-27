@@ -15,7 +15,7 @@ import type {
   Thread,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
-import { isRunning, type ShellState } from "./shellState.ts";
+import { hasLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
 
 export interface VoiceTasksOptions {
@@ -47,11 +47,20 @@ const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-a
 /** T3 driver kinds and the name the user says for them. */
 const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "codex" };
 
+/** How long a start's claim on a project folder lasts when the shell does not show its thread. */
+const FOLDER_CLAIM_MS = 30_000;
+
 /** Longest first title sent to T3, which writes the real one from the prompt. */
 const TITLE_LENGTH = 80;
 
 export class VoiceTasks {
   private readonly options: VoiceTasksOptions;
+  /**
+   * Projects whose folder a start just gave an agent, with the thread once T3 answered and
+   * the clock time of the claim. The shell shows the new thread a moment later; until then
+   * (30 s at most), a second start must see the folder as busy.
+   */
+  private readonly folderLaunches = new Map<string, { threadId: string | null; at: number }>();
 
   constructor(options: VoiceTasksOptions) {
     this.options = options;
@@ -59,8 +68,8 @@ export class VoiceTasks {
 
   async startTask(args: unknown): Promise<ToolOutcome> {
     const input = args as Record<string, unknown> | null;
-    const projectName = text(input?.project);
-    const prompt = text(input?.prompt);
+    const projectName = nonEmptyText(input?.project);
+    const prompt = nonEmptyText(input?.prompt);
     const runtimeMode = input?.runtime_mode;
     const workspace = input?.workspace;
     if (
@@ -78,7 +87,7 @@ export class VoiceTasks {
     const shell = this.options.shell();
     if (shell === null) return { result: { error: "t3_unavailable" } };
 
-    const projectMatch = findProject(shell, projectName, text(input?.folder));
+    const projectMatch = findProject(shell, projectName, nonEmptyText(input?.folder));
     if (projectMatch.kind !== "found") return { result: projectMatch.result };
     const project = projectMatch.project;
 
@@ -88,12 +97,18 @@ export class VoiceTasks {
     } catch (error) {
       return { result: this.failed("start_task", error) };
     }
-    const selection = chooseModel(config, project, text(input?.agent), text(input?.model));
+    const selection = chooseModel(
+      config,
+      project,
+      nonEmptyText(input?.agent),
+      nonEmptyText(input?.model),
+    );
     if (selection.kind !== "found") return { result: selection.result };
 
     const place = await this.chooseWorkspace(shell, project, workspace === "new_worktree");
     if (place.kind === "error") return { result: place.result };
 
+    const inFolder = place.workspace.type === "project_folder";
     let threadId: string;
     try {
       ({ threadId } = await this.options.backend.launchThread({
@@ -106,16 +121,25 @@ export class VoiceTasks {
         workspace: place.workspace,
       }));
     } catch (error) {
+      if (inFolder) this.folderLaunches.delete(project.id);
       return { result: this.failed("start_task", error) };
     }
+    if (inFolder) this.folderLaunches.set(project.id, { threadId, at: this.options.clock.now() });
     // Chosen with no wait before it is stored, so two starts never take the same name.
     const spokenName = chooseSpokenName({
-      proposed: text(input?.spoken_name),
+      proposed: nonEmptyText(input?.spoken_name),
       source: prompt,
       project: project.title,
-      taken: this.options.registry.followedTasks().map((task) => task.spokenName),
+      taken: this.takenNames(),
     });
-    this.follow({ threadId, projectId: project.id, spokenName, origin: "voice" });
+    try {
+      this.follow({ threadId, projectId: project.id, spokenName, origin: "voice" });
+    } catch (error) {
+      // An agent nobody follows and nobody can cancel must not keep running.
+      this.options.log(`t3-voice: could not follow a voice task (${errorKind(error)}).`);
+      await this.cancelStart(threadId, spokenName);
+      return { result: { error: "internal_error" } };
+    }
     this.options.log(`t3-voice: started a voice task in project ${project.id}.`);
 
     return {
@@ -134,8 +158,8 @@ export class VoiceTasks {
 
   async sendMessage(args: unknown): Promise<ToolOutcome> {
     const input = args as Record<string, unknown> | null;
-    const reference = text(input?.task);
-    const message = text(input?.message);
+    const reference = nonEmptyText(input?.task);
+    const message = nonEmptyText(input?.message);
     const mode = input?.mode ?? "queue";
     if (reference === null || message === null || !(mode === "queue" || mode === "steer")) {
       return { result: { error: "invalid_arguments" } };
@@ -147,8 +171,8 @@ export class VoiceTasks {
     const task = match.task;
 
     const thread = shell.threads.get(task.threadId);
-    // Queued on an idle thread, the message starts a new run at once.
-    const wasRunning = thread !== undefined && isRunning(thread);
+    // On a thread with no run, the message starts a new run at once instead of waiting.
+    const wasRunning = thread !== undefined && hasLiveRun(thread);
     const commandId = this.options.newId();
     const messageId = this.options.newId();
     try {
@@ -170,7 +194,7 @@ export class VoiceTasks {
 
   followThread(args: unknown): ToolResult {
     const input = args as Record<string, unknown> | null;
-    const reference = text(input?.task);
+    const reference = nonEmptyText(input?.task);
     if (reference === null || !optionalText(input?.spoken_name)) {
       return { error: "invalid_arguments" };
     }
@@ -181,10 +205,7 @@ export class VoiceTasks {
     if (followed.kind === "found") {
       return { status: "already_followed", task: followed.task.spokenName };
     }
-    const threads = [...shell.threads.values()]
-      .filter((thread) => !thread.archived && !thread.isSubagent)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const match = findByName(reference, threads, (thread) => thread.title);
+    const match = findByName(reference, shell.topLevelThreads(), (thread) => thread.title);
     if (match.kind === "none") return { error: "unknown_task" };
     if (match.kind === "ambiguous") {
       return { status: "ambiguous_task", choices: match.items.map((thread) => thread.title) };
@@ -197,10 +218,10 @@ export class VoiceTasks {
 
     const projectTitle = shell.projects.get(thread.projectId)?.title ?? "";
     const spokenName = chooseSpokenName({
-      proposed: text(input?.spoken_name),
+      proposed: nonEmptyText(input?.spoken_name),
       source: thread.title,
       project: projectTitle,
-      taken: this.options.registry.followedTasks().map((task) => task.spokenName),
+      taken: this.takenNames(),
     });
     this.follow({
       threadId: thread.id,
@@ -212,7 +233,7 @@ export class VoiceTasks {
   }
 
   unfollowThread(args: unknown): ToolResult {
-    const reference = text((args as Record<string, unknown> | null)?.task);
+    const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
     if (reference === null) return { error: "invalid_arguments" };
     const match = this.findFollowed(reference);
     if (match.kind !== "found") return match.result;
@@ -268,17 +289,24 @@ export class VoiceTasks {
     project: Project,
     worktreeAsked: boolean,
   ): Promise<{ kind: "ok"; workspace: LaunchWorkspace } | { kind: "error"; result: ToolResult }> {
-    const folderBusy = [...shell.threads.values()].some(
-      (thread) =>
-        thread.projectId === project.id &&
-        thread.worktreePath === null &&
-        !thread.archived &&
-        !thread.isSubagent &&
-        isRunning(thread),
-    );
-    const projectFolder = { kind: "ok" as const, workspace: { type: "project_folder" as const } };
-    if (!(worktreeAsked || folderBusy || project.newThreadWorkspace === "worktree")) {
-      return projectFolder;
+    const claim = this.folderLaunches.get(project.id);
+    if (
+      claim !== undefined &&
+      ((claim.threadId !== null && shell.threads.has(claim.threadId)) ||
+        this.options.clock.now() - claim.at > FOLDER_CLAIM_MS)
+    ) {
+      this.folderLaunches.delete(project.id);
+    }
+    const folderBusy =
+      this.folderLaunches.has(project.id) ||
+      shell
+        .topLevelThreads()
+        .some(
+          (thread) =>
+            thread.projectId === project.id && thread.worktreePath === null && isRunning(thread),
+        );
+    if (!(worktreeAsked || folderBusy || project.newThreadWorkspace === "new_worktree")) {
+      return this.claimFolder(shell, project, worktreeAsked);
     }
     let baseBranch: string | null;
     try {
@@ -290,16 +318,43 @@ export class VoiceTasks {
     if (baseBranch !== null) {
       return { kind: "ok", workspace: { type: "new_worktree", baseBranch } };
     }
+    if (worktreeAsked) return { kind: "error", result: { error: "worktree_unavailable" } };
     // No worktree without git. Sharing a busy folder needs a spoken "oui" (ticket #21).
     if (folderBusy) return { kind: "error", result: { error: "project_busy_not_git" } };
-    return projectFolder;
+    return this.claimFolder(shell, project, worktreeAsked);
   }
 
+  /**
+   * Reserves the project folder for this start, with no wait between the check and the
+   * reservation. A start that claimed it first makes the folder busy: choose again.
+   */
+  private claimFolder(
+    shell: ShellState,
+    project: Project,
+    worktreeAsked: boolean,
+  ): Promise<{ kind: "ok"; workspace: LaunchWorkspace } | { kind: "error"; result: ToolResult }> {
+    if (this.folderLaunches.has(project.id)) {
+      return this.chooseWorkspace(shell, project, worktreeAsked);
+    }
+    this.folderLaunches.set(project.id, { threadId: null, at: this.options.clock.now() });
+    return Promise.resolve({ kind: "ok", workspace: { type: "project_folder" } });
+  }
+
+  /** By spoken name; when no name fits, by spoken name and project title together. */
   private findFollowed(
     reference: string,
   ): { kind: "found"; task: FollowedTask } | { kind: "other"; result: ToolResult } {
     const tasks = this.options.registry.followedTasks();
-    const match = findByName(reference, tasks, (task) => task.spokenName);
+    const projects = this.options.shell()?.projects;
+    const byName = findByName(reference, tasks, (task) => task.spokenName);
+    const match =
+      byName.kind === "none"
+        ? findByName(
+            reference,
+            tasks,
+            (task) => `${task.spokenName} ${projects?.get(task.projectId)?.title ?? ""}`,
+          )
+        : byName;
     if (match.kind === "found") return { kind: "found", task: match.item };
     if (match.kind === "ambiguous") {
       return {
@@ -311,6 +366,10 @@ export class VoiceTasks {
       kind: "other",
       result: { error: "unknown_task", followed: tasks.map((task) => task.spokenName) },
     };
+  }
+
+  private takenNames(): string[] {
+    return this.options.registry.followedTasks().map((task) => task.spokenName);
   }
 
   private follow(task: Pick<FollowedTask, "threadId" | "projectId" | "spokenName" | "origin">) {
@@ -325,8 +384,7 @@ export class VoiceTasks {
 
   private failed(tool: string, error: unknown): ToolResult {
     // The error's message could quote the request: only its kind is logged.
-    const kind = error instanceof Error ? error.name : "unknown error";
-    this.options.log(`t3-voice: T3 refused ${tool} (${kind}).`);
+    this.options.log(`t3-voice: T3 refused ${tool} (${errorKind(error)}).`);
     return { error: "t3_failed" };
   }
 }
@@ -375,7 +433,29 @@ function chooseModel(
   const defaults = [project.defaultModel, config.defaultModel].filter(
     (selection): selection is ModelSelection => selection !== null,
   );
+  const usedByDefaults = (candidate: Provider) =>
+    defaults.some((selection) => selection.providerInstanceId === candidate.instanceId);
   let provider: Provider | undefined;
+  if (agentName === null && modelName !== null) {
+    // A model named alone tells the agent: "Sonnet" is a Claude model.
+    const offers = providers.flatMap((each) =>
+      each.models.map((model) => ({ provider: each, model })),
+    );
+    const match = findByName(modelName, offers, ({ model }) => `${model.name} ${model.slug}`);
+    const offer =
+      match.kind === "found"
+        ? match.item
+        : match.kind === "ambiguous"
+          ? (match.items.find((each) => usedByDefaults(each.provider)) ?? match.items[0])
+          : undefined;
+    if (offer !== undefined) {
+      return {
+        kind: "found",
+        provider: offer.provider,
+        model: { providerInstanceId: offer.provider.instanceId, model: offer.model.slug },
+      };
+    }
+  }
   if (agentName === null) {
     provider = defaults
       .map((selection) =>
@@ -394,9 +474,7 @@ function chooseModel(
       match.kind === "found"
         ? match.item
         : match.kind === "ambiguous"
-          ? (match.items.find((candidate) =>
-              defaults.some((selection) => selection.providerInstanceId === candidate.instanceId),
-            ) ?? match.items[0])
+          ? (match.items.find(usedByDefaults) ?? match.items[0])
           : undefined;
   }
   if (provider === undefined) {
@@ -444,8 +522,13 @@ function folderOf(project: Project): string {
   return project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
 }
 
+/** The error's class name: its message could quote the user's request. */
+export function errorKind(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown error";
+}
+
 /** A non-empty string, trimmed, or null. */
-function text(value: unknown): string | null {
+function nonEmptyText(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 

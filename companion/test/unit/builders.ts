@@ -9,7 +9,7 @@ export function project(id: string, title = id, fields: Partial<Project> = {}): 
     id,
     title,
     workspaceRoot: `/home/me/${title}`,
-    newThreadWorkspace: "local",
+    newThreadWorkspace: "project_folder",
     defaultModel: null,
     ...fields,
   };

@@ -29,8 +29,8 @@ import {
   RpcError,
 } from "./rpcConnection.ts";
 import {
-  activeRunOf,
   queuedRunOf,
+  runsToStop,
   toConfig,
   toLaunchThreadInput,
   toMessageDispatch,
@@ -172,10 +172,21 @@ export class WebSocketT3Backend implements T3Backend {
   }
 
   async stopThread(commandId: string, threadId: string): Promise<void> {
-    // T3 0.1.0 has no `thread.stop` command: interrupt the active run, which both versions know.
-    const runId = activeRunOf(await this.projection(threadId));
-    if (runId === null) return;
-    await this.dispatch({ type: "run.interrupt", commandId, threadId, runId });
+    // T3 0.1.0 has no `thread.stop` command: interrupt the active run and cancel the
+    // queued ones, which both versions know. Each command gets its own id, derived from
+    // `commandId` so that a retry sends the same ones.
+    const { active, queued } = runsToStop(await this.projection(threadId));
+    for (const runId of queued) {
+      await this.dispatch({
+        type: "queued-run.cancel",
+        commandId: `${commandId}:${runId}`,
+        threadId,
+        runId,
+      });
+    }
+    if (active !== null) {
+      await this.dispatch({ type: "run.interrupt", commandId, threadId, runId: active });
+    }
   }
 
   async archiveThread(commandId: string, threadId: string): Promise<void> {
@@ -222,15 +233,17 @@ export class WebSocketT3Backend implements T3Backend {
   }
 
   /**
-   * A command carrying a `commandId`. When the socket drops before T3 answers, the
-   * command may or may not have run: it is sent once more on a new socket with the same
-   * id, which T3 runs at most once.
+   * A command carrying a `commandId`. When the socket drops or T3 does not answer in time,
+   * the command may or may not have run: it is sent once more with the same id, which T3
+   * runs at most once.
    */
   private async command(tag: string, payload: unknown, what: string): Promise<WireJson> {
     try {
       return await this.call(tag, payload, what);
     } catch (error) {
-      if (!(error instanceof ConnectionClosedError)) throw error;
+      if (!(error instanceof ConnectionClosedError || error instanceof AnswerTimeoutError)) {
+        throw error;
+      }
       return this.call(tag, payload, what);
     }
   }
@@ -389,12 +402,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms).unref());
 }
 
+class AnswerTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnswerTimeoutError";
+  }
+}
+
 /** Rejects when T3 has not answered in time, after calling `onTimeout` to clean up. */
 function withTimeout<T>(answer: Promise<T>, what: string, onTimeout = () => {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       onTimeout();
-      reject(new Error(`T3 did not send ${what} in time.`));
+      reject(new AnswerTimeoutError(`T3 did not send ${what} in time.`));
     }, ANSWER_TIMEOUT_MS);
     answer.then(
       (value) => {

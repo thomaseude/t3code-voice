@@ -13,7 +13,7 @@ import { allActivity, finishedSince24Hours } from "./activity.ts";
 import { randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
-import type { ToolOutcome, Undo, VoiceTasks } from "./voiceTasks.ts";
+import { errorKind, type ToolOutcome, type Undo, type VoiceTasks } from "./voiceTasks.ts";
 
 export interface VoiceSessionManagerOptions {
   /** Null when no engine is configured (no OpenAI key): every open answers "unavailable". */
@@ -225,8 +225,7 @@ export class VoiceSessionManager implements VoiceSessions {
       result = await this.runTool(session, name, args);
     } catch (error) {
       // The model must get an answer, or it waits for one.
-      const kind = error instanceof Error ? error.name : "unknown error";
-      this.options.log(`t3-voice: tool ${name} failed (${kind}).`);
+      this.options.log(`t3-voice: tool ${name} failed (${errorKind(error)}).`);
       result = { error: "internal_error" };
     }
     session.engineSession.resolveToolCall(callId, result);
@@ -246,11 +245,14 @@ export class VoiceSessionManager implements VoiceSessions {
         return tasks.unfollowThread(args);
       case "cancel_last_action": {
         const last = session.lastAction;
-        session.lastAction = undefined;
         if (last === undefined || this.options.clock.now() > last.until) {
           return { error: "nothing_to_cancel" };
         }
-        return last.undo();
+        session.lastAction = undefined;
+        const result = await last.undo();
+        // A failed undo can be asked again: each step is safe to send twice.
+        if ("error" in result && session.lastAction === undefined) session.lastAction = last;
+        return result;
       }
       case "list_projects":
       case "get_activity":
@@ -269,14 +271,15 @@ export class VoiceSessionManager implements VoiceSessions {
     }
   }
 
-  /** Keeps the undo of a start or a message, which the next one replaces. */
+  /**
+   * Keeps the undo of a start or a message. Every start or message replaces the one before,
+   * also one that did nothing: "non, arrête" never reaches past it.
+   */
   private remember(session: ActiveSession, outcome: ToolOutcome): unknown {
-    if (outcome.undo !== undefined) {
-      session.lastAction = {
-        undo: outcome.undo,
-        until: this.options.clock.now() + CANCEL_WINDOW_MS,
-      };
-    }
+    session.lastAction =
+      outcome.undo === undefined
+        ? undefined
+        : { undo: outcome.undo, until: this.options.clock.now() + CANCEL_WINDOW_MS };
     return outcome.result;
   }
 

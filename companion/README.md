@@ -79,19 +79,23 @@ During a session the companion answers the voice model's tools from T3's state:
 - `get_activity` with `scope` `running`, `today` (the device's calendar day) or `finished`
   (the last 24 hours): the 10 latest tasks and the `total`;
 - `start_task` starts a T3 thread at once and follows it under a short French spoken name
-  (2 to 4 words, unique among followed tasks, never changed). It uses the agent and model
+  (2 to 4 words, unique among followed tasks, never changed). When a name is taken, the
+  project's name, then a number, is added to it. It uses the agent and model
   the user named, else the project's default, else T3's, and T3's default runtime mode.
   The agent works in a new worktree when the project is set to `worktree` in T3, when the
   project's folder already has a running agent, or when the user asks for one. The
   worktree starts from the repository's main branch (the one `origin/HEAD` names), fetched
   from origin. A busy project that is not a git repository starts nothing
-  (`project_busy_not_git`). Several projects with the title the user said start nothing:
+  (`project_busy_not_git`); neither does a new worktree asked for in a repository with no
+  branch (`worktree_unavailable`). Several projects with the title the user said start nothing:
   the answer lists their folder names, and the model calls again with `folder`;
-- `send_message` sends a follow-up to a followed task, in its thread: `queue` (default)
+- `send_message` sends a follow-up to a followed task, in its thread. A task is named by
+  its spoken name, or by its spoken name and project ("tests Reviews de joombo"): `queue` (default)
   after the agent's current turn, `steer` into it;
 - `cancel_last_action` undoes the last start or message, within 60 s ("non, arrête"): a
-  started thread is interrupted and archived, a waiting message is taken back from the
-  queue, a message that started an idle thread interrupts its run. A steered message, or
+  started thread is stopped (its run interrupted, its queued runs cancelled) and archived,
+  a waiting message is taken back from the queue, a message that started an idle thread
+  interrupts its run. An undo that failed can be asked again within the 60 s. A steered message, or
   one the agent already took, answers `too_late`;
 - `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
   a task by its spoken name;

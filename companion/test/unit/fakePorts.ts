@@ -96,8 +96,10 @@ export class FakeT3Backend implements T3Backend {
   /** By folder; a folder not listed is a git repository whose default branch is "main". */
   readonly repositories = new Map<string, RepositoryInfo>();
   readonly commands: T3Command[] = [];
-  /** Makes the next command fail, like T3 refusing it. */
-  failNextCommand = false;
+  /** Makes the next command (or the next one of this type) fail, like T3 refusing it. */
+  failNextCommand: boolean | T3Command["type"] = false;
+  /** While set, launchThread waits for it, like a T3 slow to answer. */
+  launchGate: Promise<void> | null = null;
   /** What cancelQueuedMessage answers: false once the agent has the message. */
   messageStillQueued = true;
   closed = false;
@@ -116,6 +118,7 @@ export class FakeT3Backend implements T3Backend {
     return this.repositories.get(path) ?? { isGitRepository: true, defaultBranch: "main" };
   }
   async launchThread(request: LaunchThreadRequest) {
+    if (this.launchGate !== null) await this.launchGate;
     this.record({ type: "launch", ...request });
     this.launched++;
     return { threadId: `launched-${this.launched}` };
@@ -134,7 +137,7 @@ export class FakeT3Backend implements T3Backend {
     this.record({ type: "archive", commandId, threadId });
   }
   private record(command: T3Command) {
-    if (this.failNextCommand) {
+    if (this.failNextCommand === true || this.failNextCommand === command.type) {
       this.failNextCommand = false;
       throw new Error("T3 refused the command.");
     }
@@ -284,11 +287,17 @@ export class FakeVoiceEngine implements VoiceEngine {
 /** Like the SQLite registry, without the file: a thread or a name is followed once. */
 export class InMemoryTaskRegistry implements TaskRegistry {
   tasks: FollowedTask[] = [];
+  /** Makes the next follow() fail, like a database that cannot be written. */
+  failNextFollow = false;
 
   followedTasks() {
     return [...this.tasks];
   }
   follow(task: FollowedTask) {
+    if (this.failNextFollow) {
+      this.failNextFollow = false;
+      throw new Error("The database is locked.");
+    }
     if (this.tasks.some((other) => other.threadId === task.threadId)) {
       throw new Error("The thread is already followed.");
     }

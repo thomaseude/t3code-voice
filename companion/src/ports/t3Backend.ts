@@ -8,10 +8,10 @@ export interface Project {
   title: string;
   workspaceRoot: string;
   /**
-   * The project's T3 setting for new threads: "worktree" gives each one a new worktree,
-   * "local" runs it in the project folder. Null when T3 did not say.
+   * Where the project's T3 setting puts new threads: each in a new worktree, or in the
+   * project folder. Null when T3 did not say.
    */
-  newThreadWorkspace: "local" | "worktree" | null;
+  newThreadWorkspace: LaunchWorkspace["type"] | null;
   /** The agent and model T3 picks for the project's new threads, or null for T3's default. */
   defaultModel: ModelSelection | null;
 }
