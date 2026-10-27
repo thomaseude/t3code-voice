@@ -228,7 +228,7 @@ export class WebSocketT3Backend implements T3Backend {
     return this.call(METHODS.getThreadProjection, { threadId }, "the thread's runs");
   }
 
-  /** One request that reads only: no retry needed beyond the caller's. */
+  /** One request, sent once. Commands go through `command`, which can send it again. */
   private async call(tag: string, payload: unknown, what: string): Promise<WireJson> {
     const connection = await this.connection();
     return withTimeout(connection.request(tag, payload), what);

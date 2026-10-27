@@ -42,7 +42,7 @@ export class FolderClaims {
     this.claims.set(projectId, { threadId: null, launchedAt: null });
   }
 
-  /** T3 started the thread: the claim lasts until the shell shows it. */
+  /** T3 started the thread: the claim lasts until the shell shows it, 30 s at most. */
   launched(projectId: string, threadId: string): void {
     this.claims.set(projectId, { threadId, launchedAt: this.clock.now() });
   }

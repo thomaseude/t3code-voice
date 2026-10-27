@@ -121,7 +121,7 @@ export class VoiceTasks {
       return { result: this.failed("start_task", error) };
     }
     if (inFolder) this.folderClaims.launched(project.id, threadId);
-    // Chosen with no wait before it is stored, so two starts never take the same name.
+    // Chosen right before it is stored, with no await between, so two starts never take the same name.
     const spokenName = chooseSpokenName({
       proposed: nonEmptyText(input?.spoken_name),
       source: prompt,
@@ -362,7 +362,6 @@ export class VoiceTasks {
   }
 
   private failed(tool: string, error: unknown): ToolResult {
-    // The error's message could quote the request: only its kind is logged.
     this.options.log(`t3-voice: T3 refused ${tool} (${errorKind(error)}).`);
     return { error: "t3_failed" };
   }

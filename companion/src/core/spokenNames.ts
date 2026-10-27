@@ -34,7 +34,7 @@ const STOP_WORDS = new Set([
 
 const MIN_WORDS = 2;
 const MAX_WORDS = 4;
-/** Words a name made from the request keeps. */
+/** How many words a name made from the request keeps. */
 const FALLBACK_WORDS = 3;
 
 export interface SpokenNameRequest {
@@ -115,7 +115,7 @@ function nameFrom(source: string, project: string): string {
     .slice(0, FALLBACK_WORDS);
   const [first, ...rest] = words;
   if (first === undefined) return `tâche ${project}`;
-  // Only the request's first word is capitalized for being first: lower it.
+  // The request's first word has a capital only because it starts the sentence: lower it.
   const named = [/^\p{Lu}\p{Ll}*$/u.test(first) ? first.toLowerCase() : first, ...rest];
   return named.length >= MIN_WORDS ? named.join(" ") : `${named.join(" ")} ${project}`;
 }
