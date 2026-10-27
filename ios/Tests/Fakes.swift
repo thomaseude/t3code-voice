@@ -59,6 +59,7 @@ final class FakeVoiceCall: VoiceCall {
     var acceptError: Error?
     private(set) var acceptedAnswer: String?
     private(set) var hungUp = false
+    private(set) var muted = false
     private var onEvent: (@MainActor (VoiceCallEvent) async -> Void)?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
@@ -74,6 +75,10 @@ final class FakeVoiceCall: VoiceCall {
 
     func hangUp() {
         hungUp = true
+    }
+
+    func setMuted(_ muted: Bool) {
+        self.muted = muted
     }
 
     /// What the data channel or the peer connection reports.

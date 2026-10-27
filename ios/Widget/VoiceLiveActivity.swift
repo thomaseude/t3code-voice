@@ -3,13 +3,13 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// The lock screen and Dynamic Island while a conversation runs: the microphone is on, its
-/// status, how long it has run, and the End button.
+/// The lock screen and Dynamic Island while a conversation runs: the microphone is on or
+/// muted, its status, how long it has run, and the Mute/Unmute and End buttons.
 struct VoiceLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VoiceActivityAttributes.self) { context in
             HStack(spacing: 12) {
-                RecordingIndicator()
+                RecordingIndicator(muted: context.state.muted)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("T3 Voice").bold()
                     Text(context.state.status).font(.caption).foregroundStyle(.secondary)
@@ -18,36 +18,54 @@ struct VoiceLiveActivity: Widget {
                 Text(context.attributes.startedAt, style: .timer)
                     .monospacedDigit()
                     .frame(maxWidth: 60)
+                MuteButton(muted: context.state.muted)
                 EndButton()
             }
             .padding()
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    RecordingIndicator()
+                    RecordingIndicator(muted: context.state.muted)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.status)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    EndButton()
+                    HStack {
+                        MuteButton(muted: context.state.muted)
+                        EndButton()
+                    }
                 }
             } compactLeading: {
-                RecordingIndicator()
+                RecordingIndicator(muted: context.state.muted)
             } compactTrailing: {
                 Text(context.attributes.startedAt, style: .timer)
                     .monospacedDigit()
                     .frame(maxWidth: 44)
             } minimal: {
-                RecordingIndicator()
+                RecordingIndicator(muted: context.state.muted)
             }
         }
     }
 }
 
 private struct RecordingIndicator: View {
+    let muted: Bool
+
     var body: some View {
-        Image(systemName: "mic.fill").foregroundStyle(.red)
+        Image(systemName: muted ? "mic.slash.fill" : "mic.fill")
+            .foregroundStyle(muted ? Color.secondary : Color.red)
+    }
+}
+
+private struct MuteButton: View {
+    let muted: Bool
+
+    var body: some View {
+        Button(intent: MuteSessionIntent()) {
+            Image(systemName: muted ? "mic.fill" : "mic.slash.fill")
+                .accessibilityLabel(muted ? "Rétablir le micro" : "Couper le micro")
+        }
     }
 }
 

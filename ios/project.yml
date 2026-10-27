@@ -47,8 +47,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.joombo.t3voice
-  # The Live Activity (lock screen and Dynamic Island) with its End button, and the
-  # Control Center control.
+  # The Live Activity (lock screen and Dynamic Island) with its Mute and End buttons, and
+  # the Control Center control.
   T3VoiceWidget:
     type: app-extension
     platform: iOS
