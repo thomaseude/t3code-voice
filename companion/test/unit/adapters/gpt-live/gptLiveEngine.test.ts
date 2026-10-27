@@ -213,12 +213,14 @@ describe("speaking and closing", () => {
     assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
   });
 
-  test("close gives up waiting after 5 seconds and drops the channel", async () => {
+  test("close gives up waiting 20 seconds after it was asked, and drops the channel", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
 
     const closing = session.close();
-    clock.advance(5_000);
+    clock.advance(19_999);
+    assert.deepEqual(events, []);
+    clock.advance(1);
     await closing;
 
     assert.equal(transport.socket.closed, true);
@@ -304,7 +306,7 @@ describe("when the control channel drops", () => {
     assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
   });
 
-  test("a close asked while the channel is down waits for a usable channel, not 5 s", async () => {
+  test("a close asked while the channel is down is sent once a channel is usable", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
     transport.attachFailures = 1;
@@ -315,14 +317,70 @@ describe("when the control channel drops", () => {
     await settle();
     clock.advance(2_000);
     await settle();
+    assert.deepEqual(transport.socket.sentTypes(), []);
     clock.advance(10_000);
-    clock.advance(4_000);
-    assert.deepEqual(events, []);
 
     assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
     transport.socket.receive({ type: "session.closed" });
     await closing;
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+
+  test("a close lost with a dying channel is sent again on the next usable one", async () => {
+    const { transport, clock, open } = setup();
+    const session = await open();
+
+    const closing = session.close();
+    const first = transport.socket;
+    first.drop();
+    clock.advance(1_000);
+    await settle();
+    clock.advance(10_000);
+
+    assert.deepEqual(first.sentTypes(), ["session.close"]);
+    assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
+    transport.socket.receive({ type: "session.closed" });
+    await closing;
+  });
+
+  test("a channel that keeps flapping cannot hold a close past 20 seconds", async () => {
+    const { transport, clock, events, open } = setup();
+    const session = await open();
+
+    const closing = session.close();
+    // Each new channel lives 11 s: long enough to be usable, too short to close.
+    for (let flap = 0; flap < 2; flap++) {
+      transport.socket.drop();
+      clock.advance(1_000);
+      await settle();
+      clock.advance(10_000);
+    }
+    await closing;
+
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+
+  test("queued events go out before the close, with 5 s for the model to speak them", async () => {
+    const { transport, clock, open } = setup();
+    const session = await open();
+    transport.socket.receive(functionCall("call_1", "end_session", "{}"));
+    transport.socket.drop();
+    session.resolveToolCall("call_1", { status: "ending" });
+    void session.close();
+
+    clock.advance(1_000);
+    await settle();
+    clock.advance(10_000);
+    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
+    clock.advance(4_999);
+    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
+    clock.advance(1);
+
+    assert.deepEqual(transport.socket.sentTypes(), [
+      "response.item.create",
+      "response.create",
+      "session.close",
+    ]);
   });
 
   test("channels that drop within 10 s count as failed attaches, even if they sent an event", async () => {

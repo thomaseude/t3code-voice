@@ -109,8 +109,13 @@ export class GptLiveEngine implements VoiceEngine {
   }
 }
 
-/** How long close() waits for OpenAI's `session.closed` before it drops the channel. */
-const CLOSE_TIMEOUT_MS = 5_000;
+/**
+ * How long close() waits for OpenAI's `session.closed` before it drops the channel, counted
+ * from the close, whatever the channel does meanwhile.
+ */
+const CLOSE_DEADLINE_MS = 20_000;
+/** A close that follows queued events waits this long, so the model can speak them first. */
+const CLOSE_AFTER_QUEUED_MS = 5_000;
 /**
  * Waits before each new attach when the control channel drops. Only the companion's channel
  * dropped: the phone's call goes on, and only this channel can still close it.
@@ -145,7 +150,8 @@ class LiveSession implements VoiceSession {
   private ended = false;
   private closing: Promise<void> | null = null;
   private resolveClosing: () => void = () => {};
-  private cancelCloseTimeout: (() => void) | null = null;
+  private cancelCloseDeadline: () => void = () => {};
+  private cancelDelayedClose: () => void = () => {};
   private cancelReattach: () => void = () => {};
   /** Attaches tried since the last usable channel. */
   private reattaches = 0;
@@ -176,8 +182,7 @@ class LiveSession implements VoiceSession {
       this.socket = null;
       this.usable = false;
       this.cancelUsable();
-      this.cancelCloseTimeout?.();
-      this.cancelCloseTimeout = null;
+      this.cancelDelayedClose();
       this.reattach();
     });
     if (usableAfterMs === 0) this.becomeUsable();
@@ -187,8 +192,13 @@ class LiveSession implements VoiceSession {
   private becomeUsable() {
     this.usable = true;
     this.reattaches = 0;
-    for (const text of this.unsent.splice(0)) this.socket?.send(text);
-    if (this.closing !== null) this.startCloseTimeout();
+    const queued = this.unsent.splice(0);
+    for (const text of queued) this.socket?.send(text);
+    // The close is sent again on every usable channel: one sent on a dying channel is lost.
+    if (this.closing === null) return;
+    if (queued.length === 0) this.sendClose();
+    else
+      this.cancelDelayedClose = this.clock.schedule(CLOSE_AFTER_QUEUED_MS, () => this.sendClose());
   }
 
   private reattach() {
@@ -231,22 +241,24 @@ class LiveSession implements VoiceSession {
       this.closing = new Promise((resolve) => {
         this.resolveClosing = resolve;
       });
-      // OpenAI sends its final `session.closed` (with usage) before it lets go.
-      this.send({ type: "session.close" });
+      this.cancelCloseDeadline = this.clock.schedule(CLOSE_DEADLINE_MS, () => this.end("closed"));
       // Without a usable channel, the close waits for one: only it can stop billing.
-      if (this.usable) this.startCloseTimeout();
+      if (this.usable) this.sendClose();
     }
     return this.closing;
   }
 
-  private startCloseTimeout() {
-    this.cancelCloseTimeout ??= this.clock.schedule(CLOSE_TIMEOUT_MS, () => this.end("closed"));
+  /** OpenAI sends its final `session.closed` (with usage) before it lets go. Never queued. */
+  private sendClose() {
+    if (!this.usable || this.socket === null) return;
+    this.socket.send(JSON.stringify({ type: "session.close", event_id: this.eventId() }));
   }
 
   private end(reason: "closed" | "failed") {
     if (this.ended) return;
     this.ended = true;
-    this.cancelCloseTimeout?.();
+    this.cancelCloseDeadline();
+    this.cancelDelayedClose();
     this.cancelUsable();
     this.cancelReattach();
     const socket = this.socket;
@@ -258,9 +270,13 @@ class LiveSession implements VoiceSession {
 
   private send(event: WireJson) {
     if (this.ended) return;
-    const text = JSON.stringify({ ...event, event_id: `t3voice_${this.nextEventId++}` });
+    const text = JSON.stringify({ ...event, event_id: this.eventId() });
     if (this.usable && this.socket !== null) this.socket.send(text);
     else this.unsent.push(text);
+  }
+
+  private eventId(): string {
+    return `t3voice_${this.nextEventId++}`;
   }
 
   private receive(text: string) {
