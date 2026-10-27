@@ -126,9 +126,9 @@ final class VoiceSessionController: ObservableObject {
     /// The IANA zone the companion uses for "today".
     private let timeZone: String
 
-    /// The call of the current session, and its id on the companion once it answered.
+    /// The call of the current session, and the session on the companion once it answered.
     private var call: VoiceCall?
-    private var sessionId: String?
+    private var session: OpenedSession?
 
     init(
         client: CompanionClient,
@@ -165,10 +165,10 @@ final class VoiceSessionController: ObservableObject {
             let session = try await client.openSession(offer: offer, timeZone: timeZone)
             guard isCurrent(call) else {
                 // Ended while the companion opened it: close it there too.
-                try? await client.closeSession(id: session.id)
+                try? await client.closeSession(session)
                 return
             }
-            sessionId = session.id
+            self.session = session
             try await call.accept(answer: session.answer)
         } catch {
             // Once ended, `finish` already closed what it could.
@@ -208,10 +208,10 @@ final class VoiceSessionController: ObservableObject {
         show(.ending(reason))
         call?.hangUp()
         call = nil
-        let id = sessionId
-        sessionId = nil
+        let session = self.session
+        self.session = nil
         // After `session.closed` the companion has nothing left to close.
-        if let id, reason != .voice { try? await client.closeSession(id: id) }
+        if let session, reason != .voice { try? await client.closeSession(session) }
         show(.idle)
     }
 

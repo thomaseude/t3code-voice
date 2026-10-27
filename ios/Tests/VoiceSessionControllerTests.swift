@@ -14,6 +14,7 @@ final class VoiceSessionControllerTests: XCTestCase {
     private let opened = response(201, json: #"{"sessionId":"s1","sdp":"v=0 answer"}"#)
 
     private var transport: FakeTransport!
+    private var store: InMemoryConnectionStore!
     private var authenticator: FakeAuthenticator!
     private var calls: [FakeVoiceCall] = []
     private var feedback: FakeFeedback!
@@ -21,6 +22,7 @@ final class VoiceSessionControllerTests: XCTestCase {
 
     override func setUp() async throws {
         transport = FakeTransport()
+        store = InMemoryConnectionStore(paired)
         authenticator = FakeAuthenticator()
         calls = []
         feedback = FakeFeedback()
@@ -209,6 +211,24 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertTrue(transport.requests.isEmpty)
     }
 
+    func testForgettingTheCompanionWhileItOpensTheSessionStillClosesIt() async throws {
+        // "Oublier" ends the session, then deletes the token before the companion answered.
+        let transport = transport!, controller = controller!, store = store!
+        transport.responses = [opened, response(204)]
+        transport.whileWaiting = { [unowned transport] in
+            transport.whileWaiting = nil
+            await controller.end()
+            store.connection = nil
+        }
+
+        await controller.start()
+
+        let delete = try XCTUnwrap(transport.requests.last)
+        XCTAssertEqual(delete.httpMethod, "DELETE")
+        XCTAssertEqual(delete.url, URL(string: "https://voice.example.com/sessions/s1"))
+        XCTAssertEqual(delete.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+    }
+
     func testEventsFromAnEndedCallAreIgnored() async {
         await startLiveSession()
         await controller.end()
@@ -226,7 +246,7 @@ final class VoiceSessionControllerTests: XCTestCase {
 
     private func makeController(callStartError: Error? = nil, acceptError: Error? = nil) -> VoiceSessionController {
         VoiceSessionController(
-            client: CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)),
+            client: CompanionClient(transport: transport, store: store),
             authenticator: authenticator,
             makeCall: { [unowned self] in
                 let call = FakeVoiceCall()

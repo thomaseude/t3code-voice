@@ -62,7 +62,7 @@ struct CompanionClient {
     }
 
     func activity() async throws -> Activity {
-        let response = try await sendWithToken(method: "GET", path: "activity")
+        let response = try await sendWithToken(method: "GET", path: "activity", connection: storedConnection())
         switch response.status {
         case 200:
             return try JSONDecoder().decode(Activity.self, from: response.body)
@@ -76,12 +76,13 @@ struct CompanionClient {
     /// Starts a voice conversation: the companion sends the offer to the voice engine and
     /// gives back its answer. It can take up to about 18 seconds.
     func openSession(offer: String, timeZone: String) async throws -> OpenedSession {
+        let connection = try storedConnection()
         let body = try JSONEncoder().encode(["sdp": offer, "timeZone": timeZone])
-        let response = try await sendWithToken(method: "POST", path: "sessions", body: body)
+        let response = try await sendWithToken(method: "POST", path: "sessions", body: body, connection: connection)
         switch response.status {
         case 201:
             let answer = try JSONDecoder().decode(SessionAnswer.self, from: response.body)
-            return OpenedSession(id: answer.sessionId, answer: answer.sdp)
+            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
         case 502:
             throw CompanionError.voiceEngineFailed
         case 503:
@@ -92,8 +93,14 @@ struct CompanionClient {
     }
 
     /// Ends the conversation on the companion. A session it no longer has is already ended.
-    func closeSession(id: String) async throws {
-        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(id)")
+    /// It uses the stored token of the same companion, which may be newer, and else the
+    /// connection that opened the session: "Oublier" deletes the token before the end.
+    func closeSession(_ session: OpenedSession) async throws {
+        var connection = session.connection
+        if let stored = try store.load(), stored.companionURL == connection.companionURL {
+            connection = stored
+        }
+        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: connection)
         switch response.status {
         case 204, 404:
             return
@@ -102,9 +109,18 @@ struct CompanionClient {
         }
     }
 
-    /// Sends a request with the device token, and stores the new token the companion may give.
-    private func sendWithToken(method: String, path: String, body: Data? = nil) async throws -> HTTPResponse {
+    private func storedConnection() throws -> CompanionConnection {
         guard let connection = try store.load() else { throw CompanionError.notPaired }
+        return connection
+    }
+
+    /// Sends a request with the device token, and stores the new token the companion may give.
+    private func sendWithToken(
+        method: String,
+        path: String,
+        body: Data? = nil,
+        connection: CompanionConnection
+    ) async throws -> HTTPResponse {
         var request = URLRequest(url: connection.companionURL.appending(path: path))
         request.httpMethod = method
         request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization")
@@ -147,10 +163,12 @@ private struct SessionAnswer: Decodable {
     let sdp: String
 }
 
-/// A voice conversation the companion opened: its id, and the voice engine's SDP answer.
+/// A voice conversation the companion opened: its id, the voice engine's SDP answer, and the
+/// connection that opened it.
 struct OpenedSession: Equatable {
     let id: String
     let answer: String
+    let connection: CompanionConnection
 }
 
 /// What T3 runs now and what finished in the last 24 hours (`GET /activity`).
