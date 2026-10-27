@@ -10,27 +10,24 @@ final class LiveActivityFeedback: SessionFeedback {
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
 
-    func show(_ state: VoiceSessionState) {
+    func show(_ state: SessionState) {
         switch state {
         case .idle:
             end()
         case .authenticating:
             break
         case .connecting:
-            start(status: "connexion…")
+            start(status: state.label ?? "")
         case .live:
             playStartSound()
-            update(status: "à l'écoute")
+            update(status: state.label ?? "")
         case .ending:
-            update(status: "fin…")
+            update(status: state.label ?? "")
         }
     }
 
     private func start(status: String) {
-        // One left over by a crash would show a session that no longer runs.
-        for stale in ActivityKit.Activity<VoiceActivityAttributes>.activities {
-            Task { await stale.end(nil, dismissalPolicy: .immediate) }
-        }
+        end()
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(status: status), staleDate: nil),
@@ -43,10 +40,13 @@ final class LiveActivityFeedback: SessionFeedback {
         Task { await activity.update(ActivityContent(state: .init(status: status), staleDate: nil)) }
     }
 
+    /// Ends every Live Activity of the app, also one left by a killed process: it would show
+    /// a microphone that no longer records.
     private func end() {
-        guard let activity else { return }
-        self.activity = nil
-        Task { await activity.end(nil, dismissalPolicy: .immediate) }
+        activity = nil
+        for leftover in ActivityKit.Activity<VoiceActivityAttributes>.activities {
+            Task { await leftover.end(nil, dismissalPolicy: .immediate) }
+        }
     }
 
     private func playStartSound() {

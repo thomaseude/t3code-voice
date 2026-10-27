@@ -21,7 +21,8 @@ struct T3VoiceApp: App {
     @StateObject private var model = AppModel(
         store: Services.store,
         transport: Services.transport,
-        modelName: UIDevice.current.model
+        modelName: UIDevice.current.model,
+        endSession: { await Services.session.end() }
     )
     @ObservedObject private var session = Services.session
 

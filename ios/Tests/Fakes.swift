@@ -87,9 +87,9 @@ final class FakeVoiceCall: VoiceCall {
 /// Records every state the user was shown (Live Activity, start sound, screen).
 @MainActor
 final class FakeFeedback: SessionFeedback {
-    private(set) var shown: [VoiceSessionState] = []
+    private(set) var shown: [SessionState] = []
 
-    func show(_ state: VoiceSessionState) {
+    func show(_ state: SessionState) {
         shown.append(state)
     }
 }

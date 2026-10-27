@@ -16,16 +16,22 @@ final class WebRTCCall: VoiceCall {
     /// WebRTC keeps only a weak reference to its delegate.
     private var observer: CallObserver?
     private var hungUp = false
+    /// Only the call that activated the audio session deactivates it.
+    private var audioActive = false
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
         guard await AVAudioApplication.requestRecordPermission() else { throw VoiceCallError.microphoneDenied }
         do {
+            // End may come while iOS asks for the microphone, or while WebRTC makes the offer.
+            try stopIfHungUp()
             try activateAudioSession()
             let observer = CallObserver(onEvent: onEvent)
             self.observer = observer
             let peer = try makePeer(observer: observer)
             let offer = try await peer.makeOffer()
+            try stopIfHungUp()
             try await peer.setLocal(offer)
+            try stopIfHungUp()
             // The offer goes out now: the voice engine does not need every ICE candidate.
             guard let sdp = peer.localDescription?.sdp else { throw VoiceCallError.failed }
             return sdp
@@ -46,14 +52,26 @@ final class WebRTCCall: VoiceCall {
     }
 
     func hangUp() {
-        guard !hungUp else { return }
         hungUp = true
+        release()
+    }
+
+    private func stopIfHungUp() throws {
+        guard hungUp else { return }
+        release()
+        throw VoiceCallError.failed
+    }
+
+    /// Closes the connection and the microphone, and deactivates the audio session.
+    private func release() {
         dataChannel?.delegate = nil
         dataChannel?.close()
         dataChannel = nil
         peer?.close()
         peer = nil
         observer = nil
+        guard audioActive else { return }
+        audioActive = false
         let audio = RTCAudioSession.sharedInstance()
         audio.isAudioEnabled = false
         audio.lockForConfiguration()
@@ -75,6 +93,7 @@ final class WebRTCCall: VoiceCall {
         audio.lockForConfiguration()
         defer { audio.unlockForConfiguration() }
         try audio.setConfiguration(config, active: true)
+        audioActive = true
         audio.isAudioEnabled = true
     }
 
@@ -97,17 +116,33 @@ final class WebRTCCall: VoiceCall {
 }
 
 /// WebRTC calls its delegates on its own threads: this passes the events that matter to the
-/// main actor. It reads only the type of each data channel message, never its content.
+/// main actor, in the order they came, and only the first one that ends the call (the data
+/// channel closes right after `session.closed`). It reads only the type of each data channel
+/// message, never its content.
 private final class CallObserver: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate {
-    private let onEvent: @MainActor (VoiceCallEvent) async -> Void
+    private let events: AsyncStream<VoiceCallEvent>.Continuation
+    private let lock = NSLock()
+    private var ended = false
 
     init(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) {
-        self.onEvent = onEvent
+        let (stream, events) = AsyncStream.makeStream(of: VoiceCallEvent.self)
+        self.events = events
+        super.init()
+        Task { @MainActor in
+            for await event in stream { await onEvent(event) }
+        }
+    }
+
+    deinit {
+        events.finish()
     }
 
     private func report(_ event: VoiceCallEvent) {
-        let onEvent = onEvent
-        Task { @MainActor in await onEvent(event) }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ended else { return }
+        if event != .sessionStarted { ended = true }
+        events.yield(event)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {

@@ -22,7 +22,7 @@ struct ActivityView: View {
                     isPresented: $confirmForget,
                     titleVisibility: .visible
                 ) {
-                    Button("Oublier", role: .destructive) { model.forget() }
+                    Button("Oublier", role: .destructive) { Task { await model.forget() } }
                 } message: {
                     Text("Le jeton est effacé de cet iPhone. Pour le révoquer sur le serveur, lance « t3-voice devices revoke ».")
                 }
@@ -70,14 +70,14 @@ struct ActivityView: View {
                 ProgressView()
             case .connecting, .live:
                 HStack {
-                    Label(session.state == .live ? "À l'écoute" : "Connexion…", systemImage: "mic.fill")
+                    Label(session.state.label ?? "", systemImage: "mic.fill")
                         .foregroundStyle(.red)
                     Spacer()
                     Button("Fin", role: .destructive) { Task { await session.end() } }
                         .buttonStyle(.borderedProminent)
                 }
             case .ending:
-                Text("Fin…").foregroundStyle(.secondary)
+                Text(session.state.label ?? "").foregroundStyle(.secondary)
             }
         }
         .controlSize(.large)

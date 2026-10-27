@@ -2,7 +2,7 @@ import Foundation
 
 /// Where a voice conversation is, from the user's point of view (spec #15, "Session state
 /// machine"). Interruption, reconnection and suspension come with #26.
-enum VoiceSessionState: Equatable {
+enum SessionState: Equatable {
     case idle
     /// Face ID is on screen.
     case authenticating
@@ -10,14 +10,27 @@ enum VoiceSessionState: Equatable {
     case connecting
     case live
     case ending(EndReason)
+
+    /// What the screen and the Live Activity say about the session. Nil when no session runs.
+    var label: String? {
+        switch self {
+        case .idle, .authenticating: nil
+        case .connecting: "Connexion…"
+        case .live: "À l'écoute"
+        case .ending: "Fin…"
+        }
+    }
 }
 
 enum EndReason: Equatable {
     /// The End button, in the app or on the Live Activity.
     case user
-    /// The voice model ended it: "fin", "c'est bon, merci".
+    /// `session.closed` arrived: the companion closed it. Most often the voice model ended it
+    /// ("fin", "c'est bon, merci"), but the companion also closes it when the device is
+    /// revoked, when `serve` stops, or when a newer session replaces it. The phone cannot
+    /// tell these apart.
     case voice
-    case failed(SessionFailure)
+    case error(SessionFailure)
 }
 
 enum SessionFailure: Equatable {
@@ -95,14 +108,14 @@ protocol VoiceCall: AnyObject {
 /// What the user sees and hears of the session: the Live Activity and the start sound.
 @MainActor
 protocol SessionFeedback {
-    func show(_ state: VoiceSessionState)
+    func show(_ state: SessionState)
 }
 
 /// Runs a voice conversation from "Parler" to its end: Face ID, the WebRTC call, and the
 /// session on the companion.
 @MainActor
 final class VoiceSessionController: ObservableObject {
-    @Published private(set) var state: VoiceSessionState = .idle
+    @Published private(set) var state: SessionState = .idle
     /// Why the last session failed, until the next start.
     @Published private(set) var lastFailure: SessionFailure?
 
@@ -160,12 +173,18 @@ final class VoiceSessionController: ObservableObject {
         } catch {
             // Once ended, `finish` already closed what it could.
             guard isCurrent(call) else { return }
-            await finish(.failed(SessionFailure(error)))
+            await finish(.error(SessionFailure(error)))
         }
     }
 
-    /// The End button.
+    /// The End button, in the app or on the Live Activity.
     func end() async {
+        guard state != .idle else {
+            // After the app was killed, the End button of its Live Activity starts a new
+            // process with no session: clear what the lock screen still shows.
+            feedback.show(.idle)
+            return
+        }
         await finish(.user)
     }
 
@@ -177,7 +196,7 @@ final class VoiceSessionController: ObservableObject {
         case .sessionClosed:
             await finish(.voice)
         case .lost:
-            await finish(.failed(.lost))
+            await finish(.error(.lost))
         }
     }
 
@@ -185,7 +204,7 @@ final class VoiceSessionController: ObservableObject {
     /// While the companion is still opening it, `start()` closes it when its answer arrives.
     private func finish(_ reason: EndReason) async {
         guard state == .connecting || state == .live else { return }
-        if case let .failed(failure) = reason { lastFailure = failure }
+        if case let .error(failure) = reason { lastFailure = failure }
         show(.ending(reason))
         call?.hangUp()
         call = nil
@@ -200,7 +219,7 @@ final class VoiceSessionController: ObservableObject {
         call === self.call && state == .connecting
     }
 
-    private func show(_ state: VoiceSessionState) {
+    private func show(_ state: SessionState) {
         self.state = state
         feedback.show(state)
     }

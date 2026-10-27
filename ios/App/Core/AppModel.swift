@@ -29,13 +29,21 @@ final class AppModel: ObservableObject {
     private let client: CompanionClient
     /// The name iOS gives the device ("iPhone"), used when the field is left empty.
     private let modelName: String
+    /// Ends the voice conversation, if one runs.
+    private let endSession: @MainActor () async -> Void
     /// Goes up on each "Oublier": a refresh drops its answer if it went up meanwhile.
     private var forgottenCount = 0
 
-    init(store: ConnectionStore, transport: HTTPTransport, modelName: String) {
+    init(
+        store: ConnectionStore,
+        transport: HTTPTransport,
+        modelName: String,
+        endSession: @escaping @MainActor () async -> Void = {}
+    ) {
         self.store = store
         client = CompanionClient(transport: transport, store: store)
         self.modelName = modelName
+        self.endSession = endSession
         deviceName = modelName
         isPaired = (try? store.load()) != nil
     }
@@ -81,7 +89,7 @@ final class AppModel: ObservableObject {
             switch error as? CompanionError {
             case .unauthorized?, .notPaired?:
                 // Revoked, reset, or the stored token is gone: nothing can reach the companion.
-                forget()
+                await forget()
             case .t3Unavailable?:
                 activityStatus = .failed("Le companion se reconnecte à T3. Réessaie dans un instant.")
             case let .limited(seconds)?:
@@ -93,9 +101,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Deletes the connection on this iPhone only (kept by Thomas in PR #33). To revoke the
-    /// device on the server, run `t3-voice devices revoke` there.
-    func forget() {
+    /// device on the server, run `t3-voice devices revoke` there. A running voice conversation
+    /// ends first, while its `DELETE` can still send the token.
+    func forget() async {
         forgottenCount += 1
+        await endSession()
         try? store.delete()
         isPaired = false
         pairingStatus = .scanning

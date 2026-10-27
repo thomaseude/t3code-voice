@@ -105,7 +105,7 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .idle)
         XCTAssertEqual(controller.lastFailure, .voiceUnavailable)
         XCTAssertTrue(call.hungUp)
-        XCTAssertEqual(feedback.shown, [.authenticating, .connecting, .ending(.failed(.voiceUnavailable)), .idle])
+        XCTAssertEqual(feedback.shown, [.authenticating, .connecting, .ending(.error(.voiceUnavailable)), .idle])
     }
 
     func testAnUnexpectedAnswerOfTheCompanionGivesItsStatus() async {
@@ -198,6 +198,15 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "DELETE"])
         XCTAssertEqual(transport.requests.last?.url, URL(string: "https://voice.example.com/sessions/s1"))
         XCTAssertFalse(feedback.shown.contains(.live))
+    }
+
+    func testEndWithoutASessionClearsALeftoverLiveActivity() async {
+        // The app was killed during a session: its Live Activity still shows the microphone,
+        // and its End button starts a new app process with no session.
+        await controller.end()
+
+        XCTAssertEqual(feedback.shown, [.idle])
+        XCTAssertTrue(transport.requests.isEmpty)
     }
 
     func testEventsFromAnEndedCallAreIgnored() async {

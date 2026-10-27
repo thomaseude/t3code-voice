@@ -4,7 +4,7 @@ import Foundation
 /// What the Live Activity of a voice conversation shows.
 struct VoiceActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
-        /// In French: "connexion…", "à l'écoute", "fin…".
+        /// `SessionState.label`: "Connexion…", "À l'écoute", "Fin…".
         var status: String
     }
 
