@@ -91,19 +91,6 @@ describe("SQLite task registry", () => {
     second.close();
   });
 
-  test("a thread keeps the summaries of its last 10 events only", async () => {
-    const registry = SqliteTaskRegistry.open(join(await privateDir(), "tasks.sqlite"));
-    registry.follow(followedTask("t1"));
-    for (let run = 1; run <= 12; run++) {
-      registry.saveSummary("t1", `completed:run-${run}`, { short: "Court.", long: "Long." });
-    }
-
-    assert.equal(registry.summaryOf("t1", "completed:run-2"), null);
-    assert.notEqual(registry.summaryOf("t1", "completed:run-3"), null);
-    assert.notEqual(registry.summaryOf("t1", "completed:run-12"), null);
-    registry.close();
-  });
-
   test("the database file is created readable by its owner only", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
 

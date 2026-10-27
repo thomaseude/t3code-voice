@@ -259,7 +259,7 @@ open, and prints the `chmod` command that fixes it.
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summaries of each task's last 10 finished runs. Only `serve` opens it |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. Only `serve` opens it |
 | `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.

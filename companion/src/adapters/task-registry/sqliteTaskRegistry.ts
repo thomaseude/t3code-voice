@@ -13,9 +13,6 @@ import type { FollowedTask, TaskRegistry } from "../../ports/taskRegistry.ts";
 
 export const TASK_REGISTRY_FILE = "tasks.sqlite";
 
-/** Summaries kept per thread: its latest events are the ones anyone asks about. */
-const SUMMARIES_PER_THREAD = 10;
-
 /** Each step brings the schema from the version before it (`PRAGMA user_version`) to its own. */
 const MIGRATIONS = [
   `CREATE TABLE followed_tasks (
@@ -125,13 +122,6 @@ export class SqliteTaskRegistry implements TaskRegistry {
          SET short = excluded.short, long = excluded.long`,
       )
       .run(threadId, eventKey, summary.short, summary.long);
-    this.db
-      .prepare(
-        `DELETE FROM task_summaries WHERE thread_id = ? AND rowid NOT IN (
-           SELECT rowid FROM task_summaries WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?
-         )`,
-      )
-      .run(threadId, threadId, SUMMARIES_PER_THREAD);
   }
 
   summaryOf(threadId: string, eventKey: string): TaskSummary | null {
