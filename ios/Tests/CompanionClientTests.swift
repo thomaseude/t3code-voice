@@ -123,6 +123,84 @@ final class CompanionClientTests: XCTestCase {
         XCTAssertTrue(transport.requests.isEmpty)
     }
 
+    // MARK: Voice sessions
+
+    func testOpeningASessionSendsTheOfferAndTheTimeZoneAndReadsTheAnswer() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(201, json: #"{"sessionId":"s1","sdp":"v=0 answer"}"#)]
+        let client = CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+
+        let session = try await client.openSession(offer: "v=0 offer", timeZone: "Europe/Paris")
+
+        XCTAssertEqual(session, OpenedSession(id: "s1", answer: "v=0 answer"))
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(transport.jsonBody(of: request), ["sdp": "v=0 offer", "timeZone": "Europe/Paris"])
+    }
+
+    func testOpeningASessionStoresANewTokenFromTheCompanion() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(201, json: #"{"sessionId":"s1","sdp":"v=0"}"#, headers: ["t3voice-token": "device-token-2"])]
+        let store = InMemoryConnectionStore(paired)
+
+        _ = try await CompanionClient(transport: transport, store: store).openSession(offer: "v=0", timeZone: "Europe/Paris")
+
+        XCTAssertEqual(store.connection?.token, "device-token-2")
+    }
+
+    func testWithoutAnOpenAIKeyOnTheCompanionVoiceIsUnavailable() async {
+        let transport = FakeTransport()
+        transport.responses = [response(503, json: #"{"error":"voice_unavailable"}"#)]
+
+        await assertThrows(CompanionError.voiceUnavailable) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testWhenOpenAIRefusesTheVoiceEngineFailed() async {
+        let transport = FakeTransport()
+        transport.responses = [response(502, json: #"{"error":"voice_engine_failed"}"#)]
+
+        await assertThrows(CompanionError.voiceEngineFailed) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testARevokedDeviceCannotOpenASession() async {
+        let transport = FakeTransport()
+        transport.responses = [response(401)]
+
+        await assertThrows(CompanionError.unauthorized) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testClosingASessionSendsADeleteWithTheToken() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).closeSession(id: "s1")
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions/s1"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+    }
+
+    func testClosingASessionTheCompanionNoLongerHasIsNotAnError() async throws {
+        // The voice model may have ended it already ("fin"), or a newer session replaced it.
+        let transport = FakeTransport()
+        transport.responses = [response(404, json: #"{"error":"not_found"}"#)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).closeSession(id: "s1")
+    }
+
     private func assertThrows(
         _ expected: CompanionError,
         file: StaticString = #filePath,
