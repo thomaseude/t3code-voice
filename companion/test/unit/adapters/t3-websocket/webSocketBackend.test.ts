@@ -608,6 +608,16 @@ describe("commands", () => {
     ]);
   });
 
+  test("cancelQueuedMessage answers true when an earlier try already took the message back", async () => {
+    const { backend, connection } = await connected();
+    connection.answer = () => ({
+      runs: [{ id: "run-2", userMessageId: "m1", status: "cancelled" }],
+    });
+
+    assert.equal(await backend.cancelQueuedMessage("c9", "t1", "m1"), true);
+    assert.equal(connection.requests.length, 1);
+  });
+
   test("cancelQueuedMessage answers false once the message no longer waits", async () => {
     const { backend, connection } = await connected();
     connection.answer = () => ({

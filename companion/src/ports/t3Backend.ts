@@ -160,8 +160,8 @@ export interface T3Backend {
   launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }>;
   sendMessage(request: SendMessageRequest): Promise<void>;
   /**
-   * Takes a message back while it still waits in the thread's queue. False when it no longer
-   * waits: the agent already has it.
+   * Takes a message back while it still waits in the thread's queue. True also when it was
+   * taken back already. False when it no longer waits: the agent already has it.
    */
   cancelQueuedMessage(commandId: string, threadId: string, messageId: string): Promise<boolean>;
   /** Stops the thread's agent, whatever it is doing; nothing when no agent works on it. */

@@ -51,10 +51,10 @@ export class ShellState {
 }
 
 /** Whether a run is queued or under way, leaving aside a request that waits for the user. */
-export function hasLiveRun(thread: Thread): boolean {
+export function hasQueuedOrLiveRun(thread: Thread): boolean {
   return LIVE_STATUSES.has(thread.status) || thread.activeRunStatus !== null;
 }
 
 export function isRunning(thread: Thread): boolean {
-  return hasLiveRun(thread) || thread.pendingRequest !== null;
+  return hasQueuedOrLiveRun(thread) || thread.pendingRequest !== null;
 }

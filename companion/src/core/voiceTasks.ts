@@ -15,7 +15,9 @@ import type {
   Thread,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
-import { hasLiveRun, isRunning, type ShellState } from "./shellState.ts";
+import { FolderClaims } from "./folderClaims.ts";
+import { errorKind } from "./secrets.ts";
+import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
 
 export interface VoiceTasksOptions {
@@ -47,23 +49,16 @@ const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-a
 /** T3 driver kinds and the name the user says for them. */
 const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "codex" };
 
-/** How long a start's claim on a project folder lasts when the shell does not show its thread. */
-const FOLDER_CLAIM_MS = 30_000;
-
 /** Longest first title sent to T3, which writes the real one from the prompt. */
 const TITLE_LENGTH = 80;
 
 export class VoiceTasks {
   private readonly options: VoiceTasksOptions;
-  /**
-   * Projects whose folder a start just gave an agent, with the thread once T3 answered and
-   * the clock time of the claim. The shell shows the new thread a moment later; until then
-   * (30 s at most), a second start must see the folder as busy.
-   */
-  private readonly folderLaunches = new Map<string, { threadId: string | null; at: number }>();
+  private readonly folderClaims: FolderClaims;
 
   constructor(options: VoiceTasksOptions) {
     this.options = options;
+    this.folderClaims = new FolderClaims(options.clock);
   }
 
   async startTask(args: unknown): Promise<ToolOutcome> {
@@ -121,10 +116,10 @@ export class VoiceTasks {
         workspace: place.workspace,
       }));
     } catch (error) {
-      if (inFolder) this.folderLaunches.delete(project.id);
+      if (inFolder) this.folderClaims.release(project.id);
       return { result: this.failed("start_task", error) };
     }
-    if (inFolder) this.folderLaunches.set(project.id, { threadId, at: this.options.clock.now() });
+    if (inFolder) this.folderClaims.launched(project.id, threadId);
     // Chosen with no wait before it is stored, so two starts never take the same name.
     const spokenName = chooseSpokenName({
       proposed: nonEmptyText(input?.spoken_name),
@@ -137,8 +132,10 @@ export class VoiceTasks {
     } catch (error) {
       // An agent nobody follows and nobody can cancel must not keep running.
       this.options.log(`t3-voice: could not follow a voice task (${errorKind(error)}).`);
-      await this.cancelStart(threadId, spokenName);
-      return { result: { error: "internal_error" } };
+      const undo = () => this.cancelStart(threadId, spokenName);
+      const cancelled = await undo();
+      // If the agent could not be stopped either, "annule" can still try again.
+      return { result: { error: "internal_error" }, ...("error" in cancelled ? { undo } : {}) };
     }
     this.options.log(`t3-voice: started a voice task in project ${project.id}.`);
 
@@ -172,7 +169,7 @@ export class VoiceTasks {
 
     const thread = shell.threads.get(task.threadId);
     // On a thread with no run, the message starts a new run at once instead of waiting.
-    const wasRunning = thread !== undefined && hasLiveRun(thread);
+    const wasRunning = thread !== undefined && hasQueuedOrLiveRun(thread);
     const commandId = this.options.newId();
     const messageId = this.options.newId();
     try {
@@ -288,25 +285,22 @@ export class VoiceTasks {
     shell: ShellState,
     project: Project,
     worktreeAsked: boolean,
-  ): Promise<{ kind: "ok"; workspace: LaunchWorkspace } | { kind: "error"; result: ToolResult }> {
-    const claim = this.folderLaunches.get(project.id);
-    if (
-      claim !== undefined &&
-      ((claim.threadId !== null && shell.threads.has(claim.threadId)) ||
-        this.options.clock.now() - claim.at > FOLDER_CLAIM_MS)
-    ) {
-      this.folderLaunches.delete(project.id);
-    }
-    const folderBusy =
-      this.folderLaunches.has(project.id) ||
+  ): Promise<WorkspaceChoice> {
+    // Checked again after each wait for T3: another start may claim the folder meanwhile.
+    const folderBusy = () =>
+      this.folderClaims.isClaimed(project.id, shell) ||
       shell
         .topLevelThreads()
         .some(
           (thread) =>
             thread.projectId === project.id && thread.worktreePath === null && isRunning(thread),
         );
-    if (!(worktreeAsked || folderBusy || project.newThreadWorkspace === "new_worktree")) {
-      return this.claimFolder(shell, project, worktreeAsked);
+    const projectFolder = (): WorkspaceChoice => {
+      this.folderClaims.claim(project.id);
+      return { kind: "ok", workspace: { type: "project_folder" } };
+    };
+    if (!(worktreeAsked || project.newThreadWorkspace === "new_worktree" || folderBusy())) {
+      return projectFolder();
     }
     let baseBranch: string | null;
     try {
@@ -320,24 +314,8 @@ export class VoiceTasks {
     }
     if (worktreeAsked) return { kind: "error", result: { error: "worktree_unavailable" } };
     // No worktree without git. Sharing a busy folder needs a spoken "oui" (ticket #21).
-    if (folderBusy) return { kind: "error", result: { error: "project_busy_not_git" } };
-    return this.claimFolder(shell, project, worktreeAsked);
-  }
-
-  /**
-   * Reserves the project folder for this start, with no wait between the check and the
-   * reservation. A start that claimed it first makes the folder busy: choose again.
-   */
-  private claimFolder(
-    shell: ShellState,
-    project: Project,
-    worktreeAsked: boolean,
-  ): Promise<{ kind: "ok"; workspace: LaunchWorkspace } | { kind: "error"; result: ToolResult }> {
-    if (this.folderLaunches.has(project.id)) {
-      return this.chooseWorkspace(shell, project, worktreeAsked);
-    }
-    this.folderLaunches.set(project.id, { threadId: null, at: this.options.clock.now() });
-    return Promise.resolve({ kind: "ok", workspace: { type: "project_folder" } });
+    if (folderBusy()) return { kind: "error", result: { error: "project_busy_not_git" } };
+    return projectFolder();
   }
 
   /** By spoken name; when no name fits, by spoken name and project title together. */
@@ -388,6 +366,10 @@ export class VoiceTasks {
     return { error: "t3_failed" };
   }
 }
+
+type WorkspaceChoice =
+  | { kind: "ok"; workspace: LaunchWorkspace }
+  | { kind: "error"; result: ToolResult };
 
 type ProjectMatch = { kind: "found"; project: Project } | { kind: "other"; result: ToolResult };
 
@@ -442,11 +424,20 @@ function chooseModel(
       each.models.map((model) => ({ provider: each, model })),
     );
     const match = findByName(modelName, offers, ({ model }) => `${model.name} ${model.slug}`);
+    if (
+      match.kind === "ambiguous" &&
+      new Set(match.items.map(({ model }) => model.slug)).size > 1
+    ) {
+      // Several models fit ("sonnet" with two Sonnet models): the user must pick one.
+      const names = [...new Set(match.items.map(({ model }) => model.name))];
+      return { kind: "other", result: { error: "unknown_model", models: names } };
+    }
+    // The same model offered by two instances of an agent: the one the defaults use.
     const offer =
       match.kind === "found"
         ? match.item
         : match.kind === "ambiguous"
-          ? (match.items.find((each) => usedByDefaults(each.provider)) ?? match.items[0])
+          ? preferred(match.items, (each) => usedByDefaults(each.provider))
           : undefined;
     if (offer !== undefined) {
       return {
@@ -474,7 +465,7 @@ function chooseModel(
       match.kind === "found"
         ? match.item
         : match.kind === "ambiguous"
-          ? (match.items.find(usedByDefaults) ?? match.items[0])
+          ? preferred(match.items, usedByDefaults)
           : undefined;
   }
   if (provider === undefined) {
@@ -505,6 +496,11 @@ function chooseModel(
   };
 }
 
+/** The first item `prefer` accepts, else the first item. */
+function preferred<T>(items: T[], prefer: (item: T) => boolean): T | undefined {
+  return items.find(prefer) ?? items[0];
+}
+
 function modelName(provider: Provider, slug: string): string {
   return provider.models.find((model) => model.slug === slug)?.name ?? slug;
 }
@@ -520,11 +516,6 @@ function spokenProject(shell: ShellState, project: Project): string {
 /** The last part of the project's folder ("joombo-ux-dev"): what tells same-titled projects apart. */
 function folderOf(project: Project): string {
   return project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
-}
-
-/** The error's class name: its message could quote the user's request. */
-export function errorKind(error: unknown): string {
-  return error instanceof Error ? error.name : "unknown error";
 }
 
 /** A non-empty string, trimmed, or null. */

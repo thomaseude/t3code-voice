@@ -189,6 +189,19 @@ describe("start_task", () => {
     });
   });
 
+  test("a model named alone that fits several models starts nothing and lists them", async () => {
+    const { backend, call } = await setup();
+
+    assert.deepEqual(
+      await call("start_task", { ...startArgs, agent: undefined, model: "claude" }),
+      {
+        error: "unknown_model",
+        models: ["Claude Opus 5.5", "Claude Sonnet 5.5"],
+      },
+    );
+    assert.deepEqual(backend.commands, []);
+  });
+
   test("an unknown agent or model starts nothing and lists the choices", async () => {
     const { backend, call } = await setup();
 
@@ -271,6 +284,47 @@ describe("start_task", () => {
 
     assert.deepEqual(await call("start_task", startArgs), { error: "t3_unavailable" });
     assert.deepEqual(backend.commands, []);
+  });
+
+  test("a launched thread nobody follows and that could not be stopped can still be cancelled", async () => {
+    const { backend, registry, call } = await setup();
+    registry.failNextFollow = true;
+    backend.failNextCommand = "stop";
+
+    assert.deepEqual(await call("start_task", startArgs), { error: "internal_error" });
+    assert.equal(((await call("cancel_last_action")) as { status: string }).status, "cancelled");
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ["launch", "stop", "archive"],
+    );
+  });
+
+  test("a launch T3 is slow to answer keeps the folder busy, however long it takes", async () => {
+    const { backend, engine, clock, call } = await setup();
+    let release = () => {};
+    backend.launchGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    engine.last.emit({ type: "tool_call", callId: "a", name: "start_task", arguments: startArgs });
+    await settle();
+    clock.advance(60_000);
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "b",
+      name: "start_task",
+      arguments: { ...startArgs, spoken_name: "autre tâche" },
+    });
+    await settle();
+    release();
+    await call("list_projects");
+
+    assert.deepEqual(
+      backend.commands
+        .map((command) => (command.type === "launch" ? command.workspace.type : ""))
+        .sort(),
+      ["new_worktree", "project_folder"],
+    );
   });
 
   test("a launched thread the registry cannot follow is stopped and archived", async () => {

@@ -211,9 +211,12 @@ export function runsToStop(projection: WireJson): { active: string | null; queue
   };
 }
 
-/** The id of the run still waiting to deliver the message, from a thread projection. */
-export function queuedRunOf(projection: WireJson, messageId: string): string | null {
+/** The run that delivers the message, from a thread projection, or null. */
+export function runOfMessage(
+  projection: WireJson,
+  messageId: string,
+): { id: string; status: string } | null {
   const runs: WireJson[] = Array.isArray(projection?.runs) ? projection.runs : [];
-  const run = runs.find((each) => each?.userMessageId === messageId && each.status === "queued");
-  return typeof run?.id === "string" ? run.id : null;
+  const run = runs.find((each) => each?.userMessageId === messageId);
+  return typeof run?.id === "string" ? { id: run.id, status: String(run.status) } : null;
 }

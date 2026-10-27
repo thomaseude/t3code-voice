@@ -37,3 +37,8 @@ export function sameHash(a: string, b: string): boolean {
   const right = Buffer.from(b, "hex");
   return left.length === right.length && timingSafeEqual(left, right);
 }
+
+/** The error's class name, for logs: its message could quote the user's request. */
+export function errorKind(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown error";
+}

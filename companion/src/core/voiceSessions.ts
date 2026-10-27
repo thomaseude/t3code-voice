@@ -10,10 +10,10 @@ import type {
 import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
-import { randomSecret, scrubSecrets } from "./secrets.ts";
+import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
-import { errorKind, type ToolOutcome, type Undo, type VoiceTasks } from "./voiceTasks.ts";
+import type { ToolOutcome, Undo, VoiceTasks } from "./voiceTasks.ts";
 
 export interface VoiceSessionManagerOptions {
   /** Null when no engine is configured (no OpenAI key): every open answers "unavailable". */

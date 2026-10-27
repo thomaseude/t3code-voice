@@ -29,7 +29,7 @@ import {
   RpcError,
 } from "./rpcConnection.ts";
 import {
-  queuedRunOf,
+  runOfMessage,
   runsToStop,
   toConfig,
   toLaunchThreadInput,
@@ -165,9 +165,11 @@ export class WebSocketT3Backend implements T3Backend {
     messageId: string,
   ): Promise<boolean> {
     // T3 does not return the id of the run that waits with the message: read it back.
-    const runId = queuedRunOf(await this.projection(threadId), messageId);
-    if (runId === null) return false;
-    await this.dispatch({ type: "queued-run.cancel", commandId, threadId, runId });
+    const run = runOfMessage(await this.projection(threadId), messageId);
+    // Cancelled already: an earlier try whose answer was lost took it back.
+    if (run?.status === "cancelled") return true;
+    if (run?.status !== "queued") return false;
+    await this.dispatch({ type: "queued-run.cancel", commandId, threadId, runId: run.id });
     return true;
   }
 
