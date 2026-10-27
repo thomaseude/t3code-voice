@@ -5,9 +5,17 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
+import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
 import type { Project, Thread } from "../../../src/ports/t3Backend.ts";
 import { project, thread } from "../builders.ts";
-import { FakeClock, FakeVoiceEngine, settle } from "../fakePorts.ts";
+import {
+  FakeClock,
+  FakeT3Backend,
+  FakeVoiceEngine,
+  InMemoryTaskRegistry,
+  settle,
+  unusedVoiceTasks,
+} from "../fakePorts.ts";
 
 function shellWith(projects: Project[], threads: Thread[] = []): ShellState {
   const state = new ShellState();
@@ -27,6 +35,14 @@ function setup({
   const sessions = new VoiceSessionManager({
     engine,
     shell: () => connectedShell,
+    tasks: new VoiceTasks({
+      backend: new FakeT3Backend(),
+      registry: new InMemoryTaskRegistry(),
+      shell: () => connectedShell,
+      clock,
+      newId: () => "id",
+      log: (line) => logs.push(line),
+    }),
     isRevoked: async (deviceId) => revoked.has(deviceId),
     clock,
     log: (line) => logs.push(line),
@@ -80,14 +96,23 @@ describe("opening a voice session", () => {
     assert.match(instructions, /N'invente jamais un statut/);
   });
 
-  test("the model can list projects, read the activity and end the conversation", async () => {
+  test("the model can read T3, start and steer tasks, and end the conversation", async () => {
     const { engine, sessions } = setup();
 
     await openOne(sessions);
 
     assert.deepEqual(
       engine.last.request.tools.map((tool) => tool.name),
-      ["list_projects", "get_activity", "end_session"],
+      [
+        "list_projects",
+        "get_activity",
+        "start_task",
+        "send_message",
+        "cancel_last_action",
+        "follow_thread",
+        "unfollow_thread",
+        "end_session",
+      ],
     );
   });
 });
@@ -479,6 +504,7 @@ describe("revoked devices", () => {
     const sessions = new VoiceSessionManager({
       engine,
       shell: () => shellWith([project("p1")]),
+      tasks: unusedVoiceTasks(),
       isRevoked: async () => {
         throw new Error("devices.json is damaged.");
       },
@@ -513,6 +539,7 @@ describe("failures and logs", () => {
     const sessions = new VoiceSessionManager({
       engine: null,
       shell: () => null,
+      tasks: unusedVoiceTasks(),
       isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},

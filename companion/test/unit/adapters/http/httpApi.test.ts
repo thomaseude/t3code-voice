@@ -15,6 +15,7 @@ import {
   FakeDeviceAuth,
   FakeVoiceEngine,
   InMemoryConfigStore,
+  unusedVoiceTasks,
 } from "../../fakePorts.ts";
 
 // Every route of the spec (#15, "HTTP API"). POST /pair takes a pairing code instead of a
@@ -50,6 +51,7 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
       engine: new FakeVoiceEngine(),
       shell: () => null,
       isRevoked: async () => false,
+      tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
       log: () => {},
     }),
@@ -563,6 +565,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
       engine,
       shell: () => null,
       isRevoked: async () => false,
+      tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
       log: () => {},
     });
@@ -615,6 +618,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
       engine: null,
       shell: () => null,
       isRevoked: async () => false,
+      tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
       log: () => {},
     });

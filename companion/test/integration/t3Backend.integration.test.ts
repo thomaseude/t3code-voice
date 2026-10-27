@@ -15,14 +15,12 @@ import { formatStatus, runStatus } from "../../src/adapters/cli/status.ts";
 import { FileConfigStore } from "../../src/adapters/config/fileConfigStore.ts";
 import { DEFAULT_T3_PIN } from "../../src/adapters/t3-websocket/compatibility.ts";
 import { WebSocketT3Connector } from "../../src/adapters/t3-websocket/connector.ts";
-import { issueWebSocketTicket } from "../../src/adapters/t3-websocket/http.ts";
-import { openRpcConnection } from "../../src/adapters/t3-websocket/rpcConnection.ts";
 import {
   makeHttpTransport,
   WebSocketT3Backend,
 } from "../../src/adapters/t3-websocket/webSocketBackend.ts";
-import { ShellState } from "../../src/core/shellState.ts";
-import { type ShellEvent, T3IncompatibleError } from "../../src/ports/t3Backend.ts";
+import { isRunning, ShellState } from "../../src/core/shellState.ts";
+import { type ShellEvent, T3IncompatibleError, type Thread } from "../../src/ports/t3Backend.ts";
 import { findT3Binary, T3TestServer } from "./t3Server.ts";
 
 const binary = findT3Binary();
@@ -163,7 +161,15 @@ describe("T3Backend WebSocket adapter against a real T3", {
       assert.deepEqual(await backend.listProjects(), [...state.projects.values()]);
 
       // HOME has no Claude login, so the run starts, then fails quickly and for free.
-      const threadId = await launchThread(alpha.id, "Integration probe");
+      const { threadId } = await backend.launchThread({
+        commandId: `t3voice-it-${Date.now()}`,
+        projectId: alpha.id,
+        title: "Integration probe",
+        model: { providerInstanceId: "claudeAgent", model: "claude-sonnet-5-5" },
+        runtimeMode: "full-access",
+        prompt: "Say hello.",
+        workspace: { type: "project_folder" },
+      });
       await waitFor(() => state.threads.has(threadId), "thread.updated for the new thread");
       await waitFor(() => state.threads.get(threadId)?.status === "failed", "the run to fail");
       const seen = events
@@ -216,6 +222,115 @@ describe("T3Backend WebSocket adapter against a real T3", {
     }
   });
 
+  test("inspectRepository tells a git repository and its main branch from a plain folder", async () => {
+    const backend = await connect();
+    try {
+      const repository = await server.addGitProject("repo");
+      const folder = await server.addProject("folder");
+
+      assert.deepEqual(await backend.inspectRepository(repository), {
+        isGitRepository: true,
+        defaultBranch: "main",
+      });
+      assert.deepEqual(await backend.inspectRepository(folder), {
+        isGitRepository: false,
+        defaultBranch: null,
+      });
+    } finally {
+      backend.close();
+    }
+  });
+
+  test("a voice task: launched once in a new worktree, sent a message, then archived", async () => {
+    const backend = await connect();
+    const state = new ShellState();
+    const subscription = backend.subscribeShell({
+      onEvent: (event) => state.apply(event),
+      onFatalError: (error) => assert.fail(error),
+    });
+    try {
+      await waitFor(() => state.hasSnapshot, "first snapshot");
+      await server.addGitProject("gamma");
+      await waitFor(() => findProject(state, "gamma"), "project.updated for gamma");
+      const gamma = findProject(state, "gamma");
+      assert.ok(gamma);
+      const request = {
+        commandId: `t3voice-it-worktree-${Date.now()}`,
+        projectId: gamma.id,
+        title: "Worktree probe",
+        model: { providerInstanceId: "claudeAgent", model: "claude-sonnet-5-5" },
+        runtimeMode: "full-access",
+        prompt: "Say hello.",
+        workspace: { type: "new_worktree" as const, baseBranch: "main" },
+      };
+
+      const { threadId } = await backend.launchThread(request);
+      const again = await backend.launchThread(request);
+
+      assert.equal(again.threadId, threadId, "the same command id starts one thread");
+      await waitFor(() => state.threads.get(threadId)?.worktreePath, "the new worktree");
+      const thread = state.threads.get(threadId);
+      assert.notEqual(thread?.worktreePath, gamma.workspaceRoot);
+
+      await waitFor(() => !isRunning(state.threads.get(threadId) as Thread), "the run to end");
+      const messageId = `t3voice-it-message-${Date.now()}`;
+      await backend.sendMessage({
+        commandId: `${messageId}-send`,
+        threadId,
+        messageId,
+        text: "Say goodbye.",
+        mode: "queue",
+      });
+      assert.equal(
+        typeof (await backend.cancelQueuedMessage(`${messageId}-cancel`, threadId, messageId)),
+        "boolean",
+      );
+      await backend.archiveThread(`${messageId}-archive`, threadId);
+
+      // An archived thread leaves the active list of the shell stream.
+      await waitFor(
+        () => !state.threads.has(threadId) || state.threads.get(threadId)?.archived,
+        "the thread to be archived",
+      );
+    } finally {
+      subscription.close();
+      backend.close();
+    }
+  });
+
+  test("stopThread interrupts a run that is still starting", async () => {
+    const backend = await connect();
+    const state = new ShellState();
+    const subscription = backend.subscribeShell({
+      onEvent: (event) => state.apply(event),
+      onFatalError: (error) => assert.fail(error),
+    });
+    try {
+      await waitFor(() => state.hasSnapshot, "first snapshot");
+      const gamma = findProject(state, "gamma");
+      assert.ok(gamma);
+
+      const { threadId } = await backend.launchThread({
+        commandId: `t3voice-it-stop-${Date.now()}`,
+        projectId: gamma.id,
+        title: "Stop probe",
+        model: { providerInstanceId: "claudeAgent", model: "claude-sonnet-5-5" },
+        runtimeMode: "full-access",
+        prompt: "Say hello.",
+        workspace: { type: "new_worktree", baseBranch: "main" },
+      });
+      await backend.stopThread(`t3voice-it-stop-${Date.now()}`, threadId);
+
+      await waitFor(
+        () => ["interrupted", "cancelled"].includes(state.threads.get(threadId)?.status ?? ""),
+        "the run to be interrupted",
+      );
+    } finally {
+      subscription.close();
+      backend.close();
+    }
+  });
+
   test("t3-voice status lists the projects from a live T3", async () => {
     const lines: string[] = [];
 
@@ -226,32 +341,10 @@ describe("T3Backend WebSocket adapter against a real T3", {
     });
 
     assert.match(lines[0] ?? "", /^T3 \S+, protocol 2 at http:\/\/127\.0\.0\.1:\d+: connected\.$/);
-    assert.ok(lines.includes("Projects (2):"), lines.join("\n"));
+    assert.ok(lines.includes("Projects (5):"), lines.join("\n"));
     assert.ok(lines.some((line) => line.startsWith("  - alpha  ")));
     assert.ok(lines.includes("Running threads (0):"), lines.join("\n"));
   });
-
-  /** Starts a thread through the raw protocol; launching is not part of the port yet. */
-  async function launchThread(projectId: string, title: string): Promise<string> {
-    const ticket = await issueWebSocketTicket(server.baseUrl, token);
-    const url = `${server.baseUrl.replace("http", "ws")}/ws?orchestrationProtocol=2&wsTicket=${encodeURIComponent(ticket)}`;
-    const connection = await openRpcConnection(url);
-    try {
-      const result = (await connection.request("orchestration.launchThread", {
-        commandId: `t3voice-it-${Date.now()}`,
-        projectId,
-        title,
-        modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet-5-5" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        workspaceStrategy: { type: "root" },
-        initialMessage: { text: "Say hello.", attachments: [] },
-      })) as { threadId: string };
-      return result.threadId;
-    } finally {
-      connection.close();
-    }
-  }
 });
 
 function findProject(state: ShellState, title: string) {

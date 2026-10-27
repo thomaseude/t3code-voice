@@ -1,10 +1,30 @@
 // Builders for the companion's own types (ports), for tests of the core and the CLI.
 
 import type { PairedDevice } from "../../src/ports/deviceAuth.ts";
-import type { Project, Thread } from "../../src/ports/t3Backend.ts";
+import type { Project, Provider, Thread } from "../../src/ports/t3Backend.ts";
+import type { FollowedTask } from "../../src/ports/taskRegistry.ts";
 
-export function project(id: string, title = id): Project {
-  return { id, title, workspaceRoot: `/home/me/${title}` };
+export function project(id: string, title = id, fields: Partial<Project> = {}): Project {
+  return {
+    id,
+    title,
+    workspaceRoot: `/home/me/${title}`,
+    newThreadWorkspace: "local",
+    defaultModel: null,
+    ...fields,
+  };
+}
+
+export function provider(instanceId: string, fields: Partial<Provider> = {}): Provider {
+  return {
+    instanceId,
+    driver: instanceId,
+    displayName: instanceId,
+    enabled: true,
+    status: "ready",
+    models: [],
+    ...fields,
+  };
 }
 
 export function thread(id: string, fields: Partial<Thread> = {}): Thread {
@@ -37,6 +57,20 @@ export function pairedDevice(fields: Partial<PairedDevice> = {}): PairedDevice {
     pairingCodeSha256: "e".repeat(64),
     pairedAt: "2026-10-26T10:00:00.000Z",
     revokedAt: null,
+    ...fields,
+  };
+}
+
+export function followedTask(threadId: string, fields: Partial<FollowedTask> = {}): FollowedTask {
+  return {
+    threadId,
+    projectId: "p1",
+    spokenName: `tâche ${threadId}`,
+    origin: "followed",
+    lastAnnouncedState: null,
+    lastEventKey: null,
+    cursor: null,
+    followedAt: "2026-10-26T10:00:00.000Z",
     ...fields,
   };
 }

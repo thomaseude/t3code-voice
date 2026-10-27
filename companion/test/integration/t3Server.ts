@@ -129,6 +129,21 @@ export class T3TestServer {
     return path;
   }
 
+  /** A project whose folder is a git repository with one commit on `main`, and no remote. */
+  async addGitProject(title: string): Promise<string> {
+    const path = join(this.root, "projects", title);
+    await mkdir(path, { recursive: true });
+    const git = (...args: string[]) =>
+      run("git", ["-c", "user.name=it", "-c", "user.email=it@example.com", ...args], {
+        cwd: path,
+        env: this.env(),
+      });
+    await git("init", "--quiet", "--initial-branch=main");
+    await git("commit", "--quiet", "--allow-empty", "--message", "First commit");
+    await this.cli(["project", "add", "--base-dir", this.baseDir, "--title", title, path]);
+    return path;
+  }
+
   private cli(args: string[]) {
     return run(this.binary, args, {
       cwd: this.root,

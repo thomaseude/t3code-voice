@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { toShellEvent } from "../../../../src/adapters/t3-websocket/wire.ts";
+import { toProject, toShellEvent } from "../../../../src/adapters/t3-websocket/wire.ts";
 import { shellSnapshot, wireProject, wireThread } from "./fakes.ts";
 
 describe("toShellEvent", () => {
@@ -20,7 +20,13 @@ describe("toShellEvent", () => {
     if (event?.type !== "snapshot") return;
     assert.equal(event.sequence, 7);
     assert.deepEqual(event.projects, [
-      { id: "p1", title: "joombo", workspaceRoot: "/home/me/joombo" },
+      {
+        id: "p1",
+        title: "joombo",
+        workspaceRoot: "/home/me/joombo",
+        newThreadWorkspace: null,
+        defaultModel: null,
+      },
     ]);
     assert.deepEqual(
       event.threads.map((each) => [each.id, each.status, each.archived]),
@@ -86,5 +92,25 @@ describe("toShellEvent", () => {
   test("skips items the companion does not use", () => {
     assert.equal(toShellEvent({ kind: "synchronized" }), null);
     assert.equal(toShellEvent({ kind: "something.new", sequence: 9 }), null);
+  });
+});
+
+describe("toProject", () => {
+  test("reads the project's setting for new threads and its default model", () => {
+    const project = toProject({
+      ...wireProject("p1", "joombo"),
+      defaultThreadEnvMode: "worktree",
+      defaultModelSelection: { instanceId: "codex", model: "gpt-5.6-codex" },
+    });
+
+    assert.equal(project.newThreadWorkspace, "worktree");
+    assert.deepEqual(project.defaultModel, { providerInstanceId: "codex", model: "gpt-5.6-codex" });
+  });
+
+  test("an unknown setting or a missing model reads as null", () => {
+    const project = toProject({ ...wireProject("p1"), defaultThreadEnvMode: "cloud" });
+
+    assert.equal(project.newThreadWorkspace, null);
+    assert.equal(project.defaultModel, null);
   });
 });

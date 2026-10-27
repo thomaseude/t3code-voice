@@ -7,6 +7,18 @@ export interface Project {
   id: string;
   title: string;
   workspaceRoot: string;
+  /**
+   * The project's T3 setting for new threads: "worktree" gives each one a new worktree,
+   * "local" runs it in the project folder. Null when T3 did not say.
+   */
+  newThreadWorkspace: "local" | "worktree" | null;
+  /** The agent and model T3 picks for the project's new threads, or null for T3's default. */
+  defaultModel: ModelSelection | null;
+}
+
+export interface ModelSelection {
+  providerInstanceId: string;
+  model: string;
 }
 
 /** Raw run status reported by T3 for a thread ("idle", "running", "failed", ...). */
@@ -63,7 +75,44 @@ export interface Provider {
 export interface T3Config {
   providers: Provider[];
   defaultRuntimeMode: string;
-  defaultModel: { providerInstanceId: string; model: string } | null;
+  defaultModel: ModelSelection | null;
+}
+
+/** What T3 reports about the folder of a project. */
+export interface RepositoryInfo {
+  isGitRepository: boolean;
+  /** The branch origin/HEAD names ("main", "master"), or null when the repository has none. */
+  defaultBranch: string | null;
+}
+
+/** Where a new thread works. */
+export type LaunchWorkspace =
+  | { type: "project_folder" }
+  /** A new worktree, started from `baseBranch` as fetched from origin when there is one. */
+  | { type: "new_worktree"; baseBranch: string };
+
+export interface LaunchThreadRequest {
+  /** Sending the same id again returns the same thread instead of starting another one. */
+  commandId: string;
+  projectId: string;
+  /** A first title; T3 replaces it with one it writes from the prompt. */
+  title: string;
+  model: ModelSelection;
+  runtimeMode: string;
+  /** The user's request: the first message of the thread. */
+  prompt: string;
+  workspace: LaunchWorkspace;
+}
+
+export interface SendMessageRequest {
+  /** Sending the same id again sends nothing more. */
+  commandId: string;
+  threadId: string;
+  /** Chosen by the companion, to find the message again (to cancel it while it waits). */
+  messageId: string;
+  text: string;
+  /** "queue": after the agent's current turn, or now when it has none. "steer": now, into the current turn. */
+  mode: "queue" | "steer";
 }
 
 /** One change on the shell stream. `sequence` is T3's cursor; use it only to resume. */
@@ -106,6 +155,18 @@ export interface T3Backend {
     subscriber: ShellSubscriber,
     options?: { afterSequence?: number },
   ): ShellSubscription;
+  /** Reads the folder of a project. Only `orchestration:read` is needed. */
+  inspectRepository(path: string): Promise<RepositoryInfo>;
+  launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }>;
+  sendMessage(request: SendMessageRequest): Promise<void>;
+  /**
+   * Takes a message back while it still waits in the thread's queue. False when it no longer
+   * waits: the agent already has it.
+   */
+  cancelQueuedMessage(commandId: string, threadId: string, messageId: string): Promise<boolean>;
+  /** Stops the thread's agent, whatever it is doing; nothing when no agent works on it. */
+  stopThread(commandId: string, threadId: string): Promise<void>;
+  archiveThread(commandId: string, threadId: string): Promise<void>;
   close(): void;
 }
 

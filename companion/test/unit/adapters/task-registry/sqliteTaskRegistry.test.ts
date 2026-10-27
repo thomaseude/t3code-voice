@@ -1,0 +1,76 @@
+// The SQLite task registry, on a real file in a temporary directory.
+
+import assert from "node:assert/strict";
+import { chmod, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, test } from "node:test";
+import { SqliteTaskRegistry } from "../../../../src/adapters/task-registry/sqliteTaskRegistry.ts";
+import { ConfigError } from "../../../../src/ports/configStore.ts";
+import { followedTask } from "../../builders.ts";
+
+async function privateDir() {
+  const dir = join(await mkdtemp(join(tmpdir(), "t3voice-registry-")), "t3voice");
+  await mkdir(dir, { mode: 0o700 });
+  return dir;
+}
+
+describe("SQLite task registry", () => {
+  test("a followed task is still there after the registry is reopened", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const first = SqliteTaskRegistry.open(path);
+    first.follow(followedTask("t1", { spokenName: "tests Reviews", origin: "voice" }));
+    first.follow(followedTask("t2", { spokenName: "page offre", cursor: 42, lastEventKey: "k" }));
+    first.close();
+
+    const second = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(second.followedTasks(), [
+      followedTask("t1", { spokenName: "tests Reviews", origin: "voice" }),
+      followedTask("t2", { spokenName: "page offre", cursor: 42, lastEventKey: "k" }),
+    ]);
+    second.close();
+  });
+
+  test("unfollow removes the task, and says whether it was followed", async () => {
+    const registry = SqliteTaskRegistry.open(join(await privateDir(), "tasks.sqlite"));
+    registry.follow(followedTask("t1"));
+
+    assert.equal(registry.unfollow("t1"), true);
+    assert.equal(registry.unfollow("t1"), false);
+    assert.deepEqual(registry.followedTasks(), []);
+    registry.close();
+  });
+
+  test("a thread or a spoken name is never followed twice", async () => {
+    const registry = SqliteTaskRegistry.open(join(await privateDir(), "tasks.sqlite"));
+    registry.follow(followedTask("t1", { spokenName: "tests Reviews" }));
+
+    assert.throws(() => registry.follow(followedTask("t1", { spokenName: "autre nom" })));
+    assert.throws(() => registry.follow(followedTask("t2", { spokenName: "tests Reviews" })));
+    registry.close();
+  });
+
+  test("the database file is created readable by its owner only", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+
+    SqliteTaskRegistry.open(path).close();
+
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  });
+
+  test("a database file other users can read is refused", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    await writeFile(path, "", { mode: 0o644 });
+    await chmod(path, 0o644);
+
+    assert.throws(() => SqliteTaskRegistry.open(path), ConfigError);
+  });
+
+  test("a directory other users can open is refused", async () => {
+    const dir = await privateDir();
+    await chmod(dir, 0o755);
+
+    assert.throws(() => SqliteTaskRegistry.open(join(dir, "tasks.sqlite")), ConfigError);
+  });
+});

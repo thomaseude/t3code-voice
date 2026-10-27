@@ -1,10 +1,14 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
+import { VoiceTasks } from "../../src/core/voiceTasks.ts";
 import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
+  type LaunchThreadRequest,
   type Project,
+  type RepositoryInfo,
+  type SendMessageRequest,
   type ServerInfo,
   type ShellSubscriber,
   type ShellSubscription,
@@ -15,6 +19,7 @@ import {
   type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
+import type { FollowedTask, TaskRegistry } from "../../src/ports/taskRegistry.ts";
 import {
   type VoiceEngine,
   VoiceEngineError,
@@ -76,10 +81,27 @@ export class InMemoryConfigStore implements ConfigStore {
   }
 }
 
+/** A command the fake T3 received, with the request it came with. */
+export type T3Command =
+  | ({ type: "launch" } & LaunchThreadRequest)
+  | ({ type: "send" } & SendMessageRequest)
+  | { type: "cancel_queued"; commandId: string; threadId: string; messageId: string }
+  | { type: "stop"; commandId: string; threadId: string }
+  | { type: "archive"; commandId: string; threadId: string };
+
 export class FakeT3Backend implements T3Backend {
   projects: Project[] = [];
   threads: Thread[] = [];
+  config: T3Config = { providers: [], defaultRuntimeMode: "full-access", defaultModel: null };
+  /** By folder; a folder not listed is a git repository whose default branch is "main". */
+  readonly repositories = new Map<string, RepositoryInfo>();
+  readonly commands: T3Command[] = [];
+  /** Makes the next command fail, like T3 refusing it. */
+  failNextCommand = false;
+  /** What cancelQueuedMessage answers: false once the agent has the message. */
+  messageStillQueued = true;
   closed = false;
+  private launched = 0;
 
   serverInfo(): ServerInfo {
     return { version: "0.1.0", protocolVersion: 2 };
@@ -88,7 +110,35 @@ export class FakeT3Backend implements T3Backend {
     return this.projects;
   }
   async getConfig(): Promise<T3Config> {
-    return { providers: [], defaultRuntimeMode: "full-access", defaultModel: null };
+    return this.config;
+  }
+  async inspectRepository(path: string): Promise<RepositoryInfo> {
+    return this.repositories.get(path) ?? { isGitRepository: true, defaultBranch: "main" };
+  }
+  async launchThread(request: LaunchThreadRequest) {
+    this.record({ type: "launch", ...request });
+    this.launched++;
+    return { threadId: `launched-${this.launched}` };
+  }
+  async sendMessage(request: SendMessageRequest) {
+    this.record({ type: "send", ...request });
+  }
+  async cancelQueuedMessage(commandId: string, threadId: string, messageId: string) {
+    this.record({ type: "cancel_queued", commandId, threadId, messageId });
+    return this.messageStillQueued;
+  }
+  async stopThread(commandId: string, threadId: string) {
+    this.record({ type: "stop", commandId, threadId });
+  }
+  async archiveThread(commandId: string, threadId: string) {
+    this.record({ type: "archive", commandId, threadId });
+  }
+  private record(command: T3Command) {
+    if (this.failNextCommand) {
+      this.failNextCommand = false;
+      throw new Error("T3 refused the command.");
+    }
+    this.commands.push(command);
   }
   /** The last subscriber, to push events, reconnections and failures to it. */
   subscriber: ShellSubscriber | null = null;
@@ -231,6 +281,30 @@ export class FakeVoiceEngine implements VoiceEngine {
   }
 }
 
+/** Like the SQLite registry, without the file: a thread or a name is followed once. */
+export class InMemoryTaskRegistry implements TaskRegistry {
+  tasks: FollowedTask[] = [];
+
+  followedTasks() {
+    return [...this.tasks];
+  }
+  follow(task: FollowedTask) {
+    if (this.tasks.some((other) => other.threadId === task.threadId)) {
+      throw new Error("The thread is already followed.");
+    }
+    if (this.tasks.some((other) => other.spokenName === task.spokenName)) {
+      throw new Error("The spoken name is taken.");
+    }
+    this.tasks.push(task);
+  }
+  unfollow(threadId: string) {
+    const before = this.tasks.length;
+    this.tasks = this.tasks.filter((task) => task.threadId !== threadId);
+    return this.tasks.length < before;
+  }
+  close() {}
+}
+
 /** A clock the test moves by hand: scheduled callbacks run only when `advance` passes them. */
 export class FakeClock implements Clock {
   private time: number;
@@ -269,4 +343,16 @@ export class FakeClock implements Clock {
 /** Lets pending promises and callbacks run, as several turns of the event loop. */
 export async function settle() {
   for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
+}
+
+/** Task tools on a fake T3 with no project, for tests that do not use them. */
+export function unusedVoiceTasks(clock: Clock = new FakeClock()): VoiceTasks {
+  return new VoiceTasks({
+    backend: new FakeT3Backend(),
+    registry: new InMemoryTaskRegistry(),
+    shell: () => null,
+    clock,
+    newId: () => "id",
+    log: () => {},
+  });
 }

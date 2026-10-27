@@ -3,12 +3,13 @@ import { describe, test } from "node:test";
 import { runServe, type VoiceEngineSettings } from "../../../../src/adapters/cli/serve.ts";
 import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
-import { pairedDevice, project, thread } from "../../builders.ts";
+import { pairedDevice, project, provider, thread } from "../../builders.ts";
 import {
   FakeClock,
   FakeT3Connector,
   FakeVoiceEngine,
   InMemoryConfigStore,
+  InMemoryTaskRegistry,
   settle,
 } from "../../fakePorts.ts";
 
@@ -27,11 +28,19 @@ function setUpStore(): InMemoryConfigStore {
   return store;
 }
 
+class ClosableTaskRegistry extends InMemoryTaskRegistry {
+  closed = false;
+  override close() {
+    this.closed = true;
+  }
+}
+
 function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   const lines: string[] = [];
   const engines: VoiceEngineSettings[] = [];
   const engine = new FakeVoiceEngine();
   const started: ApiServerOptions[] = [];
+  const registry = new ClosableTaskRegistry();
   let closed = false;
   let stop = () => {};
   const done = runServe({
@@ -51,6 +60,7 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
       engines.push(settings);
       return engine;
     },
+    openTaskRegistry: () => registry,
     out: (line) => lines.push(line),
     clock: new FakeClock(NOW.getTime()),
   });
@@ -61,6 +71,7 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
     lines,
     engines,
     engine,
+    registry,
     started,
     listenOptions,
     activity,
@@ -123,6 +134,7 @@ describe("runServe", () => {
 
     await assert.rejects(run.done, T3IncompatibleError);
     assert.deepEqual(run.started, []);
+    assert.equal(run.registry.closed, true);
   });
 
   test("stops when T3 fails for good, for example after an upgrade to an untested version", async () => {
@@ -374,6 +386,37 @@ describe("voice sessions", () => {
     await run.done;
 
     assert.equal(run.engine.last.closed, true);
+  });
+
+  test("a task started by voice goes to T3 and into the task registry", async () => {
+    const store = setUpStore();
+    store.devices = [pairedDevice({ id: "d1" })];
+    const t3 = new FakeT3Connector();
+    t3.backend.projects = [project("p1", "Joombo")];
+    t3.backend.config = {
+      providers: [provider("codex", { displayName: "Codex", models: [{ slug: "m", name: "M" }] })],
+      defaultRuntimeMode: "full-access",
+      defaultModel: null,
+    };
+    const run = serve(store, t3);
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    run.engine.last.emit({
+      type: "tool_call",
+      callId: "c1",
+      name: "start_task",
+      arguments: { agent: "codex", project: "joombo", prompt: "Corriger les tests" },
+    });
+    await settle();
+
+    assert.equal(t3.backend.commands[0]?.type, "launch");
+    assert.deepEqual(
+      run.registry.followedTasks().map((task) => task.threadId),
+      ["launched-1"],
+    );
+    run.stop();
+    await run.done;
   });
 
   test("while T3 reconnects, the voice tools say T3 is unavailable", async () => {

@@ -30,14 +30,23 @@ export class FakeConnection implements RpcConnection {
   readonly requests: Array<{ tag: string; payload: unknown }> = [];
   readonly streams: FakeStream[] = [];
   readonly responses = new Map<string, unknown>();
+  /** When set, answers every request instead of `responses`. */
+  answer: ((tag: string, payload: unknown) => unknown) | null = null;
   /** When true, requests never get an answer, as with a T3 that hangs but still answers pings. */
   silent = false;
+  /** When true, the socket drops on the next request, before T3 answers it. */
+  dropOnNextRequest = false;
   private readonly closeListeners: Array<() => void> = [];
   closed = false;
 
   request(tag: string, payload: unknown): Promise<unknown> {
     this.requests.push({ tag, payload });
+    if (this.dropOnNextRequest) {
+      this.close();
+      return Promise.reject(new ConnectionClosedError());
+    }
     if (this.silent) return new Promise(() => {});
+    if (this.answer !== null) return Promise.resolve(this.answer(tag, payload));
     return Promise.resolve(this.responses.get(tag));
   }
 
@@ -95,6 +104,9 @@ export class FakeTransport implements T3Transport {
     return this.descriptor;
   }
 
+  /** Called on each new connection, to set its answers before anything is sent on it. */
+  prepare: (connection: FakeConnection) => void = () => {};
+
   /** When set, opening a socket fails with this error (and counts the attempt). */
   openError: Error | null = null;
   openAttempts = 0;
@@ -103,6 +115,7 @@ export class FakeTransport implements T3Transport {
     this.openAttempts += 1;
     if (this.openError) throw this.openError;
     const connection = new FakeConnection();
+    this.prepare(connection);
     this.connections.push(connection);
     return connection;
   }

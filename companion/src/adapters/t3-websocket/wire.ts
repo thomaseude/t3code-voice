@@ -3,7 +3,19 @@
 // T3 adds fields often and marks many as optional ("absent from older servers"), so every
 // reader below tolerates missing fields and ignores unknown ones.
 
-import type { Project, ShellEvent, T3Config, Thread } from "../../ports/t3Backend.ts";
+import type {
+  LaunchThreadRequest,
+  ModelSelection,
+  Project,
+  RepositoryInfo,
+  SendMessageRequest,
+  ShellEvent,
+  T3Config,
+  Thread,
+} from "../../ports/t3Backend.ts";
+
+/** What T3 records as the origin of the threads and messages the companion sends. */
+const CREATION_SOURCE = "mobile";
 
 /** Untyped JSON as received from T3. Readers check each field they use. */
 // biome-ignore lint/suspicious/noExplicitAny: wire JSON is checked field by field.
@@ -14,7 +26,19 @@ export function toProject(wire: WireJson): Project {
     id: String(wire.id),
     title: String(wire.title ?? ""),
     workspaceRoot: String(wire.workspaceRoot ?? ""),
+    newThreadWorkspace:
+      wire.defaultThreadEnvMode === "local" || wire.defaultThreadEnvMode === "worktree"
+        ? wire.defaultThreadEnvMode
+        : null,
+    defaultModel: toModelSelection(wire.defaultModelSelection),
   };
+}
+
+function toModelSelection(wire: WireJson): ModelSelection | null {
+  // Older servers name the instance `provider`.
+  const instanceId = wire?.instanceId ?? wire?.provider;
+  if (typeof instanceId !== "string" || typeof wire?.model !== "string") return null;
+  return { providerInstanceId: instanceId, model: wire.model };
 }
 
 export function toThread(wire: WireJson, location: "active" | "archive" = "active"): Thread {
@@ -44,7 +68,6 @@ export function toThread(wire: WireJson, location: "active" | "archive" = "activ
 export function toConfig(wire: WireJson): T3Config {
   const settings = wire.settings ?? {};
   const providers = Array.isArray(wire.providers) ? wire.providers : [];
-  const defaultSelection = settings.defaultModelSelection;
   return {
     providers: providers.map((provider: WireJson) => ({
       instanceId: String(provider.instanceId),
@@ -58,9 +81,7 @@ export function toConfig(wire: WireJson): T3Config {
       })),
     })),
     defaultRuntimeMode: String(settings.defaultRuntimeMode ?? "full-access"),
-    defaultModel: defaultSelection?.instanceId
-      ? { providerInstanceId: defaultSelection.instanceId, model: String(defaultSelection.model) }
-      : null,
+    defaultModel: toModelSelection(settings.defaultModelSelection),
   };
 }
 
@@ -109,4 +130,82 @@ export function toShellEvent(item: WireJson): ShellEvent | null {
     default:
       return null;
   }
+}
+
+/**
+ * Reads `vcs.listRefs`. The default branch is the one origin/HEAD names (T3 marks it
+ * `isDefault`), else main or master, else the current branch.
+ */
+export function toRepositoryInfo(wire: WireJson): RepositoryInfo {
+  if (wire?.isRepo !== true) return { isGitRepository: false, defaultBranch: null };
+  const refs: WireJson[] = Array.isArray(wire.refs) ? wire.refs : [];
+  const local = refs.filter((ref) => ref?.isRemote !== true && typeof ref?.name === "string");
+  const remoteDefault = refs.find((ref) => ref?.isRemote === true && ref.isDefault === true);
+  const fromRemote =
+    typeof remoteDefault?.name === "string"
+      ? remoteDefault.name.slice(String(remoteDefault.remoteName ?? "origin").length + 1)
+      : undefined;
+  const branch =
+    local.find((ref) => ref.isDefault === true)?.name ??
+    (fromRemote || undefined) ??
+    local.find((ref) => ref.name === "main" || ref.name === "master")?.name ??
+    local.find((ref) => ref.current === true)?.name ??
+    null;
+  return { isGitRepository: true, defaultBranch: branch };
+}
+
+export function toLaunchThreadInput(request: LaunchThreadRequest): WireJson {
+  const { workspace } = request;
+  return {
+    commandId: request.commandId,
+    creationSource: CREATION_SOURCE,
+    projectId: request.projectId,
+    title: request.title,
+    // The title is a seed: T3 writes the real one from the prompt.
+    generateTitle: true,
+    modelSelection: { instanceId: request.model.providerInstanceId, model: request.model.model },
+    runtimeMode: request.runtimeMode,
+    interactionMode: "default",
+    workspaceStrategy:
+      workspace.type === "new_worktree"
+        ? // From origin's copy of the branch, fetched first; the local one when there is no remote.
+          { type: "worktree", baseRef: workspace.baseBranch, startFromOrigin: true }
+        : { type: "root" },
+    initialMessage: { text: request.prompt, attachments: [] },
+  };
+}
+
+export function toMessageDispatch(request: SendMessageRequest): WireJson {
+  return {
+    type: "message.dispatch",
+    commandId: request.commandId,
+    threadId: request.threadId,
+    messageId: request.messageId,
+    text: request.text,
+    attachments: [],
+    // T3 overwrites createdBy with "user" for every client.
+    createdBy: "user",
+    creationSource: CREATION_SOURCE,
+    // T3 starts the message now on an idle thread, and queues it after an active run.
+    // "steer" asks it to deliver the message into the active run instead.
+    dispatchMode: { type: "start_immediately" },
+    ...(request.mode === "steer" ? { deliveryIntent: "steer" } : {}),
+  };
+}
+
+/** Run statuses during which an agent works on the thread, from preparing its folder on. */
+const ACTIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+
+/** The id of the run an agent works on now, from a thread projection, or null. */
+export function activeRunOf(projection: WireJson): string | null {
+  const runs: WireJson[] = Array.isArray(projection?.runs) ? projection.runs : [];
+  const run = runs.find((each) => ACTIVE_RUN_STATUSES.has(each?.status));
+  return typeof run?.id === "string" ? run.id : null;
+}
+
+/** The id of the run still waiting to deliver the message, from a thread projection. */
+export function queuedRunOf(projection: WireJson, messageId: string): string | null {
+  const runs: WireJson[] = Array.isArray(projection?.runs) ? projection.runs : [];
+  const run = runs.find((each) => each?.userMessageId === messageId && each.status === "queued");
+  return typeof run?.id === "string" ? run.id : null;
 }
