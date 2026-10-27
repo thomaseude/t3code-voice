@@ -44,11 +44,21 @@ export interface GptLiveEngineOptions {
 /** What the phone may send on its own data channel: nothing that answers a tool call. */
 const PHONE_EVENTS = ["session.close", "session.input_audio.mute", "session.input_audio.unmute"];
 
+/**
+ * GPT-Live bills each minute a session is connected, silence included (OpenAI's pricing,
+ * read on 2026-10-25 in `research/voice-engine.md`). The delegation model's tokens are billed
+ * apart and are not counted.
+ */
+const USD_PER_MINUTE = 0.05;
+
 export class GptLiveEngine implements VoiceEngine {
+  readonly model: string;
+  readonly usdPerMinute = USD_PER_MINUTE;
   private readonly options: GptLiveEngineOptions;
 
   constructor(options: GptLiveEngineOptions) {
     this.options = options;
+    this.model = options.model;
   }
 
   async openSession(

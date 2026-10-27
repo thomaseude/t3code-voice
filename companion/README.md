@@ -68,8 +68,12 @@ Routes:
   to 15 s; the attach after it waits 3 s at most. The app applies the answer and does not
   wait for full ICE gathering. A device
   has one session at most: a new `POST /sessions` closes the one it still had. Errors:
-  `400` `invalid_offer`, `502` `voice_engine_failed` (OpenAI refused or cannot be
-  reached), `503` `voice_unavailable` (no OpenAI key).
+  `400` `invalid_offer`, `403` `budget_reached` (today's sessions cost the daily budget),
+  `502` `voice_engine_failed` (OpenAI refused or cannot be reached), `503`
+  `voice_unavailable` (no OpenAI key).
+- `POST /sessions/:id/events` tells the companion about the app's microphone. Body
+  `{"type": "mute"}` or `{"type": "unmute"}`. It answers `204`, `400` `invalid_event`, or
+  `404` when the device has no session with this id.
 - `DELETE /sessions/:id` ends the device's session: `204`, or `404` when the device has no
   session with this id.
 
@@ -158,8 +162,22 @@ included. If the companion's control channel to GPT-Live drops, it attaches agai
 then, tool results wait, and a drop counts as a failed attach. While a session closes, a
 channel is used as soon as it attaches: the queued events go out on the first new channel,
 then the close; the close is sent again on each new channel until OpenAI confirms it, 20 s
-at most after the first close sent. The logs say when a session opens and ends, never what
-was said, asked or answered.
+at most after the first close sent. The logs say when a session opens and ends, and what it
+cost, never what was said, asked or answered.
+
+A session stops by itself after a silence: 3 minutes (`voice.idleMinutes`), or 20 minutes
+(`voice.idleMinutesWhileTasksRun`) while a followed task runs or while T3 is away. The user
+speaking, a tool call, an announcement and unmuting start the silence again; the assistant
+speaking alone does not, and neither does the user while the app is muted. 30 s before the
+stop, the assistant says it is about to stop; a word keeps the session open. At the limit,
+it says it stops, and the session closes 5 s later.
+
+The companion records, for each session, the minutes it was open and their estimated cost:
+GPT-Live's $0.05 per minute, silence included. The delegation model's tokens are not
+counted. An open session saves its record every minute. Once today's sessions (the
+server's calendar day) cost 80 % of the daily budget (`voice.dailyBudgetUsd`, default $10),
+each open session hears a warning once, at a gap. At 100 %, the open sessions say so and
+close 5 s later, and `POST /sessions` answers `403` until the next day.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next
@@ -188,7 +206,10 @@ Settings in `config.json`, all optional:
     "model": "gpt-live-1",
     "voice": "brise",
     "delegationModel": "gpt-5.6-terra",
-    "summaryModel": "gpt-5.4-mini"
+    "summaryModel": "gpt-5.4-mini",
+    "idleMinutes": 3,
+    "idleMinutesWhileTasksRun": 20,
+    "dailyBudgetUsd": 10
   }
 }
 ```
@@ -288,12 +309,12 @@ open, and prints the `chmod` command that fixes it.
 
 | File | Content |
 |---|---|
-| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`) |
+| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`), `idleMinutes` (default 3), `idleMinutesWhileTasksRun` (default 20), `dailyBudgetUsd` (default 10) |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. Only `serve` opens it |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. The usage of each voice session: engine, day, start, minutes, estimated cost. Only `serve` opens it |
 | `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.
@@ -335,7 +356,8 @@ src/
     apiServer.ts             what `serve` needs to start and stop the HTTP API; activity;
                              voice sessions as the API opens and ends them
     voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to
-    taskRegistry.ts          TaskRegistry: followed tasks, what was announced, summaries
+    taskRegistry.ts          TaskRegistry: followed tasks, what was announced, summaries,
+                             usage of voice sessions
     summarizer.ts            Summarizer: the text model that tells what an agent did
     pushSender.ts            PushSender: notifications when no voice session can speak
     clock.ts                 Clock: current time and timers, faked in tests
@@ -345,7 +367,8 @@ src/
     pairing.ts               pairing window, one-time codes, global limit on wrong codes
     awareness.ts             T3's awareness rule: running, finished or waiting for the user
     activity.ts              the running / finished list of GET /activity
-    voiceSessions.ts         one voice session per device; answers the voice model's tools
+    voiceSessions.ts         one voice session per device; answers the voice model's tools;
+                             stops after a silence or at the daily budget; records usage
     voiceConversation.ts     French instructions and tool definitions for the voice model
     voiceTasks.ts            the task tools: start, message, follow, details, cancel
     spokenNames.ts           short French names for tasks, and finding a task by name

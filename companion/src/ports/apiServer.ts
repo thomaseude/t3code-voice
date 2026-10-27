@@ -40,7 +40,12 @@ export interface VoiceSessions {
   open(deviceId: string, request: OpenSessionRequest): Promise<OpenSessionResult>;
   /** Ends the device's session. False when the device has no session with this id. */
   close(deviceId: string, sessionId: string): Promise<boolean>;
+  /** A signal from the app about its session. False when the device has no session with this id. */
+  signal(deviceId: string, sessionId: string, signal: SessionSignal): boolean;
 }
+
+/** "mute": the app turned its microphone off (the user, the AirPods, or the AirPods removed). */
+export type SessionSignal = "mute" | "unmute";
 
 export interface OpenSessionRequest {
   /** The iPhone's WebRTC SDP offer. */
@@ -54,4 +59,6 @@ export type OpenSessionResult =
   /** No voice engine is configured (no OpenAI key). */
   | { status: "unavailable" }
   /** The engine refused or could not be reached. */
-  | { status: "failed" };
+  | { status: "failed" }
+  /** Today's voice sessions already cost the daily budget. */
+  | { status: "budget_reached" };

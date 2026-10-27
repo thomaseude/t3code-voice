@@ -102,6 +102,10 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
         return sendJson(response, 200, activity);
       }
     }
+    const eventsOf = /^\/sessions\/([A-Za-z0-9_-]{1,64})\/events$/.exec(path)?.[1];
+    if (request.method === "POST" && eventsOf !== undefined) {
+      return sessionEvent(request, response, authentication.device.id, eventsOf);
+    }
     const sessionId = /^\/sessions\/([A-Za-z0-9_-]{1,64})$/.exec(path)?.[1];
     if (request.method === "DELETE" && sessionId !== undefined) {
       const closed = await options.voiceSessions.close(authentication.device.id, sessionId);
@@ -131,7 +135,27 @@ export async function startHttpApi(options: HttpApiOptions): Promise<RunningApiS
         return sendJson(response, 503, { error: "voice_unavailable" });
       case "failed":
         return sendJson(response, 502, { error: "voice_engine_failed" });
+      case "budget_reached":
+        return sendJson(response, 403, { error: "budget_reached" });
     }
+  }
+
+  /** Mute and unmute; the other signals of the spec come with #26. */
+  async function sessionEvent(
+    request: IncomingMessage,
+    response: ServerResponse,
+    deviceId: string,
+    sessionId: string,
+  ) {
+    const type = (await readJson(request))?.type;
+    if (type !== "mute" && type !== "unmute") {
+      return sendJson(response, 400, { error: "invalid_event" });
+    }
+    if (!options.voiceSessions.signal(deviceId, sessionId, type)) {
+      return sendJson(response, 404, { error: "not_found" });
+    }
+    response.writeHead(204);
+    return response.end();
   }
 
   async function pair(request: IncomingMessage, response: ServerResponse) {
