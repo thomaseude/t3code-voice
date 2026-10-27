@@ -195,11 +195,35 @@ describe("start_task", () => {
     assert.deepEqual(
       await call("start_task", { ...startArgs, agent: undefined, model: "claude" }),
       {
-        error: "unknown_model",
-        models: ["Claude Opus 5.5", "Claude Sonnet 5.5"],
+        status: "ambiguous_model",
+        choices: [
+          { agent: "Claude", model: "Claude Opus 5.5" },
+          { agent: "Claude", model: "Claude Sonnet 5.5" },
+        ],
       },
     );
     assert.deepEqual(backend.commands, []);
+  });
+
+  test("a version tells two models apart: Opus 5.5 is not Opus 5", async () => {
+    const { backend, call } = await setup();
+    backend.config.providers = [
+      provider("claudeAgent", {
+        displayName: "Claude",
+        models: [
+          { slug: "claude-opus-5-5", name: "Claude Opus 5.5" },
+          { slug: "claude-opus-5", name: "Claude Opus 5" },
+        ],
+      }),
+    ];
+
+    await call("start_task", { ...startArgs, agent: undefined, model: "Opus 5.5" });
+    await call("start_task", { ...startArgs, model: "opus 5", spoken_name: "autre tâche" });
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type === "launch" && command.model.model),
+      ["claude-opus-5-5", "claude-opus-5"],
+    );
   });
 
   test("an unknown agent or model starts nothing and lists the choices", async () => {

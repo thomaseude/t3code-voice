@@ -128,9 +128,13 @@ function meaningfulStems(text: string): Set<string> {
   );
 }
 
-/** Lowercase words without accents or punctuation; "l'accueil" gives "l" and "accueil". */
+/**
+ * Lowercase words without accents or punctuation; "l'accueil" gives "l" and "accueil". A
+ * version number stays one word: "5.5" and "5-5" give "55", so "Opus 5.5" is not "Opus 5".
+ */
 function wordsOf(text: string): string[] {
   return plain(text)
+    .replace(/(\d)[.,-](?=\d)/g, "$1")
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
 }

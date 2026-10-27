@@ -428,9 +428,13 @@ function chooseModel(
       match.kind === "ambiguous" &&
       new Set(match.items.map(({ model }) => model.slug)).size > 1
     ) {
-      // Several models fit ("sonnet" with two Sonnet models): the user must pick one.
-      const names = [...new Set(match.items.map(({ model }) => model.name))];
-      return { kind: "other", result: { error: "unknown_model", models: names } };
+      // Several models fit ("sonnet" with two Sonnet models): the user must pick one. The
+      // agent goes with each choice, since two agents can give a model the same name.
+      const choices = match.items.map((each) => ({
+        agent: each.provider.displayName,
+        model: each.model.name,
+      }));
+      return { kind: "other", result: { status: "ambiguous_model", choices } };
     }
     // The same model offered by two instances of an agent: the one the defaults use.
     const offer =

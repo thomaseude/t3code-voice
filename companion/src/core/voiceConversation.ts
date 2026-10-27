@@ -30,7 +30,8 @@ export const VOICE_TOOLS: VoiceTool[] = [
       "The companion picks the folder: a new worktree when the project's folder is busy or the " +
       "project uses worktrees. Read back what it answers: agent, model, project, request, " +
       "and the task's spoken name. The task is followed: its news will be announced. " +
-      "status ambiguous_project: ask which folder the user means, then call again with folder.",
+      "status ambiguous_project: ask which folder the user means, then call again with folder. " +
+      "status ambiguous_model: ask which model, then call again with its agent and model.",
     parameters: {
       type: "object",
       properties: {
