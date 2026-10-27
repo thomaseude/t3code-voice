@@ -273,7 +273,7 @@ describe("an announcement that is no longer true", () => {
     const { open, update, wait } = setup();
     const session = await open();
 
-    session.emit({ type: "speech", speaker: "user" });
+    session.emit({ type: "speech", speaker: "user", text: "Bonjour" });
     update("t1", { pendingRequest: { id: "r1", kind: "user_input", blocking: true } });
     await wait(500);
     // Answered in the T3 app before the user stopped talking.
@@ -576,10 +576,10 @@ describe("speaking at the next gap", () => {
     const { open, update, wait } = setup();
     const session = await open();
 
-    session.emit({ type: "speech", speaker: "user" });
+    session.emit({ type: "speech", speaker: "user", text: "Bonjour" });
     update("t1", { status: "failed" });
     await wait(1_500);
-    session.emit({ type: "speech", speaker: "user" });
+    session.emit({ type: "speech", speaker: "user", text: "Bonjour" });
     await wait(1_999);
     assert.deepEqual(session.spoken, []);
     await wait(1);
@@ -641,7 +641,7 @@ describe("speaking at the next gap", () => {
     });
     const session = await open();
 
-    session.emit({ type: "speech", speaker: "user" });
+    session.emit({ type: "speech", speaker: "user", text: "Bonjour" });
     update("t2", { status: "failed" });
     update("t1", { pendingRequest: { id: "r1", kind: "user_input", blocking: true } });
     await wait(0);
@@ -693,7 +693,7 @@ describe("when no voice session can speak", () => {
   test("a session that ends with announcements still waiting pushes them", async () => {
     const { open, update, wait, push, sessions } = setup();
     const session = await open();
-    session.emit({ type: "speech", speaker: "user" });
+    session.emit({ type: "speech", speaker: "user", text: "Bonjour" });
     update("t1", { status: "failed" });
     await wait(500);
 

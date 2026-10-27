@@ -11,6 +11,7 @@ import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
 import type { AnnouncementQueue } from "./announcementQueue.ts";
+import { Confirmations } from "./confirmations.ts";
 import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
@@ -47,6 +48,8 @@ interface ActiveSession {
   cancelEnd?: () => void;
   /** How to take back the session's last start or message, and until when (clock time). */
   lastAction?: { undo: Undo; until: number };
+  /** The question the user must answer "oui" to, before a risky action runs. */
+  confirmations: Confirmations<ToolOutcome>;
 }
 
 /** How often open sessions are checked for a revoked device, when no tool is called. */
@@ -140,6 +143,7 @@ export class VoiceSessionManager implements VoiceSessions {
       engineSession,
       timeZone,
       openedAt: this.options.clock.now(),
+      confirmations: new Confirmations(this.options.clock),
     };
     this.byDevice.set(deviceId, session);
     this.options.announcements.openSession(session.id, {
@@ -212,6 +216,7 @@ export class VoiceSessionManager implements VoiceSessions {
       return;
     }
     if (event.type === "speech") {
+      if (event.speaker === "user") session.confirmations.heard(event.text);
       this.options.announcements.heardSpeech(session.id);
       return;
     }
@@ -253,9 +258,11 @@ export class VoiceSessionManager implements VoiceSessions {
     const { tasks } = this.options;
     switch (name) {
       case "start_task":
-        return this.remember(session, await tasks.startTask(args));
+        return this.act(session, name, args, () => tasks.startTask(args));
+      case "interrupt_task":
+        return this.act(session, name, args, async () => tasks.interruptTask(args));
       case "send_message":
-        return this.remember(session, await tasks.sendMessage(args));
+        return this.remember(session, name, await tasks.sendMessage(args));
       case "follow_thread":
         return tasks.followThread(args);
       case "unfollow_thread":
@@ -291,10 +298,33 @@ export class VoiceSessionManager implements VoiceSessions {
   }
 
   /**
-   * Keeps the undo of a start or a message. Every start or message replaces the one before,
-   * also one that did nothing: "non, arrête" never reaches past it.
+   * Runs a tool whose action may need the user's "oui". Without a confirmation, the tool
+   * acts or asks its question. With one, the action the question read back runs, and only
+   * if the user answered it with a clear yes.
    */
-  private remember(session: ActiveSession, outcome: ToolOutcome): unknown {
+  private async act(
+    session: ActiveSession,
+    tool: string,
+    args: unknown,
+    ask: () => Promise<ToolOutcome>,
+  ): Promise<unknown> {
+    const token = (args as { confirmation?: unknown } | null)?.confirmation;
+    if (typeof token !== "string") return this.remember(session, tool, await ask());
+    const taken = await session.confirmations.take(tool, token);
+    if (taken.kind === "refused") return taken.result;
+    return this.remember(session, tool, await taken.run());
+  }
+
+  /**
+   * Keeps the undo of a start or a message, or asks the outcome's question. Every action or
+   * question replaces the undo before, also one that did nothing: "non, arrête" never
+   * reaches past it.
+   */
+  private remember(session: ActiveSession, tool: string, outcome: ToolOutcome): unknown {
+    if ("confirm" in outcome) {
+      session.lastAction = undefined;
+      return session.confirmations.ask({ tool, ...outcome.confirm });
+    }
     session.lastAction =
       outcome.undo === undefined
         ? undefined

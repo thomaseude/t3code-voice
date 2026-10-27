@@ -100,7 +100,19 @@ describe("opening a voice session", () => {
     assert.match(instructions, /N'invente jamais un statut/);
   });
 
-  test("the model can read T3, start and steer tasks, and end the conversation", async () => {
+  test("a bare stop word only stops the assistant's speech: no tool interrupts or cancels", async () => {
+    const { engine, sessions } = setup();
+
+    await openOne(sessions);
+
+    const { instructions } = engine.last.request;
+    assert.match(
+      instructions,
+      /Un simple "stop", "tais-toi" ou "attends" veut seulement dire : arrête de parler\. N'appelle alors aucun outil/,
+    );
+  });
+
+  test("the model can read T3, start, steer and interrupt tasks, and end the conversation", async () => {
     const { engine, sessions } = setup();
 
     await openOne(sessions);
@@ -113,6 +125,7 @@ describe("opening a voice session", () => {
         "start_task",
         "send_message",
         "cancel_last_action",
+        "interrupt_task",
         "follow_thread",
         "unfollow_thread",
         "get_task_details",
