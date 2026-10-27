@@ -153,7 +153,7 @@ the user's requests to; it calls the companion's tools by name. It is billed per
 top of GPT-Live's $0.05 per minute.
 
 `summaryModel` is the cheap text model that summarizes what an agent did when a followed
-task completes. The announcement speaks the short summary; `get_task_details` gives the
+task completes or fails. The announcement speaks the short summary; `get_task_details` gives the
 long one. It reads the agent's last messages of the run, with `store: false`. Without an
 OpenAI key there are no summaries.
 
@@ -289,14 +289,25 @@ src/
     apiServer.ts             what `serve` needs to start and stop the HTTP API; activity;
                              voice sessions as the API opens and ends them
     voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to
+    taskRegistry.ts          TaskRegistry: followed tasks, what was announced, summaries
+    summarizer.ts            Summarizer: the text model that tells what an agent did
+    pushSender.ts            PushSender: notifications when no voice session can speak
     clock.ts                 Clock: current time and timers, faked in tests
   core/
     shellState.ts            projects and threads kept up to date; "is this thread running?"
     rateLimiter.ts           requests per key (IP, device) in fixed windows
     pairing.ts               pairing window, one-time codes, global limit on wrong codes
+    awareness.ts             T3's awareness rule: running, finished or waiting for the user
     activity.ts              the running / finished list of GET /activity
     voiceSessions.ts         one voice session per device; answers the voice model's tools
     voiceConversation.ts     French instructions and tool definitions for the voice model
+    voiceTasks.ts            the task tools: start, message, follow, details, cancel
+    spokenNames.ts           short French names for tasks, and finding a task by name
+    folderClaims.ts          project folders a voice start just took
+    announcements.ts         watches followed tasks: 5 s settle, one announcement per event
+    announcementQueue.ts     per-session queue, spoken at the next gap, else pushed
+    announcementText.ts      what an announcement says, in French
+    taskSummaries.ts         summaries of finished runs, made once and cached
     clock.ts                 the real clock
     secrets.ts               masks credentials in anything the companion prints
   adapters/
@@ -308,6 +319,9 @@ src/
     http/                    the HTTP API: token check and rate limits on every route
     gpt-live/                VoiceEngine on OpenAI GPT-Live: session creation with the
                              phone's offer, control channel for tool calls and speech
+    task-registry/           TaskRegistry on SQLite (tasks.sqlite, node:sqlite)
+    openai-summarizer/       Summarizer on OpenAI's Responses API
+    log-push/                PushSender that only logs, until ntfy
     cli/                     `t3-voice` commands (setup, status, serve, pair, devices)
 deploy/
   t3-voice.service           systemd user unit template

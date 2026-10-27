@@ -3,7 +3,7 @@
 // T3 adds fields often and marks many as optional ("absent from older servers"), so every
 // reader below tolerates missing fields and ignores unknown ones.
 
-import { LIVE_RUN_STATUSES } from "../../core/activity.ts";
+import { LIVE_RUN_STATUSES } from "../../core/awareness.ts";
 import type {
   LaunchThreadRequest,
   ModelSelection,

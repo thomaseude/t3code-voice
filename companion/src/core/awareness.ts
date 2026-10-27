@@ -12,6 +12,9 @@ export type Awareness =
   | "completed"
   | "failed";
 
+/** Statuses of a run still doing work. In `waiting`, only the checkpoint capture is left. */
+export const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+
 /** Run statuses during which the agent's turn is still going. */
 const LIVE_TURN_STATUSES = new Set(["preparing", "starting", "running"]);
 
@@ -56,12 +59,8 @@ function stateOf(thread: Thread): Awareness | null {
   if (request !== null && request.kind !== "user_input" && request.kind !== "auth_refresh") {
     return "waiting_for_approval";
   }
+  if (LIVE_RUN_STATUSES.has(runStatus)) return "running";
   switch (runStatus) {
-    case "preparing":
-    case "starting":
-    case "running":
-    case "waiting":
-      return "running";
     case "completed":
       return backgroundWorkHoldsCompletion(thread) ? "running" : "completed";
     case "failed":

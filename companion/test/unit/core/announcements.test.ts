@@ -50,7 +50,7 @@ function setup({
   state.apply({ type: "snapshot", sequence: 1, projects: [project("p1", "Joombo")], threads });
   let connected = true;
   const shell = () => (connected ? state : null);
-  const queue = new AnnouncementQueue({ registry, push, clock, log });
+  const queue = new AnnouncementQueue({ registry, shell, push, clock, log });
   const summaries = new TaskSummaries({ backend, summarizer, registry, clock, log });
   const watcher = new TaskWatcher({ registry, shell, summaries, queue, clock, log });
   const engine = new FakeVoiceEngine();
@@ -244,6 +244,46 @@ describe("a followed task that completes", () => {
   });
 });
 
+describe("an announcement that is no longer true", () => {
+  test("a completion whose summary arrives after the run went on is never told", async () => {
+    const { open, update, wait, summarizer } = setup();
+    const session = await open();
+    let release = () => {};
+    summarizer.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    update("t1", { status: "completed" });
+    await wait(5_000);
+    update("t1", {
+      status: "running",
+      latestRunId: "run-2",
+      pendingRequest: { id: "r2", kind: "command", blocking: true },
+    });
+    await wait(0);
+    release();
+    await wait(0);
+    update("t1", { updatedAt: "2026-10-26T10:10:00.000Z" });
+    await wait(10_000);
+
+    assert.deepEqual(session.spoken, ["«tests Reviews» sur Joombo demande une autorisation."]);
+  });
+
+  test("an announcement waiting for a gap is dropped when its event is over", async () => {
+    const { open, update, wait } = setup();
+    const session = await open();
+
+    session.emit({ type: "speech", speaker: "user" });
+    update("t1", { pendingRequest: { id: "r1", kind: "user_input", blocking: true } });
+    await wait(500);
+    // Answered in the T3 app before the user stopped talking.
+    update("t1", { pendingRequest: null });
+    await wait(10_000);
+
+    assert.deepEqual(session.spoken, []);
+  });
+});
+
 describe("a followed task that fails or needs the user", () => {
   test("a failure is announced at once, with its cause and when the run can resume", async () => {
     const { open, update, wait } = setup();
@@ -264,6 +304,19 @@ describe("a followed task that fails or needs the user", () => {
     assert.deepEqual(session.spoken, [
       "«tests Reviews» sur Joombo a échoué : limite d'utilisation atteinte. Elle pourra reprendre à 16 h 00.",
     ]);
+  });
+
+  test("a failure's summary is made right after it is told, for get_task_details", async () => {
+    const { open, update, wait, summarizer, registry } = setup();
+    await open();
+
+    update("t1", { status: "failed" });
+    await wait(0);
+
+    assert.deepEqual(summarizer.requests, [
+      { request: "Corrige les tests", output: "J'ai corrigé les tests.", outcome: "failed" },
+    ]);
+    assert.equal(registry.summaryOf("t1")?.eventKey, "failed:run-1");
   });
 
   test("a run T3 resumes by itself, on another day, says so", async () => {
@@ -435,6 +488,26 @@ describe("each event is announced once", () => {
       project: "Joombo",
       state: "completed",
     });
+    assert.deepEqual(session.spoken, []);
+  });
+});
+
+describe("when the companion stops", () => {
+  test("a completion settling, or one T3 reports afterwards, is never announced", async () => {
+    const { open, update, wait, watcher } = setup({
+      followed: [
+        followedTask("t1", { spokenName: "tests Reviews" }),
+        followedTask("t2", { spokenName: "page offre" }),
+      ],
+      threads: [RUNNING, thread("t2", { status: "running" })],
+    });
+    const session = await open();
+    update("t1", { status: "completed" });
+
+    watcher.stop();
+    update("t2", { status: "completed" });
+    await wait(10_000);
+
     assert.deepEqual(session.spoken, []);
   });
 });

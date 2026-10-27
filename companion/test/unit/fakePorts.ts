@@ -441,6 +441,7 @@ export function unusedSummaries(
 export function unusedAnnouncements(clock: Clock = new FakeClock()): AnnouncementQueue {
   return new AnnouncementQueue({
     registry: new InMemoryTaskRegistry(),
+    shell: () => null,
     push: new FakePushSender(),
     clock,
     log: () => {},

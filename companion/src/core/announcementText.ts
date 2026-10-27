@@ -1,5 +1,6 @@
 // What an announcement says, in French, for the voice model to tell the user.
 
+import type { PushNotification } from "../ports/pushSender.ts";
 import type { ThreadError } from "../ports/t3Backend.ts";
 
 /** An event of a followed task, ready to be spoken or pushed. */
@@ -7,7 +8,7 @@ export interface Announcement {
   threadId: string;
   /** Which event it is (see eventKeyOf): each one is told once. */
   eventKey: string;
-  state: "completed" | "failed" | "waiting_for_input" | "waiting_for_approval";
+  state: PushNotification["state"];
   spokenName: string;
   project: string | null;
   /** The short summary of a completed run, or null when there is none. */

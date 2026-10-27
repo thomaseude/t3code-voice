@@ -35,6 +35,8 @@ export class TaskWatcher {
   private readonly settling = new Map<string, { eventKey: string; cancel: () => void }>();
   /** Announcements being prepared (their summary is being made), by thread id. */
   private readonly preparing = new Map<string, string>();
+  /** Set by stop: the registry is about to close, so nothing more is announced. */
+  private stopped = false;
 
   constructor(options: TaskWatcherOptions) {
     this.options = options;
@@ -43,7 +45,7 @@ export class TaskWatcher {
   /** Looks at every followed task. Call it after each change of T3's state. */
   check(): void {
     const shell = this.options.shell();
-    if (shell === null) return;
+    if (shell === null || this.stopped) return;
     const tasks = this.options.registry.followedTasks();
     for (const [threadId, settling] of this.settling) {
       if (!tasks.some((task) => task.threadId === threadId)) {
@@ -57,8 +59,9 @@ export class TaskWatcher {
     }
   }
 
-  /** Cancels the completions still settling: the companion is stopping. */
+  /** Cancels the completions still settling, and ignores T3 from now on: the companion is stopping. */
   stop(): void {
+    this.stopped = true;
     for (const settling of this.settling.values()) settling.cancel();
     this.settling.clear();
   }
@@ -104,8 +107,12 @@ export class TaskWatcher {
     this.preparing.set(task.threadId, eventKey);
     this.announcementOf(task, thread, eventKey)
       .then((announcement) => {
-        // Unfollowed while its summary was being made: there is no one to tell.
-        if (this.followed(task.threadId) !== undefined) this.options.queue.announce(announcement);
+        if (this.stopped) return;
+        this.options.queue.announce(announcement);
+        // A failure is told by its cause; its summary is made now, for get_task_details.
+        if (announcement.state === "failed") {
+          this.options.summaries.summaryOf(thread, eventKey).catch(() => {});
+        }
       })
       .catch((error) => {
         this.options.log(
@@ -122,8 +129,10 @@ export class TaskWatcher {
     thread: Thread,
     eventKey: string,
   ): Promise<Announcement> {
-    const state = awarenessOf(thread) as Announcement["state"];
-    // A failure is told at once, by its cause: get_task_details summarizes it when asked.
+    const state = awarenessOf(thread);
+    // eventKeyOf gave a key, so there is something to announce.
+    if (state === null || state === "running") throw new Error("Nothing to announce.");
+    // A failure is told at once, by its cause, without waiting for a summary.
     const summary =
       state === "completed" ? await this.options.summaries.summaryOf(thread, eventKey) : null;
     return {

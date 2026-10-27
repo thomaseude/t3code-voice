@@ -93,7 +93,7 @@ export async function runServe({
   let connected = true;
   const shell = () => (connected && state.hasSnapshot ? state : null);
   const { summaryModel, ...voice } = { ...DEFAULT_VOICE, ...config.voice };
-  const queue = new AnnouncementQueue({ registry, push: pushSender(out), clock, log: out });
+  const queue = new AnnouncementQueue({ registry, shell, push: pushSender(out), clock, log: out });
   const summaries = new TaskSummaries({
     backend,
     summarizer: apiKey === null ? null : summarizer({ apiKey, model: summaryModel }),

@@ -9,9 +9,6 @@ import type { ShellState } from "./shellState.ts";
 const MAX_PER_LIST = 10;
 const FINISHED_SINCE_MS = 24 * 3_600_000;
 
-/** Statuses of a run still doing work. In `waiting`, only the checkpoint capture is left. */
-export const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
-
 export function activityOf(state: ShellState, now: Date): Activity {
   const { running, finished } = allActivity(state);
   return {
