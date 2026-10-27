@@ -82,7 +82,10 @@ struct CompanionClient {
         switch response.status {
         case 201:
             let answer = try JSONDecoder().decode(SessionAnswer.self, from: response.body)
-            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
+            // The session is closed with the token the companion expects from now on.
+            var opener = connection
+            if let replacement = response.headers["t3voice-token"], !replacement.isEmpty { opener.token = replacement }
+            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: opener)
         case 502:
             throw CompanionError.voiceEngineFailed
         case 503:
@@ -93,14 +96,11 @@ struct CompanionClient {
     }
 
     /// Ends the conversation on the companion. A session it no longer has is already ended.
-    /// It uses the stored token of the same companion, which may be newer, and else the
-    /// connection that opened the session: "Oublier" deletes the token before the end.
+    /// It uses the connection that opened the session, never the stored one: the companion
+    /// closes a session only for the device that opened it, and the stored connection may be
+    /// gone ("Oublier") or another device's (paired again).
     func closeSession(_ session: OpenedSession) async throws {
-        var connection = session.connection
-        if let stored = try store.load(), stored.companionURL == connection.companionURL {
-            connection = stored
-        }
-        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: connection)
+        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: session.connection)
         switch response.status {
         case 204, 404:
             return

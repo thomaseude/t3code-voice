@@ -102,7 +102,7 @@ final class AppModel: ObservableObject {
 
     /// Deletes the connection on this iPhone only (kept by Thomas in PR #33). To revoke the
     /// device on the server, run `t3-voice devices revoke` there. A running voice conversation
-    /// ends first, while its `DELETE` can still send the token.
+    /// ends too.
     func forget() async {
         forgottenCount += 1
         await endSession()

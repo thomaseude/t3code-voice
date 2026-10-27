@@ -105,18 +105,15 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(model.isPaired)
     }
 
-    func testForgettingEndsTheVoiceSessionWhileTheTokenIsStillThere() async {
-        // The session's DELETE needs the token: forgetting first would leave it open on the
-        // companion, and the microphone on.
+    func testForgettingEndsTheVoiceSession() async {
+        // Without it, the microphone and the Live Activity would stay on after "Oublier".
         let store = InMemoryConnectionStore(paired)
-        var connectionWhenEnding: CompanionConnection?
-        let model = AppModel(store: store, transport: FakeTransport(), modelName: "iPhone", endSession: {
-            connectionWhenEnding = store.connection
-        })
+        var ended = false
+        let model = AppModel(store: store, transport: FakeTransport(), modelName: "iPhone", endSession: { ended = true })
 
         await model.forget()
 
-        XCTAssertEqual(connectionWhenEnding, paired)
+        XCTAssertTrue(ended)
         XCTAssertNil(store.connection)
         XCTAssertFalse(model.isPaired)
     }

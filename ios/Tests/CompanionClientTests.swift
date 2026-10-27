@@ -142,14 +142,16 @@ final class CompanionClientTests: XCTestCase {
         XCTAssertEqual(transport.jsonBody(of: request), ["sdp": "v=0 offer", "timeZone": "Europe/Paris"])
     }
 
-    func testOpeningASessionStoresANewTokenFromTheCompanion() async throws {
+    func testOpeningASessionStoresANewTokenFromTheCompanionAndClosesWithIt() async throws {
+        // Once the new token is used, the old one stops working.
         let transport = FakeTransport()
         transport.responses = [response(201, json: #"{"sessionId":"s1","sdp":"v=0"}"#, headers: ["t3voice-token": "device-token-2"])]
         let store = InMemoryConnectionStore(paired)
 
-        _ = try await CompanionClient(transport: transport, store: store).openSession(offer: "v=0", timeZone: "Europe/Paris")
+        let opened = try await CompanionClient(transport: transport, store: store).openSession(offer: "v=0", timeZone: "Europe/Paris")
 
         XCTAssertEqual(store.connection?.token, "device-token-2")
+        XCTAssertEqual(opened.connection.token, "device-token-2")
     }
 
     func testWithoutAnOpenAIKeyOnTheCompanionVoiceIsUnavailable() async {
@@ -214,16 +216,17 @@ final class CompanionClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
     }
 
-    func testClosingASessionUsesTheNewestTokenOfTheSameCompanion() async throws {
-        // The token rotated after the session opened: the old one may no longer work.
+    func testClosingASessionAfterPairingAgainUsesTheDeviceThatOpenedIt() async throws {
+        // Pairing again with the same companion creates a new device, and the companion
+        // closes a session only for the device that opened it.
         let transport = FakeTransport()
         transport.responses = [response(204)]
-        var rotated = paired
-        rotated.token = "device-token-2"
+        var newDevice = paired
+        newDevice.token = "new-device-token"
 
-        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(rotated)).closeSession(session)
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(newDevice)).closeSession(session)
 
-        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-2")
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
     }
 
     private func assertThrows(
