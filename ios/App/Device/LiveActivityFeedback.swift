@@ -6,7 +6,8 @@ import Foundation
 /// start sound once the user can talk.
 @MainActor
 final class LiveActivityFeedback: SessionFeedback {
-    private var activity: Activity<VoiceActivityAttributes>?
+    // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
+    private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
 
     func show(_ state: VoiceSessionState) {
@@ -27,10 +28,10 @@ final class LiveActivityFeedback: SessionFeedback {
 
     private func start(status: String) {
         // One left over by a crash would show a session that no longer runs.
-        for stale in Activity<VoiceActivityAttributes>.activities {
+        for stale in ActivityKit.Activity<VoiceActivityAttributes>.activities {
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
-        activity = try? Activity.request(
+        activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(status: status), staleDate: nil),
             pushType: nil
