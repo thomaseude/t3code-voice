@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// Once paired: what T3 runs now and what finished in the last 24 hours.
+/// Once paired: what T3 runs now and what finished in the last 24 hours, and the button that
+/// starts a voice conversation.
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var session: VoiceSessionController
     @State private var confirmForget = false
 
     var body: some View {
         NavigationStack {
             content
                 .navigationTitle("Activité")
+                .safeAreaInset(edge: .bottom) { voice }
                 .refreshable { await model.refreshActivity() }
                 .task { await model.refreshActivity() }
                 .toolbar {
@@ -45,6 +48,41 @@ struct ActivityView: View {
                 Section("Terminé (24 h)") { rows(activity.finished, empty: "Rien de terminé ces dernières 24 h.") }
             }
         }
+    }
+
+    private var voice: some View {
+        VStack(spacing: 8) {
+            if let failure = session.lastFailure {
+                Text(failure.message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+            switch session.state {
+            case .idle:
+                Button {
+                    Task { await session.start() }
+                } label: {
+                    Label("Parler", systemImage: "mic.fill").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            case .authenticating:
+                ProgressView()
+            case .connecting, .live:
+                HStack {
+                    Label(session.state == .live ? "À l'écoute" : "Connexion…", systemImage: "mic.fill")
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("Fin", role: .destructive) { Task { await session.end() } }
+                        .buttonStyle(.borderedProminent)
+                }
+            case .ending:
+                Text("Fin…").foregroundStyle(.secondary)
+            }
+        }
+        .controlSize(.large)
+        .padding()
+        .background(.bar)
     }
 
     @ViewBuilder
