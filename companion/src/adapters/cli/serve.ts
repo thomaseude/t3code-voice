@@ -2,39 +2,56 @@
 // or T3 fails for good.
 
 import { activityOf } from "../../core/activity.ts";
+import { systemClock } from "../../core/clock.ts";
 import { ShellState } from "../../core/shellState.ts";
+import { VoiceSessionManager } from "../../core/voiceSessions.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
+import type { Clock } from "../../ports/clock.ts";
 import {
   type ConfigStore,
   DEFAULT_SERVER_HOST,
   DEFAULT_SERVER_PORT,
+  DEFAULT_VOICE,
 } from "../../ports/configStore.ts";
 import type { T3Connector } from "../../ports/t3Backend.ts";
+import type { VoiceEngine } from "../../ports/voiceEngine.ts";
 import { loadT3Setup } from "./t3Setup.ts";
+
+/** What the voice engine is built with. `apiKey` is a secret: never print it. */
+export interface VoiceEngineSettings {
+  apiKey: string;
+  model: string;
+  voice: string;
+  delegationModel: string;
+}
 
 export interface ServeOptions {
   store: ConfigStore;
   t3: T3Connector;
   /** main.ts plugs the HTTP adapter in here. */
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
+  /** main.ts plugs the GPT-Live adapter in here. */
+  voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
   waitForStop(): Promise<void>;
   out(line: string): void;
-  /** Current time in milliseconds; injectable for tests. */
-  now?: () => number;
+  /** Injectable for tests. */
+  clock?: Clock;
 }
 
 export async function runServe({
   store,
   t3,
   startServer,
+  voiceEngine,
   waitForStop,
   out,
-  now = Date.now,
+  clock = systemClock,
 }: ServeOptions) {
   const { config, pairing } = await loadT3Setup(store);
   // Read once now, so a damaged or loose device list stops the start, not the first request.
   const devices = await store.loadDevices();
+  const apiKey = await store.loadOpenAiKey();
 
   // Fail closed: connect checks that T3 is a tested version, and throws otherwise.
   const backend = await t3.connect(pairing, config.t3.acceptedServerVersions);
@@ -55,6 +72,24 @@ export async function runServe({
     onFatalError: (error) => fail(error),
   });
 
+  // Without a key, serve still runs: pairing and GET /activity need no voice engine.
+  if (apiKey === null)
+    out(`No OpenAI key in ${store.location}/openai.env: voice sessions are off.`);
+  const engine =
+    apiKey === null ? null : voiceEngine({ apiKey, ...DEFAULT_VOICE, ...config.voice });
+  const shell = () => (connected && state.hasSnapshot ? state : null);
+  const voiceSessions = new VoiceSessionManager({
+    engine,
+    shell,
+    // `t3-voice devices revoke` writes the revocation; serve reads it from the store.
+    isRevoked: async (deviceId) => {
+      const device = (await store.loadDevices()).find((candidate) => candidate.id === deviceId);
+      return device === undefined || device.revokedAt !== null;
+    },
+    clock,
+    log: out,
+  });
+
   let server: RunningApiServer | null = null;
   try {
     const {
@@ -67,7 +102,11 @@ export async function runServe({
       port,
       ...(clientIpHeader ? { clientIpHeader } : {}),
       // While T3 is away, its last known state could be stale: say so instead.
-      activity: () => (connected && state.hasSnapshot ? activityOf(state, new Date(now())) : null),
+      activity: () => {
+        const current = shell();
+        return current === null ? null : activityOf(current, new Date(clock.now()));
+      },
+      voiceSessions,
     });
     const { version } = backend.serverInfo();
     const paired = devices.filter((device) => device.revokedAt === null).length;
@@ -76,6 +115,8 @@ export async function runServe({
 
     await Promise.race([waitForStop(), failed]);
   } finally {
+    // An open session keeps costing at OpenAI until it is closed.
+    await voiceSessions.closeAll();
     await server?.close();
     subscription.close();
     backend.close();

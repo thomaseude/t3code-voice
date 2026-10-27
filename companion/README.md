@@ -60,6 +60,36 @@ Routes:
   `{threadId, title, project, state, updatedAt}`, where `state` is `running`,
   `waiting_for_input`, `waiting_for_approval`, `completed` or `failed`. It answers `503`
   while the companion reconnects to T3.
+- `POST /sessions` starts a voice conversation. Body `{"sdp": "<WebRTC SDP offer>",
+  "timeZone": "Europe/Paris"}` (`timeZone` is optional; it sets what "today" means, and
+  defaults to the server's). The companion sends the offer to GPT-Live with its own OpenAI
+  key and answers `201` with `{"sessionId", "sdp": "<SDP answer>"}` as soon as GPT-Live
+  answers and the companion's control channel is attached. GPT-Live's answer can take up
+  to 15 s; the attach after it waits 3 s at most. The app applies the answer and does not
+  wait for full ICE gathering. A device
+  has one session at most: a new `POST /sessions` closes the one it still had. Errors:
+  `400` `invalid_offer`, `502` `voice_engine_failed` (OpenAI refused or cannot be
+  reached), `503` `voice_unavailable` (no OpenAI key).
+- `DELETE /sessions/:id` ends the device's session: `204`, or `404` when the device has no
+  session with this id.
+
+During a session the companion answers the voice model's tools from T3's state:
+
+- `list_projects`;
+- `get_activity` with `scope` `running`, `today` (the device's calendar day) or `finished`
+  (the last 24 hours): the 10 latest tasks and the `total`;
+- `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
+
+While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no T3 data:
+the companion checks the device before each tool call and every 30 s, and closes the
+session of a revoked one. When `serve` stops, it closes every session, those still opening
+included. If the companion's control channel to GPT-Live drops, it attaches again (after
+1, 2 and 4 s) before it gives up. A new channel is usable once it has stayed up 10 s; until
+then, tool results wait, and a drop counts as a failed attach. While a session closes, a
+channel is used as soon as it attaches: the queued events go out on the first new channel,
+then the close; the close is sent again on each new channel until OpenAI confirms it, 20 s
+at most after the first close sent. The logs say when a session opens and ends, never what
+was said, asked or answered.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next
@@ -83,9 +113,14 @@ Settings in `config.json`, all optional:
     "port": 8787,
     "clientIpHeader": "cf-connecting-ip",
     "publicUrl": "https://voice.example.com"
-  }
+  },
+  "voice": { "model": "gpt-live-1", "voice": "brise", "delegationModel": "gpt-5.6-terra" }
 }
 ```
+
+`voice` sets the GPT-Live session. `delegationModel` is the Responses model GPT-Live hands
+the user's requests to; it calls the companion's tools by name. It is billed per token, on
+top of GPT-Live's $0.05 per minute.
 
 `publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
 in the QR code, and needs it.
@@ -172,12 +207,12 @@ open, and prints the `chmod` command that fixes it.
 
 | File | Content |
 |---|---|
-| `config.json` | T3 URL and optional `t3.acceptedServerVersions` |
+| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`) |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `openai.env` | OpenAI key (secret, used by later tickets) |
+| `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.
 
@@ -215,12 +250,18 @@ src/
     t3Backend.ts             T3Backend, T3Connector, the companion's own T3 types
     configStore.ts           ConfigStore (settings, T3 token, paired devices)
     deviceAuth.ts            DeviceAuth: which device a token belongs to; issuing tokens
-    apiServer.ts             what `serve` needs to start and stop the HTTP API; activity
+    apiServer.ts             what `serve` needs to start and stop the HTTP API; activity;
+                             voice sessions as the API opens and ends them
+    voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to
+    clock.ts                 Clock: current time and timers, faked in tests
   core/
     shellState.ts            projects and threads kept up to date; "is this thread running?"
     rateLimiter.ts           requests per key (IP, device) in fixed windows
     pairing.ts               pairing window, one-time codes, global limit on wrong codes
     activity.ts              the running / finished list of GET /activity
+    voiceSessions.ts         one voice session per device; answers the voice model's tools
+    voiceConversation.ts     French instructions and tool definitions for the voice model
+    clock.ts                 the real clock
     secrets.ts               masks credentials in anything the companion prints
   adapters/
     t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
@@ -229,6 +270,8 @@ src/
     device-auth/             DeviceAuth with the companion's own opaque tokens (stored
                              hashed), replaced on use every 30 days
     http/                    the HTTP API: token check and rate limits on every route
+    gpt-live/                VoiceEngine on OpenAI GPT-Live: session creation with the
+                             phone's offer, control channel for tool calls and speech
     cli/                     `t3-voice` commands (setup, status, serve, pair, devices)
 deploy/
   t3-voice.service           systemd user unit template

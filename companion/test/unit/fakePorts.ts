@@ -1,5 +1,6 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
+import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import {
@@ -14,12 +15,20 @@ import {
   type T3Pairing,
   type Thread,
 } from "../../src/ports/t3Backend.ts";
+import {
+  type VoiceEngine,
+  VoiceEngineError,
+  type VoiceEvent,
+  type VoiceSession,
+  type VoiceSessionRequest,
+} from "../../src/ports/voiceEngine.ts";
 import { pairedDevice } from "./builders.ts";
 
 export class InMemoryConfigStore implements ConfigStore {
   readonly location = "/home/me/.config/t3voice";
   config: CompanionConfig | null = null;
   pairing: T3Pairing | null = null;
+  openAiKey: string | null = null;
   devices: PairedDevice[] = [];
   /** Open pairing windows, by code hash. */
   readonly pairingWindows = new Map<string, PairingWindow>();
@@ -35,6 +44,9 @@ export class InMemoryConfigStore implements ConfigStore {
   }
   async saveT3Pairing(pairing: T3Pairing) {
     this.pairing = pairing;
+  }
+  async loadOpenAiKey() {
+    return this.openAiKey;
   }
   async loadDevices() {
     return this.devices;
@@ -168,4 +180,93 @@ export class FakeDeviceAuth implements DeviceAuth {
     this.store?.devices.push(pairedDevice({ ...device, pairingCodeSha256 }));
     return { device, token };
   }
+}
+
+/** A voice session the fake engine opened: what the core sent to it. */
+export interface FakeVoiceSession extends VoiceSession {
+  readonly request: VoiceSessionRequest;
+  readonly toolResults: Array<{ callId: string; result: unknown }>;
+  closed: boolean;
+  /** Sends an event to the core, as the engine would. */
+  emit(event: VoiceEvent): void;
+}
+
+export class FakeVoiceEngine implements VoiceEngine {
+  readonly sessions: FakeVoiceSession[] = [];
+  /** Makes the next openSession() fail, like an engine that refuses the offer. */
+  failNextOpen = false;
+  /** While set, openSession() waits for it, like an engine slow to answer. */
+  answerGate: Promise<void> | null = null;
+
+  get last(): FakeVoiceSession {
+    const session = this.sessions.at(-1);
+    if (session === undefined) throw new Error("No voice session was opened.");
+    return session;
+  }
+
+  async openSession(request: VoiceSessionRequest, onEvent: (event: VoiceEvent) => void) {
+    if (this.failNextOpen) {
+      this.failNextOpen = false;
+      throw new VoiceEngineError("The engine answered 400.");
+    }
+    if (this.answerGate !== null) await this.answerGate;
+    const session: FakeVoiceSession = {
+      request,
+      sdpAnswer: `answer to ${request.sdpOffer}`,
+      toolResults: [],
+      closed: false,
+      emit: onEvent,
+      speak: () => {},
+      resolveToolCall: (callId, result) => {
+        session.toolResults.push({ callId, result });
+      },
+      close: async () => {
+        if (session.closed) return;
+        session.closed = true;
+        onEvent({ type: "closed", reason: "closed" });
+      },
+    };
+    this.sessions.push(session);
+    return session;
+  }
+}
+
+/** A clock the test moves by hand: scheduled callbacks run only when `advance` passes them. */
+export class FakeClock implements Clock {
+  private time: number;
+  private timers: Array<{ at: number; callback: () => void }> = [];
+
+  constructor(start = Date.parse("2026-10-26T10:00:00.000Z")) {
+    this.time = start;
+  }
+
+  now(): number {
+    return this.time;
+  }
+
+  schedule(delayMs: number, callback: () => void): () => void {
+    const timer = { at: this.time + delayMs, callback };
+    this.timers.push(timer);
+    return () => {
+      this.timers = this.timers.filter((other) => other !== timer);
+    };
+  }
+
+  /** Moves time forward and runs, in order, the callbacks that fall due. */
+  advance(ms: number): void {
+    const end = this.time + ms;
+    for (;;) {
+      const next = this.timers.filter((timer) => timer.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (next === undefined) break;
+      this.timers = this.timers.filter((timer) => timer !== next);
+      this.time = next.at;
+      next.callback();
+    }
+    this.time = end;
+  }
+}
+
+/** Lets pending promises and callbacks run, as several turns of the event loop. */
+export async function settle() {
+  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }

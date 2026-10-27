@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { runServe } from "../../../../src/adapters/cli/serve.ts";
+import { runServe, type VoiceEngineSettings } from "../../../../src/adapters/cli/serve.ts";
 import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
-import { project, thread } from "../../builders.ts";
-import { FakeT3Connector, InMemoryConfigStore } from "../../fakePorts.ts";
+import { pairedDevice, project, thread } from "../../builders.ts";
+import {
+  FakeClock,
+  FakeT3Connector,
+  FakeVoiceEngine,
+  InMemoryConfigStore,
+  settle,
+} from "../../fakePorts.ts";
 
 const NOW = new Date("2026-10-26T12:00:00.000Z");
 
@@ -17,11 +23,14 @@ function setUpStore(): InMemoryConfigStore {
     scopes: ["orchestration:read", "orchestration:operate"],
     expiresAt: "2026-11-25T14:00:00.000Z",
   };
+  store.openAiKey = "sk-test-key-123456";
   return store;
 }
 
 function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   const lines: string[] = [];
+  const engines: VoiceEngineSettings[] = [];
+  const engine = new FakeVoiceEngine();
   const started: ApiServerOptions[] = [];
   let closed = false;
   let stop = () => {};
@@ -38,13 +47,20 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
       };
     },
     waitForStop: () => new Promise<void>((resolve) => (stop = resolve)),
+    voiceEngine: (settings) => {
+      engines.push(settings);
+      return engine;
+    },
     out: (line) => lines.push(line),
-    now: () => NOW.getTime(),
+    clock: new FakeClock(NOW.getTime()),
   });
-  const listenOptions = () => started.map(({ activity: _activity, ...rest }) => rest);
+  const listenOptions = () =>
+    started.map(({ activity: _activity, voiceSessions: _voiceSessions, ...rest }) => rest);
   const activity = () => started[0]?.activity();
   return {
     lines,
+    engines,
+    engine,
     started,
     listenOptions,
     activity,
@@ -52,11 +68,6 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
     stop: () => stop(),
     isClosed: () => closed,
   };
-}
-
-/** Lets the fake T3 connect and send its snapshot. */
-async function settle() {
-  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }
 
 describe("runServe", () => {
@@ -304,5 +315,103 @@ describe("runServe", () => {
       run.stop();
       await run.done;
     });
+  });
+});
+
+describe("voice sessions", () => {
+  test("with an OpenAI key, sessions open with GPT-Live and the configured settings", async () => {
+    const store = setUpStore();
+    store.config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { voice: "cedar" } };
+    const run = serve(store);
+    await settle();
+
+    const result = await run.started[0]?.voiceSessions.open("d1", {
+      sdpOffer: "v=0",
+      timeZone: null,
+    });
+
+    assert.equal(result?.status, "opened");
+    assert.deepEqual(run.engines, [
+      {
+        apiKey: "sk-test-key-123456",
+        model: "gpt-live-1",
+        voice: "cedar",
+        delegationModel: "gpt-5.6-terra",
+      },
+    ]);
+    assert.ok(run.lines.every((line) => !line.includes("sk-test")));
+    run.stop();
+    await run.done;
+  });
+
+  test("without an OpenAI key, serve still starts, says so, and sessions are unavailable", async () => {
+    const store = setUpStore();
+    store.openAiKey = null;
+    const run = serve(store);
+    await settle();
+
+    const result = await run.started[0]?.voiceSessions.open("d1", {
+      sdpOffer: "v=0",
+      timeZone: null,
+    });
+
+    assert.deepEqual(result, { status: "unavailable" });
+    assert.ok(
+      run.lines.includes(
+        "No OpenAI key in /home/me/.config/t3voice/openai.env: voice sessions are off.",
+      ),
+    );
+    run.stop();
+    await run.done;
+  });
+
+  test("stopping serve ends the open sessions, so none keeps costing", async () => {
+    const run = serve(setUpStore());
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    run.stop();
+    await run.done;
+
+    assert.equal(run.engine.last.closed, true);
+  });
+
+  test("while T3 reconnects, the voice tools say T3 is unavailable", async () => {
+    const store = setUpStore();
+    store.devices = [pairedDevice({ id: "d1" })];
+    const t3 = new FakeT3Connector();
+    t3.backend.projects = [project("p1", "Joombo")];
+    const run = serve(store, t3);
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    t3.backend.subscriber?.onConnectionChange?.("reconnecting");
+    run.engine.last.emit({ type: "tool_call", callId: "c1", name: "list_projects", arguments: {} });
+    await settle();
+
+    assert.deepEqual(run.engine.last.toolResults, [
+      { callId: "c1", result: { error: "t3_unavailable" } },
+    ]);
+    run.stop();
+    await run.done;
+  });
+
+  test("a device revoked by the CLI gets no T3 data from its open session", async () => {
+    const store = setUpStore();
+    store.devices = [pairedDevice({ id: "d1" })];
+    const run = serve(store);
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    await store.revokeDevice("d1", "2026-10-26T12:00:00.000Z");
+    run.engine.last.emit({ type: "tool_call", callId: "c1", name: "list_projects", arguments: {} });
+    await settle();
+
+    assert.deepEqual(run.engine.last.toolResults, [
+      { callId: "c1", result: { error: "device_revoked" } },
+    ]);
+    assert.equal(run.engine.last.closed, true);
+    run.stop();
+    await run.done;
   });
 });

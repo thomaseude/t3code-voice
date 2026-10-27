@@ -7,9 +7,15 @@ import { revokeDevice } from "../../../../src/adapters/cli/devices.ts";
 import { OpaqueTokenAuth } from "../../../../src/adapters/device-auth/opaqueTokenAuth.ts";
 import { type HttpApiOptions, startHttpApi } from "../../../../src/adapters/http/httpApi.ts";
 import { DevicePairing, openPairingWindow } from "../../../../src/core/pairing.ts";
+import { VoiceSessionManager } from "../../../../src/core/voiceSessions.ts";
 import type { PairedDevice } from "../../../../src/ports/deviceAuth.ts";
 import { pairedDevice } from "../../builders.ts";
-import { FakeDeviceAuth, InMemoryConfigStore } from "../../fakePorts.ts";
+import {
+  FakeClock,
+  FakeDeviceAuth,
+  FakeVoiceEngine,
+  InMemoryConfigStore,
+} from "../../fakePorts.ts";
 
 // Every route of the spec (#15, "HTTP API"). POST /pair takes a pairing code instead of a
 // token, and answers 401 the same way while no pairing window is open.
@@ -40,6 +46,13 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
       auth: new FakeDeviceAuth(),
     }),
     activity: () => ({ running: [], finished: [] }),
+    voiceSessions: new VoiceSessionManager({
+      engine: new FakeVoiceEngine(),
+      shell: () => null,
+      isRevoked: async () => false,
+      clock: new FakeClock(),
+      log: () => {},
+    }),
     ...options,
   });
   stopServer = api.close;
@@ -534,5 +547,132 @@ describe("Device tokens issued by pairing", () => {
 
     assert.equal((await phone.activity(phone.token)).status, 401);
     assert.equal((await phone.activity(replacement)).status, 401);
+  });
+});
+
+describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
+  // A real WebRTC offer is a few kilobytes: bigger than the other routes' body limit.
+  const OFFER = `v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n${"a=candidate:1 1 udp 1 192.0.2.1 9 typ host\r\n".repeat(150)}`;
+
+  function voiceApi() {
+    const engine = new FakeVoiceEngine();
+    const auth = new FakeDeviceAuth();
+    auth.addDevice("phone-1", { id: "d1", name: "iPhone" });
+    auth.addDevice("phone-2", { id: "d2", name: "iPad" });
+    const voiceSessions = new VoiceSessionManager({
+      engine,
+      shell: () => null,
+      isRevoked: async () => false,
+      clock: new FakeClock(),
+      log: () => {},
+    });
+    return { engine, auth, voiceSessions };
+  }
+
+  const openSession = (url: string, body: unknown, token = "phone-1") =>
+    fetch(`${url}/sessions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  test("an SDP offer gets the engine's SDP answer and a session id, not cached", async () => {
+    const { engine, auth, voiceSessions } = voiceApi();
+    const url = await startApi({ auth, voiceSessions });
+
+    const response = await openSession(url, { sdp: OFFER, timeZone: "Europe/Paris" });
+
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const body = (await response.json()) as { sdp: string; sessionId: string };
+    assert.equal(body.sdp, `answer to ${OFFER}`);
+    assert.match(body.sessionId, /^[A-Za-z0-9_-]{16,}$/);
+    assert.ok(OFFER.length > 4096);
+    assert.equal(engine.last.request.sdpOffer, OFFER);
+  });
+
+  test("a body without an SDP offer, not JSON or over 64 KB gets 400 and reaches no engine", async () => {
+    const { engine, auth, voiceSessions } = voiceApi();
+    const url = await startApi({ auth, voiceSessions });
+
+    for (const body of [
+      {},
+      { sdp: 42 },
+      { sdp: "hello" },
+      "not json",
+      { sdp: `v=0\r\n${"a".repeat(70_000)}` },
+    ]) {
+      const response = await openSession(url, body);
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), { error: "invalid_offer" });
+    }
+    assert.equal(engine.sessions.length, 0);
+  });
+
+  test("503 when no engine is configured", async () => {
+    const { auth } = voiceApi();
+    const voiceSessions = new VoiceSessionManager({
+      engine: null,
+      shell: () => null,
+      isRevoked: async () => false,
+      clock: new FakeClock(),
+      log: () => {},
+    });
+    const url = await startApi({ auth, voiceSessions });
+
+    const response = await openSession(url, { sdp: OFFER });
+
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "voice_unavailable" });
+  });
+
+  test("502 when the engine refuses the offer", async () => {
+    const { engine, auth, voiceSessions } = voiceApi();
+    engine.failNextOpen = true;
+    const url = await startApi({ auth, voiceSessions });
+
+    const response = await openSession(url, { sdp: OFFER });
+
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "voice_engine_failed" });
+  });
+
+  test("DELETE ends the device's own session and answers 204, then 404", async () => {
+    const { engine, auth, voiceSessions } = voiceApi();
+    const url = await startApi({ auth, voiceSessions });
+    const { sessionId } = (await (await openSession(url, { sdp: OFFER })).json()) as {
+      sessionId: string;
+    };
+    const end = (token: string) =>
+      fetch(`${url}/sessions/${sessionId}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    const byOtherDevice = await end("phone-2");
+    assert.equal(byOtherDevice.status, 404);
+    assert.equal(engine.last.closed, false);
+
+    const byOwner = await end("phone-1");
+    assert.equal(byOwner.status, 204);
+    assert.equal(engine.last.closed, true);
+    assert.equal((await end("phone-1")).status, 404);
+  });
+
+  test("opening sessions counts against the device's rate limit", async () => {
+    const { engine, auth, voiceSessions } = voiceApi();
+    const url = await startApi({
+      auth,
+      voiceSessions,
+      limits: {
+        perIp: { limit: 100, windowMs: 60_000 },
+        perDevice: { limit: 2, windowMs: 60_000 },
+      },
+    });
+
+    assert.equal((await openSession(url, { sdp: OFFER })).status, 201);
+    assert.equal((await openSession(url, { sdp: OFFER })).status, 201);
+    assert.equal((await openSession(url, { sdp: OFFER })).status, 429);
+    assert.equal(engine.sessions.length, 2);
   });
 });

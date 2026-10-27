@@ -1,5 +1,5 @@
 // The small task list the app shows (GET /activity): what runs now, and what finished
-// in the last 24 hours.
+// in the last 24 hours. The voice tools read the full lists.
 
 import type { Activity, ActivityItem } from "../ports/apiServer.ts";
 import type { Thread } from "../ports/t3Backend.ts";
@@ -13,7 +13,21 @@ const FINISHED_SINCE_MS = 24 * 3_600_000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
 export function activityOf(state: ShellState, now: Date): Activity {
+  const { running, finished } = allActivity(state);
+  return {
+    running: running.slice(0, MAX_PER_LIST),
+    finished: finishedSince24Hours(finished, now).slice(0, MAX_PER_LIST),
+  };
+}
+
+/** The items that finished in the 24 hours before `now`. */
+export function finishedSince24Hours(items: ActivityItem[], now: Date): ActivityItem[] {
   const since = new Date(now.getTime() - FINISHED_SINCE_MS).toISOString();
+  return items.filter((item) => item.updatedAt >= since);
+}
+
+/** Every top-level thread T3's awareness rule reports, the latest first, with no limit. */
+export function allActivity(state: ShellState): Activity {
   const running: ActivityItem[] = [];
   const finished: ActivityItem[] = [];
   const threads = [...state.threads.values()]
@@ -30,13 +44,10 @@ export function activityOf(state: ShellState, now: Date): Activity {
       state: threadState,
       updatedAt: thread.updatedAt,
     };
-    if (threadState === "completed" || threadState === "failed") {
-      if (thread.updatedAt >= since) finished.push(item);
-    } else {
-      running.push(item);
-    }
+    if (threadState === "completed" || threadState === "failed") finished.push(item);
+    else running.push(item);
   }
-  return { running: running.slice(0, MAX_PER_LIST), finished: finished.slice(0, MAX_PER_LIST) };
+  return { running, finished };
 }
 
 /**

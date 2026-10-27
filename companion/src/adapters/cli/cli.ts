@@ -5,10 +5,11 @@ import { scrubSecrets } from "../../core/secrets.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
+import type { VoiceEngine } from "../../ports/voiceEngine.ts";
 import { listDevices, revokeDevice } from "./devices.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
 import { runPair } from "./pair.ts";
-import { runServe } from "./serve.ts";
+import { runServe, type VoiceEngineSettings } from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
 
@@ -16,6 +17,7 @@ export interface CliDependencies {
   store: ConfigStore;
   t3: T3Connector;
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
+  voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
 }
 
 const EXIT_ERROR = 1;
@@ -52,7 +54,7 @@ export async function runCli(argv: string[], deps: CliDependencies): Promise<num
 
 async function dispatch(
   argv: string[],
-  { store, t3, startServer }: CliDependencies,
+  { store, t3, startServer, voiceEngine }: CliDependencies,
 ): Promise<number> {
   const [command, ...args] = argv;
   const out = (line: string) => process.stdout.write(`${line}\n`);
@@ -73,7 +75,7 @@ async function dispatch(
       await runStatus({ store, t3, out });
       return 0;
     case "serve":
-      await runServe({ store, t3, startServer, waitForStop, out });
+      await runServe({ store, t3, startServer, voiceEngine, waitForStop, out });
       return 0;
     case "pair": {
       const stopped = waitForStop().then(() => "stop" as const);
