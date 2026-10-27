@@ -5,7 +5,7 @@ import XCTest
 @testable import T3Voice
 
 final class CompanionClientTests: XCTestCase {
-    private let link = PairingLink("t3voice://pair?url=https%3A%2F%2Fvoice.example.com&code=one-time-code")!
+    private let qrCode = PairingQRCode("t3voice://pair?url=https%3A%2F%2Fvoice.example.com&code=one-time-code")!
     private let paired = CompanionConnection(
         companionURL: URL(string: "https://voice.example.com")!,
         token: "device-token-1"
@@ -19,7 +19,7 @@ final class CompanionClientTests: XCTestCase {
         let store = InMemoryConnectionStore()
         let client = CompanionClient(transport: transport, store: store)
 
-        let result = try await client.pair(with: link, deviceName: "iPhone de Thomas")
+        let result = try await client.pair(with: qrCode, deviceName: "iPhone de Thomas")
 
         XCTAssertEqual(result, .paired(paired))
         XCTAssertEqual(store.connection, paired)
@@ -35,7 +35,7 @@ final class CompanionClientTests: XCTestCase {
         let store = InMemoryConnectionStore()
 
         let result = try await CompanionClient(transport: transport, store: store)
-            .pair(with: link, deviceName: "iPhone")
+            .pair(with: qrCode, deviceName: "iPhone")
 
         XCTAssertEqual(result, .refused)
         XCTAssertNil(store.connection)
@@ -46,7 +46,7 @@ final class CompanionClientTests: XCTestCase {
         transport.responses = [response(429, headers: ["retry-after": "420"])]
 
         let result = try await CompanionClient(transport: transport, store: InMemoryConnectionStore())
-            .pair(with: link, deviceName: "iPhone")
+            .pair(with: qrCode, deviceName: "iPhone")
 
         XCTAssertEqual(result, .limited(retryAfterSeconds: 420))
     }
@@ -83,6 +83,17 @@ final class CompanionClientTests: XCTestCase {
 
         XCTAssertEqual(store.connection?.token, "device-token-2")
         XCTAssertEqual(store.connection?.companionURL, paired.companionURL)
+    }
+
+    func testANewTokenIsNotStoredIfTheConnectionWasForgottenMeanwhile() async throws {
+        let transport = FakeTransport()
+        let store = InMemoryConnectionStore(paired)
+        transport.responses = [response(200, json: #"{"running":[],"finished":[]}"#, headers: ["t3voice-token": "device-token-2"])]
+        transport.whileWaiting = { store.connection = nil }
+
+        _ = try await CompanionClient(transport: transport, store: store).activity()
+
+        XCTAssertNil(store.connection)
     }
 
     func testARevokedDeviceIsToldItIsNoLongerPaired() async {

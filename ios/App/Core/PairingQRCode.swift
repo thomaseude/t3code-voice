@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the QR code of `t3-voice pair` holds: `t3voice://pair?url=<companion URL>&code=<one-time code>`.
-struct PairingLink: Equatable {
+struct PairingQRCode: Equatable {
     let companionURL: URL
     let code: String
 

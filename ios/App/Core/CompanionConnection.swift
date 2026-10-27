@@ -48,12 +48,16 @@ struct KeychainConnectionStore: ConnectionStore {
         return try JSONDecoder().decode(CompanionConnection.self, from: data)
     }
 
+    /// Updates the stored item in place: if the write fails, the old connection is still there.
     func save(_ connection: CompanionConnection) throws {
-        try delete()
-        var item = query
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        item[kSecValueData as String] = try JSONEncoder().encode(connection)
-        let status = SecItemAdd(item as CFDictionary, nil)
+        let changes: [String: Any] = [
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: try JSONEncoder().encode(connection),
+        ]
+        var status = SecItemUpdate(query as CFDictionary, changes as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(query.merging(changes) { _, new in new } as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 

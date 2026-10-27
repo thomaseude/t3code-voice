@@ -7,9 +7,12 @@ import Foundation
 final class FakeTransport: HTTPTransport {
     private(set) var requests: [URLRequest] = []
     var responses: [HTTPResponse] = []
+    /// Runs while a request waits for its answer, like the user acting during a slow network.
+    var whileWaiting: (() async -> Void)?
 
     func send(_ request: URLRequest) async throws -> HTTPResponse {
         requests.append(request)
+        await whileWaiting?()
         guard !responses.isEmpty else { throw URLError(.cannotConnectToHost) }
         return responses.removeFirst()
     }

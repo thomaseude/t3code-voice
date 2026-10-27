@@ -1,32 +1,62 @@
+import AVFoundation
 import SwiftUI
 import VisionKit
 
 /// First launch: scan the QR code that `t3-voice pair` shows on the server.
 struct PairingView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openURL) private var openURL
+    @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
+                TextField("Nom de cet iPhone", text: $model.deviceName)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal)
+
                 Text("Sur le serveur, lance « t3-voice pair », puis scanne le QR code affiché.")
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
 
-                if DataScannerViewController.isSupported {
-                    QRScannerView { text in model.scanned(text) }
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .frame(maxHeight: 360)
-                        .padding(.horizontal)
-                } else {
-                    Text("Cet appareil ne peut pas scanner de QR code.")
-                        .foregroundStyle(.secondary)
-                }
-
+                scanner
                 status
                 Spacer()
             }
             .padding(.top)
             .navigationTitle("Appairer T3 Voice")
+            .task {
+                if camera == .notDetermined {
+                    _ = await AVCaptureDevice.requestAccess(for: .video)
+                    camera = AVCaptureDevice.authorizationStatus(for: .video)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var scanner: some View {
+        if !DataScannerViewController.isSupported {
+            Text("Cet appareil ne peut pas scanner de QR code.")
+                .foregroundStyle(.secondary)
+        } else if camera == .authorized {
+            QRScannerView { text in Task { await model.scanned(text) } }
+                // A new view on each retry: the camera reports a code only when it first sees it.
+                .id(model.scanAttempt)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .frame(maxHeight: 360)
+                .padding(.horizontal)
+        } else if camera == .notDetermined {
+            ProgressView()
+        } else {
+            VStack(spacing: 8) {
+                Text("T3 Voice a besoin de la caméra pour scanner le QR code.")
+                    .multilineTextAlignment(.center)
+                Button("Ouvrir les Réglages") {
+                    if let settings = URL(string: UIApplication.openSettingsURLString) { openURL(settings) }
+                }
+            }
+            .padding(.horizontal)
         }
     }
 
@@ -49,7 +79,7 @@ struct PairingView: View {
     }
 }
 
-/// The camera, reading QR codes. Each code read is passed to `onScan` once.
+/// The camera, reading QR codes. Each code is passed to `onScan` when the camera first sees it.
 struct QRScannerView: UIViewControllerRepresentable {
     let onScan: @MainActor (String) -> Void
 

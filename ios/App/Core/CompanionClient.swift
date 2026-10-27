@@ -48,16 +48,16 @@ struct CompanionClient {
     let transport: HTTPTransport
     let store: ConnectionStore
 
-    func pair(with link: PairingLink, deviceName: String) async throws -> PairingResult {
-        var request = URLRequest(url: link.companionURL.appending(path: "pair"))
+    func pair(with qrCode: PairingQRCode, deviceName: String) async throws -> PairingResult {
+        var request = URLRequest(url: qrCode.companionURL.appending(path: "pair"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["code": link.code, "name": deviceName])
+        request.httpBody = try JSONEncoder().encode(["code": qrCode.code, "name": deviceName])
         let response = try await transport.send(request)
         switch response.status {
         case 200:
             let answer = try JSONDecoder().decode(PairAnswer.self, from: response.body)
-            let connection = CompanionConnection(companionURL: link.companionURL, token: answer.token)
+            let connection = CompanionConnection(companionURL: qrCode.companionURL, token: answer.token)
             try store.save(connection)
             return .paired(connection)
         case 401:
@@ -76,7 +76,9 @@ struct CompanionClient {
         request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization")
         let response = try await transport.send(request)
         // A token 30 days old is replaced on use: the old one works until the new one is used.
-        if let replacement = response.headers["t3voice-token"], !replacement.isEmpty {
+        // A connection forgotten or replaced while the request was out is left as it is.
+        if let replacement = response.headers["t3voice-token"], !replacement.isEmpty,
+           try store.load() == connection {
             var rotated = connection
             rotated.token = replacement
             try store.save(rotated)
@@ -115,10 +117,22 @@ struct ActivityItem: Decodable, Equatable, Identifiable {
     let title: String
     /// Nil when T3 did not send the project.
     let project: String?
-    /// `running`, `waiting_for_input`, `waiting_for_approval`, `completed` or `failed`.
+    /// T3's state name: see `label(for:)`.
     let state: String
     /// ISO date of the thread's last change.
     let updatedAt: String
 
     var id: String { threadId }
+
+    /// T3's state names, in French. A state from a newer T3 is shown as is.
+    static func label(for state: String) -> String {
+        switch state {
+        case "running": "en cours"
+        case "waiting_for_input": "attend ta réponse"
+        case "waiting_for_approval": "demande une autorisation"
+        case "completed": "terminée"
+        case "failed": "échouée"
+        default: state
+        }
+    }
 }

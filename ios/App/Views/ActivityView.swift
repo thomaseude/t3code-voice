@@ -42,7 +42,7 @@ struct ActivityView: View {
         case let .loaded(activity):
             List {
                 Section("En cours") { rows(activity.running, empty: "Aucune tâche en cours.") }
-                Section("Terminé (24 h)") { rows(activity.finished, empty: "Rien de terminé aujourd'hui.") }
+                Section("Terminé (24 h)") { rows(activity.finished, empty: "Rien de terminé ces dernières 24 h.") }
             }
         }
     }
@@ -56,25 +56,13 @@ struct ActivityView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)
                     HStack {
-                        Text(Self.label(for: item.state))
+                        Text(ActivityItem.label(for: item.state))
                         if let project = item.project { Text("· \(project)") }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
             }
-        }
-    }
-
-    /// T3's state names, in French. An unknown state from a newer T3 is shown as is.
-    static func label(for state: String) -> String {
-        switch state {
-        case "running": "en cours"
-        case "waiting_for_input": "attend ta réponse"
-        case "waiting_for_approval": "demande une autorisation"
-        case "completed": "terminée"
-        case "failed": "échouée"
-        default: state
         }
     }
 }

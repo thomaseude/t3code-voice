@@ -3,18 +3,18 @@
 import XCTest
 @testable import T3Voice
 
-final class PairingLinkTests: XCTestCase {
+final class PairingQRCodeTests: XCTestCase {
     func testReadsTheCompanionAddressAndTheCode() {
         // As the companion builds it: URLSearchParams escapes the URL.
-        let link = PairingLink("t3voice://pair?url=https%3A%2F%2Fvoice.example.com&code=kq3V8o2Yc1rJm0bT6wXpZf")
+        let qrCode = PairingQRCode("t3voice://pair?url=https%3A%2F%2Fvoice.example.com&code=kq3V8o2Yc1rJm0bT6wXpZf")
 
-        XCTAssertEqual(link?.companionURL, URL(string: "https://voice.example.com"))
-        XCTAssertEqual(link?.code, "kq3V8o2Yc1rJm0bT6wXpZf")
+        XCTAssertEqual(qrCode?.companionURL, URL(string: "https://voice.example.com"))
+        XCTAssertEqual(qrCode?.code, "kq3V8o2Yc1rJm0bT6wXpZf")
     }
 
     func testRefusesAnAddressThatIsNotHTTPS() {
         // The device token would travel in clear.
-        XCTAssertNil(PairingLink("t3voice://pair?url=http%3A%2F%2Fvoice.example.com&code=abc"))
+        XCTAssertNil(PairingQRCode("t3voice://pair?url=http%3A%2F%2Fvoice.example.com&code=abc"))
     }
 
     func testRefusesOtherQRCodes() {
@@ -26,7 +26,7 @@ final class PairingLinkTests: XCTestCase {
             "t3voice://pair?code=abc",
             "not a link",
         ] {
-            XCTAssertNil(PairingLink(text), text)
+            XCTAssertNil(PairingQRCode(text), text)
         }
     }
 }
