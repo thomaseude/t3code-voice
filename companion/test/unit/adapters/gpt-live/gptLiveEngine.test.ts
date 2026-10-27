@@ -343,6 +343,7 @@ describe("when the control channel drops", () => {
 
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
+
   test("a close lost with a dying channel is sent again on the next one", async () => {
     const { transport, clock, open } = setup();
     const session = await open();
@@ -358,6 +359,7 @@ describe("when the control channel drops", () => {
     transport.socket.receive({ type: "session.closed" });
     await closing;
   });
+
   test("a channel that keeps flapping cannot hold a close past 20 seconds", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
@@ -408,6 +410,7 @@ describe("when the control channel drops", () => {
 
     assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
   });
+
   test("channels that drop within 10 s count as failed attaches, even if they sent an event", async () => {
     const { transport, clock, events, open } = setup();
     await open();

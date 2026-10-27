@@ -86,8 +86,9 @@ session of a revoked one. When `serve` stops, it closes every session, those sti
 included. If the companion's control channel to GPT-Live drops, it attaches again (after
 1, 2 and 4 s) before it gives up. A new channel is usable once it has stayed up 10 s; until
 then, tool results wait, and a drop counts as a failed attach. While a session closes, a
-channel is used as soon as it attaches: the queued events, then the close, go out on each
-new channel until OpenAI confirms the close, 20 s at most after the first close sent. The logs say when a session opens and ends, never what
+channel is used as soon as it attaches: the queued events go out on the first new channel,
+then the close; the close is sent again on each new channel until OpenAI confirms it, 20 s
+at most after the first close sent. The logs say when a session opens and ends, never what
 was said, asked or answered.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid

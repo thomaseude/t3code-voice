@@ -150,7 +150,9 @@ class LiveSession implements VoiceSession {
   private ended = false;
   private closing: Promise<void> | null = null;
   private resolveClosing: () => void = () => {};
-  private cancelCloseDeadline: (() => void) | null = null;
+  private cancelCloseDeadline: () => void = () => {};
+  /** Whether a `session.close` went out on a channel: only then can it stop the billing. */
+  private closeSent = false;
   private cancelReattach: () => void = () => {};
   /** Attaches tried since the last usable channel. */
   private reattaches = 0;
@@ -201,7 +203,7 @@ class LiveSession implements VoiceSession {
     const delay = REATTACH_DELAYS_MS[this.reattaches];
     if (delay === undefined) {
       // A close that never reached OpenAI did not stop the billing.
-      this.end(this.closing !== null && this.cancelCloseDeadline !== null ? "closed" : "failed");
+      this.end(this.closeSent ? "closed" : "failed");
       return;
     }
     this.reattaches++;
@@ -248,13 +250,15 @@ class LiveSession implements VoiceSession {
   private sendClose() {
     if (this.socket === null) return;
     this.socket.send(JSON.stringify({ type: "session.close", event_id: this.eventId() }));
-    this.cancelCloseDeadline ??= this.clock.schedule(CLOSE_DEADLINE_MS, () => this.end("closed"));
+    if (this.closeSent) return;
+    this.closeSent = true;
+    this.cancelCloseDeadline = this.clock.schedule(CLOSE_DEADLINE_MS, () => this.end("closed"));
   }
 
   private end(reason: "closed" | "failed") {
     if (this.ended) return;
     this.ended = true;
-    this.cancelCloseDeadline?.();
+    this.cancelCloseDeadline();
     this.cancelUsable();
     this.cancelReattach();
     const socket = this.socket;
