@@ -424,7 +424,7 @@ function chooseModel(
     const offers = providers.flatMap((each) =>
       each.models.map((model) => ({ provider: each, model })),
     );
-    const match = findByName(modelWords(modelName), offers, ({ model }) => modelLabel(model));
+    const match = findModel(modelName, offers, (offer) => offer.model);
     if (
       match.kind === "ambiguous" &&
       new Set(match.items.map(({ model }) => model.slug)).size > 1
@@ -484,7 +484,7 @@ function chooseModel(
       defaults.find((selection) => selection.providerInstanceId === instanceId)?.model ??
       models[0]?.slug;
   } else {
-    const match = findByName(modelWords(modelName), models, modelLabel);
+    const match = findModel(modelName, models, (model) => model);
     if (match.kind === "ambiguous") {
       const named = provider;
       return {
@@ -513,16 +513,19 @@ function ambiguousModel(offers: Array<{ provider: Provider; model: ProviderModel
   return { status: "ambiguous_model", choices };
 }
 
-/** What a model is matched against: its name and slug, with their versions kept whole. */
-function modelLabel(model: ProviderModel): string {
-  return modelWords(`${model.name} ${model.slug}`);
+/** The items whose model the user named, by its name or slug, short versions kept whole. */
+function findModel<T>(modelName: string, items: T[], modelOf: (item: T) => ProviderModel) {
+  return findByName(joinShortVersions(modelName), items, (item) => {
+    const model = modelOf(item);
+    return joinShortVersions(`${model.name} ${model.slug}`);
+  });
 }
 
 /**
- * Keeps a short version number one word: "5.5" and "5-5" give "55", so "Opus 5.5" is not
+ * Makes a short version number one word: "5.5" and "5-5" give "55", so "Opus 5.5" is not
  * "Opus 5". A longer number, like the date in "sonnet-4-20250514", stays a word of its own.
  */
-function modelWords(text: string): string {
+function joinShortVersions(text: string): string {
   return text.replace(/(?<!\d)(\d)[.,-](\d)(?!\d)/g, "$1$2");
 }
 

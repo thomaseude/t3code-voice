@@ -89,7 +89,8 @@ During a session the companion answers the voice model's tools from T3's state:
   (`project_busy_not_git`); neither does a new worktree asked for in a repository with no
   branch (`worktree_unavailable`). Several projects with the title the user said start nothing:
   the answer lists their folder names, and the model calls again with `folder`. A model
-  named alone that fits several models answers `ambiguous_model` with each agent and model;
+  that fits several models, with or without its agent named, answers `ambiguous_model`
+  with each agent and model;
 - `send_message` sends a follow-up to a followed task, in its thread. A task is named by
   its spoken name, or by its spoken name and project ("tests Reviews de joombo"): `queue` (default)
   after the agent's current turn, `steer` into it;
