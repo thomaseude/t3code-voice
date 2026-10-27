@@ -2,8 +2,8 @@
 
 Hands-free voice companion for T3 Code: an iOS app ("T3 Voice") and a companion service
 (`t3-voice`) that runs next to a T3 Code server. The spec is issue #15; tickets are its
-children (#16–#28). Only the companion exists so far, in `companion/` (TypeScript on Node
-≥ 22.18). Runtime dependencies are only the ones spec #15 lists under "Languages" (`uqr`
+children (#16–#28). The companion is in `companion/` (TypeScript on Node ≥ 22.18), the iOS
+app in `ios/` (Swift/SwiftUI, iOS 18+). Runtime dependencies are only the ones spec #15 lists under "Languages" (`uqr`
 draws the pairing QR code). Ask Thomas before adding another one.
 
 Issues are GitHub issues via `gh` (`docs/agents/issue-tracker.md`). Search the spec and the
@@ -20,6 +20,16 @@ Issues are GitHub issues via `gh` (`docs/agents/issue-tracker.md`). Search the s
 - Lint/format is Biome (`npm run format` fixes). Tests run the `.ts` sources directly with
   `node --test` (type stripping): only erasable TypeScript — no `enum`, no constructor
   parameter properties, no `namespace`.
+
+## iOS app (run on a Mac, in `ios/`)
+
+- `project.yml` is the source of the Xcode project: run `xcodegen` after a pull, never commit
+  the `.xcodeproj`. Pick the signing team in Xcode (Thomas uses a free personal team).
+- Tests: ⌘U in Xcode, or `xcodebuild test -scheme T3Voice -destination 'platform=iOS
+  Simulator,name=<a simulator>'`. The agent runs on the Linux VM without Swift, so Thomas
+  builds and pastes the errors back.
+- Logic goes in plain Swift under `App/Core/`, tested with XCTest through fakes
+  (`Tests/Fakes.swift`); views stay thin and are checked by hand on the iPhone.
 
 ## Architecture: hexagonal (enforced)
 
