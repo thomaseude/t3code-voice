@@ -2,7 +2,10 @@
 // short-lived `wsTicket` per socket.
 
 import {
+  type LaunchThreadRequest,
   type Project,
+  type RepositoryInfo,
+  type SendMessageRequest,
   type ServerInfo,
   type ShellEvent,
   type ShellSubscriber,
@@ -19,12 +22,30 @@ import {
   toServerInfo,
 } from "./compatibility.ts";
 import { fetchDescriptor, issueWebSocketTicket, T3HttpError } from "./http.ts";
-import { openRpcConnection, type RpcConnection, RpcError } from "./rpcConnection.ts";
-import { toConfig, toShellEvent } from "./wire.ts";
+import {
+  ConnectionClosedError,
+  openRpcConnection,
+  type RpcConnection,
+  RpcError,
+} from "./rpcConnection.ts";
+import {
+  runOfMessage,
+  runsToStop,
+  toConfig,
+  toLaunchThreadInput,
+  toMessageDispatch,
+  toRepositoryInfo,
+  toShellEvent,
+  type WireJson,
+} from "./wire.ts";
 
 const METHODS = {
   getConfig: "server.getConfig",
   subscribeShell: "orchestration.subscribeShell",
+  listRefs: "vcs.listRefs",
+  launchThread: "orchestration.launchThread",
+  dispatchCommand: "orchestration.dispatchCommand",
+  getThreadProjection: "orchestration.getThreadProjection",
 };
 
 /** How long a one-off call waits for T3's answer. Pings keep a socket open even when T3 never answers. */
@@ -117,6 +138,63 @@ export class WebSocketT3Backend implements T3Backend {
     return withTimeout(projects, "the project list", () => cancel());
   }
 
+  async inspectRepository(path: string): Promise<RepositoryInfo> {
+    const answer = await this.call(METHODS.listRefs, { cwd: path }, "the repository's branches");
+    return toRepositoryInfo(answer);
+  }
+
+  async launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }> {
+    const answer: WireJson = await this.command(
+      METHODS.launchThread,
+      toLaunchThreadInput(request),
+      "the new thread",
+    );
+    if (typeof answer?.threadId !== "string") {
+      throw new Error("T3 started no thread: its answer has no thread id.");
+    }
+    return { threadId: answer.threadId };
+  }
+
+  async sendMessage(request: SendMessageRequest): Promise<void> {
+    await this.dispatch(toMessageDispatch(request));
+  }
+
+  async cancelQueuedMessage(
+    commandId: string,
+    threadId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    // T3 does not return the id of the run that waits with the message: read it back.
+    const run = runOfMessage(await this.projection(threadId), messageId);
+    // Cancelled already: an earlier try whose answer was lost took it back.
+    if (run?.status === "cancelled") return true;
+    if (run?.status !== "queued") return false;
+    await this.dispatch({ type: "queued-run.cancel", commandId, threadId, runId: run.id });
+    return true;
+  }
+
+  async stopThread(commandId: string, threadId: string): Promise<void> {
+    // T3 0.1.0 has no `thread.stop` command: interrupt the active run and cancel the
+    // queued ones, which both versions know. Each command gets its own id, derived from
+    // `commandId` so that a retry sends the same ones.
+    const { active, queued } = runsToStop(await this.projection(threadId));
+    for (const runId of queued) {
+      await this.dispatch({
+        type: "queued-run.cancel",
+        commandId: `${commandId}:${runId}`,
+        threadId,
+        runId,
+      });
+    }
+    if (active !== null) {
+      await this.dispatch({ type: "run.interrupt", commandId, threadId, runId: active });
+    }
+  }
+
+  async archiveThread(commandId: string, threadId: string): Promise<void> {
+    await this.dispatch({ type: "thread.archive", commandId, threadId });
+  }
+
   subscribeShell(
     subscriber: ShellSubscriber,
     options: { afterSequence?: number } = {},
@@ -144,6 +222,36 @@ export class WebSocketT3Backend implements T3Backend {
     this.subscriptions.clear();
     this.connectionPromise?.then((connection) => connection.close()).catch(() => {});
     this.connectionPromise = null;
+  }
+
+  private projection(threadId: string): Promise<WireJson> {
+    return this.call(METHODS.getThreadProjection, { threadId }, "the thread's runs");
+  }
+
+  /** One request, sent once. Commands go through `command`, which can send it again. */
+  private async call(tag: string, payload: unknown, what: string): Promise<WireJson> {
+    const connection = await this.connection();
+    return withTimeout(connection.request(tag, payload), what);
+  }
+
+  /**
+   * A command carrying a `commandId`. When the socket drops or T3 does not answer in time,
+   * the command may or may not have run: it is sent once more with the same id, which T3
+   * runs at most once.
+   */
+  private async command(tag: string, payload: unknown, what: string): Promise<WireJson> {
+    try {
+      return await this.call(tag, payload, what);
+    } catch (error) {
+      if (!(error instanceof ConnectionClosedError || error instanceof AnswerTimeoutError)) {
+        throw error;
+      }
+      return this.call(tag, payload, what);
+    }
+  }
+
+  private dispatch(command: WireJson): Promise<WireJson> {
+    return this.command(METHODS.dispatchCommand, command, "an answer to the command");
   }
 
   /** The shared connection, opened on demand. Every new socket repeats the startup check. */
@@ -296,12 +404,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms).unref());
 }
 
+class AnswerTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnswerTimeoutError";
+  }
+}
+
 /** Rejects when T3 has not answered in time, after calling `onTimeout` to clean up. */
 function withTimeout<T>(answer: Promise<T>, what: string, onTimeout = () => {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       onTimeout();
-      reject(new Error(`T3 did not send ${what} in time.`));
+      reject(new AnswerTimeoutError(`T3 did not send ${what} in time.`));
     }, ANSWER_TIMEOUT_MS);
     answer.then(
       (value) => {

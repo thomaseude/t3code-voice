@@ -78,7 +78,32 @@ During a session the companion answers the voice model's tools from T3's state:
 - `list_projects`;
 - `get_activity` with `scope` `running`, `today` (the device's calendar day) or `finished`
   (the last 24 hours): the 10 latest tasks and the `total`;
+- `start_task` starts a T3 thread at once and follows it under a short French spoken name
+  (2 to 4 words, unique among followed tasks, never changed). When a name is taken, the
+  project's name, then a number, is added to it. It uses the agent and model
+  the user named, else the project's default, else T3's, and T3's default runtime mode.
+  The agent works in a new worktree when the project is set to `worktree` in T3, when the
+  project's folder already has a running agent, or when the user asks for one. The
+  worktree starts from the repository's main branch (the one `origin/HEAD` names), fetched
+  from origin. A busy project that is not a git repository starts nothing
+  (`project_busy_not_git`); neither does a new worktree asked for in a repository with no
+  branch (`worktree_unavailable`). Several projects with the title the user said start nothing:
+  the answer lists their folder names, and the model calls again with `folder`. A model
+  that fits several models, with or without its agent named, answers `ambiguous_model`
+  with each agent and model;
+- `send_message` sends a follow-up to a followed task, in its thread. A task is named by
+  its spoken name, or by its spoken name and project ("tests Reviews de joombo"): `queue` (default)
+  after the agent's current turn, `steer` into it;
+- `cancel_last_action` undoes the last start or message, within 60 s ("non, arrête"): a
+  started thread is stopped (its run interrupted, its queued runs cancelled) and archived,
+  a waiting message is taken back from the queue, a message that started an idle thread
+  interrupts its run. An undo that failed can be asked again within the 60 s. A steered message, or
+  one the agent already took, answers `too_late`;
+- `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
+  a task by its spoken name;
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
+
+A reference that fits several projects or tasks acts on none: the answer lists the choices.
 
 While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no T3 data:
 the companion checks the device before each tool call and every 30 s, and closes the
@@ -212,6 +237,7 @@ open, and prints the `chmod` command that fixes it.
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), and what announcements last said. Only `serve` opens it |
 | `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.

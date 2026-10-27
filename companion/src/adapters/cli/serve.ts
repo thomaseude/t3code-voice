@@ -1,10 +1,12 @@
 // `t3-voice serve`: runs the HTTP API the iPhone calls, until the process is asked to stop
 // or T3 fails for good.
 
+import { randomUUID } from "node:crypto";
 import { activityOf } from "../../core/activity.ts";
 import { systemClock } from "../../core/clock.ts";
 import { ShellState } from "../../core/shellState.ts";
 import { VoiceSessionManager } from "../../core/voiceSessions.ts";
+import { VoiceTasks } from "../../core/voiceTasks.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import type { Clock } from "../../ports/clock.ts";
 import {
@@ -13,7 +15,8 @@ import {
   DEFAULT_SERVER_PORT,
   DEFAULT_VOICE,
 } from "../../ports/configStore.ts";
-import type { T3Connector } from "../../ports/t3Backend.ts";
+import type { T3Backend, T3Connector } from "../../ports/t3Backend.ts";
+import type { TaskRegistry } from "../../ports/taskRegistry.ts";
 import type { VoiceEngine } from "../../ports/voiceEngine.ts";
 import { loadT3Setup } from "./t3Setup.ts";
 
@@ -32,11 +35,15 @@ export interface ServeOptions {
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   /** main.ts plugs the GPT-Live adapter in here. */
   voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
+  /** main.ts plugs the SQLite registry in here. */
+  openTaskRegistry(): TaskRegistry;
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
   waitForStop(): Promise<void>;
   out(line: string): void;
   /** Injectable for tests. */
   clock?: Clock;
+  /** Ids of the commands sent to T3. Injectable for tests. */
+  newId?: () => string;
 }
 
 export async function runServe({
@@ -44,17 +51,27 @@ export async function runServe({
   t3,
   startServer,
   voiceEngine,
+  openTaskRegistry,
   waitForStop,
   out,
   clock = systemClock,
+  newId = randomUUID,
 }: ServeOptions) {
   const { config, pairing } = await loadT3Setup(store);
   // Read once now, so a damaged or loose device list stops the start, not the first request.
   const devices = await store.loadDevices();
   const apiKey = await store.loadOpenAiKey();
+  // Opened before T3, so a damaged or loose database stops the start.
+  const registry = openTaskRegistry();
 
   // Fail closed: connect checks that T3 is a tested version, and throws otherwise.
-  const backend = await t3.connect(pairing, config.t3.acceptedServerVersions);
+  let backend: T3Backend;
+  try {
+    backend = await t3.connect(pairing, config.t3.acceptedServerVersions);
+  } catch (error) {
+    registry.close();
+    throw error;
+  }
   const state = new ShellState();
   let connected = true;
   let fail: (error: Error) => void = () => {};
@@ -81,6 +98,7 @@ export async function runServe({
   const voiceSessions = new VoiceSessionManager({
     engine,
     shell,
+    tasks: new VoiceTasks({ backend, registry, shell, clock, newId, log: out }),
     // `t3-voice devices revoke` writes the revocation; serve reads it from the store.
     isRevoked: async (deviceId) => {
       const device = (await store.loadDevices()).find((candidate) => candidate.id === deviceId);
@@ -120,5 +138,6 @@ export async function runServe({
     await server?.close();
     subscription.close();
     backend.close();
+    registry.close();
   }
 }

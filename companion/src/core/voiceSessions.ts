@@ -10,15 +10,18 @@ import type {
 import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
-import { randomSecret, scrubSecrets } from "./secrets.ts";
+import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
+import type { ToolOutcome, Undo, VoiceTasks } from "./voiceTasks.ts";
 
 export interface VoiceSessionManagerOptions {
   /** Null when no engine is configured (no OpenAI key): every open answers "unavailable". */
   engine: VoiceEngine | null;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
+  /** The tools that start and steer T3 tasks. */
+  tasks: VoiceTasks;
   /**
    * Whether the device was revoked (`t3-voice devices revoke` runs in another process).
    * A device that is not paired counts as revoked. A failure counts as revoked too.
@@ -39,6 +42,8 @@ interface ActiveSession {
   openedAt: number;
   /** Cancels the close that end_session scheduled, if any. */
   cancelEnd?: () => void;
+  /** How to take back the session's last start or message, and until when (clock time). */
+  lastAction?: { undo: Undo; until: number };
 }
 
 /** How often open sessions are checked for a revoked device, when no tool is called. */
@@ -49,6 +54,9 @@ const SPOKEN_TASKS = 10;
 
 /** Time the model gets to say goodbye after end_session, before the session closes. */
 const GOODBYE_MS = 5_000;
+
+/** How long "non, arrête" can still cancel a start or a message after its read-back. */
+const CANCEL_WINDOW_MS = 60_000;
 
 export class VoiceSessionManager implements VoiceSessions {
   private readonly options: VoiceSessionManagerOptions;
@@ -212,12 +220,40 @@ export class VoiceSessionManager implements VoiceSessions {
       await this.closeAsRevoked(session);
       return;
     }
-    session.engineSession.resolveToolCall(callId, this.runTool(session, name, args));
+    let result: unknown;
+    try {
+      result = await this.runTool(session, name, args);
+    } catch (error) {
+      // The model must get an answer, or it waits for one.
+      this.options.log(`t3-voice: tool ${name} failed (${errorKind(error)}).`);
+      result = { error: "internal_error" };
+    }
+    session.engineSession.resolveToolCall(callId, result);
   }
 
-  private runTool(session: ActiveSession, name: string, args: unknown): unknown {
+  private async runTool(session: ActiveSession, name: string, args: unknown): Promise<unknown> {
     const shell = this.options.shell();
+    const { tasks } = this.options;
     switch (name) {
+      case "start_task":
+        return this.remember(session, await tasks.startTask(args));
+      case "send_message":
+        return this.remember(session, await tasks.sendMessage(args));
+      case "follow_thread":
+        return tasks.followThread(args);
+      case "unfollow_thread":
+        return tasks.unfollowThread(args);
+      case "cancel_last_action": {
+        const last = session.lastAction;
+        if (last === undefined || this.options.clock.now() > last.until) {
+          return { error: "nothing_to_cancel" };
+        }
+        session.lastAction = undefined;
+        const result = await last.undo();
+        // A failed undo can be asked again: each step is safe to send twice.
+        if ("error" in result && session.lastAction === undefined) session.lastAction = last;
+        return result;
+      }
       case "list_projects":
       case "get_activity":
         // T3's last known state could be stale: the model must not present it as current.
@@ -233,6 +269,18 @@ export class VoiceSessionManager implements VoiceSessions {
       default:
         return { error: "unknown_tool" };
     }
+  }
+
+  /**
+   * Keeps the undo of a start or a message. Every start or message replaces the one before,
+   * also one that did nothing: "non, arrête" never reaches past it.
+   */
+  private remember(session: ActiveSession, outcome: ToolOutcome): unknown {
+    session.lastAction =
+      outcome.undo === undefined
+        ? undefined
+        : { undo: outcome.undo, until: this.options.clock.now() + CANCEL_WINDOW_MS };
+    return outcome.result;
   }
 
   private activity(session: ActiveSession, shell: ShellState, args: unknown): unknown {
