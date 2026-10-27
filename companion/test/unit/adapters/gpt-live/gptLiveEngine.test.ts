@@ -306,7 +306,7 @@ describe("when the control channel drops", () => {
     assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
   });
 
-  test("a close asked while the channel is down is sent once a channel is usable", async () => {
+  test("a close asked while the channel is down goes out as soon as a channel attaches", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
     transport.attachFailures = 1;
@@ -317,8 +317,6 @@ describe("when the control channel drops", () => {
     await settle();
     clock.advance(2_000);
     await settle();
-    assert.deepEqual(transport.socket.sentTypes(), []);
-    clock.advance(10_000);
 
     assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
     transport.socket.receive({ type: "session.closed" });
@@ -326,7 +324,26 @@ describe("when the control channel drops", () => {
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
 
-  test("a close lost with a dying channel is sent again on the next usable one", async () => {
+  test("the 20 s close deadline counts from the first close really sent", async () => {
+    const { transport, clock, events, open } = setup();
+    const session = await open();
+    transport.attachFailures = 2;
+    transport.socket.drop();
+
+    void session.close();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      clock.advance(delay);
+      await settle();
+    }
+    // Sent at 7 s, on the channel that attached then.
+    assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
+    clock.advance(19_999);
+    assert.deepEqual(events, []);
+    clock.advance(1);
+
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+  test("a close lost with a dying channel is sent again on the next one", async () => {
     const { transport, clock, open } = setup();
     const session = await open();
 
@@ -335,14 +352,12 @@ describe("when the control channel drops", () => {
     first.drop();
     clock.advance(1_000);
     await settle();
-    clock.advance(10_000);
 
     assert.deepEqual(first.sentTypes(), ["session.close"]);
     assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
     transport.socket.receive({ type: "session.closed" });
     await closing;
   });
-
   test("a channel that keeps flapping cannot hold a close past 20 seconds", async () => {
     const { transport, clock, events, open } = setup();
     const session = await open();
@@ -360,7 +375,7 @@ describe("when the control channel drops", () => {
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });
 
-  test("queued events go out before the close, with 5 s for the model to speak them", async () => {
+  test("while closing, a new channel sends the queued events, then the close, at once", async () => {
     const { transport, clock, open } = setup();
     const session = await open();
     transport.socket.receive(functionCall("call_1", "end_session", "{}"));
@@ -370,11 +385,6 @@ describe("when the control channel drops", () => {
 
     clock.advance(1_000);
     await settle();
-    clock.advance(10_000);
-    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
-    clock.advance(4_999);
-    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
-    clock.advance(1);
 
     assert.deepEqual(transport.socket.sentTypes(), [
       "response.item.create",
@@ -383,6 +393,21 @@ describe("when the control channel drops", () => {
     ]);
   });
 
+  test("if no channel ever attaches, the close is reported as failed", async () => {
+    const { transport, clock, events, open } = setup();
+    const session = await open();
+    transport.attachFailures = 3;
+    transport.socket.drop();
+
+    const closing = session.close();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      clock.advance(delay);
+      await settle();
+    }
+    await closing;
+
+    assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
+  });
   test("channels that drop within 10 s count as failed attaches, even if they sent an event", async () => {
     const { transport, clock, events, open } = setup();
     await open();

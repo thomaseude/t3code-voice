@@ -85,8 +85,9 @@ the companion checks the device before each tool call and every 30 s, and closes
 session of a revoked one. When `serve` stops, it closes every session, those still opening
 included. If the companion's control channel to GPT-Live drops, it attaches again (after
 1, 2 and 4 s) before it gives up. A new channel is usable once it has stayed up 10 s; until
-then, tool results wait, and a drop counts as a failed attach. A close is sent on every
-usable channel until OpenAI confirms it, 20 s at most. The logs say when a session opens and ends, never what
+then, tool results wait, and a drop counts as a failed attach. While a session closes, a
+channel is used as soon as it attaches: the queued events, then the close, go out on each
+new channel until OpenAI confirms the close, 20 s at most after the first close sent. The logs say when a session opens and ends, never what
 was said, asked or answered.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
