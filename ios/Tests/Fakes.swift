@@ -39,3 +39,57 @@ final class InMemoryConnectionStore: ConnectionStore {
 func response(_ status: Int, json: String = "", headers: [String: String] = [:]) -> HTTPResponse {
     HTTPResponse(status: status, headers: headers, body: Data(json.utf8))
 }
+
+/// Face ID that answers what the test says.
+final class FakeAuthenticator: Authenticator {
+    var allows = true
+    private(set) var askCount = 0
+
+    func authenticate() async -> Bool {
+        askCount += 1
+        return allows
+    }
+}
+
+/// A WebRTC call without WebRTC: it gives a fixed offer and lets the test send its events.
+@MainActor
+final class FakeVoiceCall: VoiceCall {
+    var offer = "v=0 offer"
+    var startError: Error?
+    var acceptError: Error?
+    private(set) var started = false
+    private(set) var acceptedAnswer: String?
+    private(set) var hungUp = false
+    private var onEvent: (@MainActor (VoiceCallEvent) async -> Void)?
+
+    func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
+        started = true
+        self.onEvent = onEvent
+        if let startError { throw startError }
+        return offer
+    }
+
+    func accept(answer: String) async throws {
+        if let acceptError { throw acceptError }
+        acceptedAnswer = answer
+    }
+
+    func hangUp() {
+        hungUp = true
+    }
+
+    /// What the data channel or the peer connection reports.
+    func emit(_ event: VoiceCallEvent) async {
+        await onEvent?(event)
+    }
+}
+
+/// Records every state the user was shown (Live Activity, start sound, screen).
+@MainActor
+final class FakeFeedback: SessionFeedback {
+    private(set) var shown: [VoiceSessionState] = []
+
+    func show(_ state: VoiceSessionState) {
+        shown.append(state)
+    }
+}

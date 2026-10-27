@@ -1,0 +1,203 @@
+import Foundation
+
+/// Where a voice conversation is, from the user's point of view (spec #15, "Session state
+/// machine"). Interruption, reconnection and suspension come with #26.
+enum VoiceSessionState: Equatable {
+    case idle
+    /// Face ID is on screen.
+    case authenticating
+    /// The microphone is open and the companion opens the session with the voice engine.
+    case connecting
+    case live
+    case ending(EndReason)
+}
+
+enum EndReason: Equatable {
+    /// The End button, in the app or on the Live Activity.
+    case user
+    /// The voice model ended it: "fin", "c'est bon, merci".
+    case voice
+    case failed(SessionFailure)
+}
+
+enum SessionFailure: Equatable {
+    case microphoneDenied
+    case unauthorized
+    case limited
+    case voiceUnavailable
+    case voiceEngineFailed
+    case companionUnreachable
+    /// WebRTC could not make the offer or apply the answer.
+    case callFailed
+    /// The connection to the voice engine dropped.
+    case lost
+
+    var message: String {
+        switch self {
+        case .microphoneDenied: "Autorise le micro dans Réglages > T3 Voice."
+        case .unauthorized: "Le companion a refusé cet iPhone. Appaire-le de nouveau."
+        case .limited: "Trop de requêtes. Réessaie dans un instant."
+        case .voiceUnavailable: "La voix est désactivée sur le companion : il n'a pas de clé OpenAI."
+        case .voiceEngineFailed: "OpenAI n'a pas ouvert la session. Réessaie dans un instant."
+        case .companionUnreachable: "Le companion ne répond pas."
+        case .callFailed: "La connexion audio n'a pas pu s'établir."
+        case .lost: "La connexion audio a été coupée."
+        }
+    }
+
+    init(_ error: Error) {
+        switch error {
+        case VoiceCallError.microphoneDenied: self = .microphoneDenied
+        case VoiceCallError.failed: self = .callFailed
+        case CompanionError.unauthorized, CompanionError.notPaired: self = .unauthorized
+        case CompanionError.limited: self = .limited
+        case CompanionError.voiceUnavailable: self = .voiceUnavailable
+        case CompanionError.voiceEngineFailed: self = .voiceEngineFailed
+        default: self = .companionUnreachable
+        }
+    }
+}
+
+/// Face ID, or the device passcode when Face ID fails.
+protocol Authenticator {
+    func authenticate() async -> Bool
+}
+
+enum VoiceCallError: Error {
+    case microphoneDenied
+    case failed
+}
+
+/// What the voice engine reports on the call.
+enum VoiceCallEvent {
+    /// `session.started` on the data channel: the phone may talk.
+    case sessionStarted
+    /// `session.closed` on the data channel: the session ended on the voice engine's side.
+    case sessionClosed
+    /// The peer connection or the data channel failed.
+    case lost
+}
+
+/// One WebRTC call to the voice engine, with the audio session. A new one for each session.
+@MainActor
+protocol VoiceCall: AnyObject {
+    /// Opens the microphone and returns the SDP offer, without waiting for full ICE gathering.
+    func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String
+    func accept(answer: String) async throws
+    /// Closes the connection and the microphone. Safe to call twice.
+    func hangUp()
+}
+
+/// What the user sees and hears of the session: the Live Activity and the start sound.
+@MainActor
+protocol SessionFeedback {
+    func show(_ state: VoiceSessionState)
+}
+
+/// Runs a voice conversation from "Parler" to its end: Face ID, the WebRTC call, and the
+/// session on the companion.
+@MainActor
+final class VoiceSessionController: ObservableObject {
+    @Published private(set) var state: VoiceSessionState = .idle
+    /// Why the last session failed, until the next start.
+    @Published private(set) var lastFailure: SessionFailure?
+
+    private let client: CompanionClient
+    private let authenticator: Authenticator
+    private let makeCall: @MainActor () -> VoiceCall
+    private let feedback: SessionFeedback
+    /// The IANA zone the companion uses for "today".
+    private let timeZone: String
+
+    /// The call of the current session, and its id on the companion once it answered.
+    private var call: VoiceCall?
+    private var sessionId: String?
+
+    init(
+        client: CompanionClient,
+        authenticator: Authenticator,
+        makeCall: @escaping @MainActor () -> VoiceCall,
+        feedback: SessionFeedback,
+        timeZone: String
+    ) {
+        self.client = client
+        self.authenticator = authenticator
+        self.makeCall = makeCall
+        self.feedback = feedback
+        self.timeZone = timeZone
+    }
+
+    /// Returns once the call waits for `session.started`, or when the start failed.
+    func start() async {
+        guard state == .idle else { return }
+        lastFailure = nil
+        show(.authenticating)
+        guard await authenticator.authenticate() else {
+            show(.idle)
+            return
+        }
+        show(.connecting)
+        let call = makeCall()
+        self.call = call
+        do {
+            let offer = try await call.start { [weak self, weak call] event in
+                guard let self, let call else { return }
+                await self.handle(event, from: call)
+            }
+            guard isCurrent(call) else { return }
+            let session = try await client.openSession(offer: offer, timeZone: timeZone)
+            guard isCurrent(call) else {
+                // Ended while the companion opened it: close it there too.
+                try? await client.closeSession(id: session.id)
+                return
+            }
+            sessionId = session.id
+            try await call.accept(answer: session.answer)
+        } catch {
+            // Once ended, `finish` already closed what it could.
+            guard isCurrent(call) else { return }
+            await finish(.failed(SessionFailure(error)))
+        }
+    }
+
+    /// The End button.
+    func end() async {
+        await finish(.user)
+    }
+
+    private func handle(_ event: VoiceCallEvent, from call: VoiceCall) async {
+        guard call === self.call else { return }
+        switch event {
+        case .sessionStarted:
+            if state == .connecting { show(.live) }
+        case .sessionClosed:
+            await finish(.voice)
+        case .lost:
+            await finish(.failed(.lost))
+        }
+    }
+
+    /// Closes the microphone at once, then the session on the companion if it has one.
+    /// While the companion is still opening it, `start()` closes it when its answer arrives.
+    private func finish(_ reason: EndReason) async {
+        guard state == .connecting || state == .live else { return }
+        if case let .failed(failure) = reason { lastFailure = failure }
+        show(.ending(reason))
+        call?.hangUp()
+        call = nil
+        let id = sessionId
+        sessionId = nil
+        // After `session.closed` the companion has nothing left to close.
+        if let id, reason != .voice { try? await client.closeSession(id: id) }
+        show(.idle)
+    }
+
+    private func isCurrent(_ call: VoiceCall) -> Bool {
+        call === self.call && state == .connecting
+    }
+
+    private func show(_ state: VoiceSessionState) {
+        self.state = state
+        feedback.show(state)
+    }
+}
