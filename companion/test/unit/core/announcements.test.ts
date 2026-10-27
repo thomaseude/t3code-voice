@@ -51,7 +51,7 @@ function setup({
   let connected = true;
   const shell = () => (connected ? state : null);
   const queue = new AnnouncementQueue({ registry, shell, push, clock, log });
-  const summaries = new TaskSummaries({ backend, summarizer, registry, shell, clock, log });
+  const summaries = new TaskSummaries({ backend, summarizer, registry, clock, log });
   const watcher = new TaskWatcher({ registry, shell, summaries, queue, clock, log });
   const engine = new FakeVoiceEngine();
   const tasks = new VoiceTasks({
@@ -316,11 +316,11 @@ describe("a followed task that fails or needs the user", () => {
     assert.deepEqual(summarizer.requests, [
       { request: "Corrige les tests", output: "J'ai corrigé les tests.", outcome: "failed" },
     ]);
-    assert.equal(registry.summaryOf("t1")?.eventKey, "failed:run-1");
+    assert.notEqual(registry.summaryOf("t1", "failed:run-1"), null);
   });
 
   test("a failure's late summary does not replace the summary of the run after it", async () => {
-    const { open, update, wait, summarizer, registry, backend } = setup();
+    const { open, update, wait, summarizer, registry, backend, engine } = setup();
     await open();
     let release = () => {};
     summarizer.nextGates.push(
@@ -340,14 +340,26 @@ describe("a followed task that fails or needs the user", () => {
     release();
     await wait(0);
 
-    assert.deepEqual(registry.summaryOf("t1"), {
-      eventKey: "completed:run-2",
+    assert.deepEqual(registry.summaryOf("t1", "completed:run-2"), {
       short: "Résumé de : Tout est fait.",
       long: "Résumé long de : Tout est fait.",
     });
+    const session = engine.last;
+    session.emit({
+      type: "tool_call",
+      callId: "c1",
+      name: "get_task_details",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    assert.equal(
+      (session.toolResults[0]?.result as { summary?: string } | undefined)?.summary,
+      "Résumé long de : Tout est fait.",
+    );
+    assert.equal(summarizer.requests.length, 2);
   });
 
-  test("a summary that lands while T3 is away is not kept: nobody can tell it is still current", async () => {
+  test("a summary that lands while T3 is away is kept all the same", async () => {
     const { open, update, wait, summarizer, registry, disconnect } = setup();
     await open();
     let release = () => {};
@@ -363,7 +375,7 @@ describe("a followed task that fails or needs the user", () => {
     release();
     await wait(0);
 
-    assert.equal(registry.summaryOf("t1"), null);
+    assert.notEqual(registry.summaryOf("t1", "failed:run-1"), null);
   });
 
   test("a run T3 resumes by itself, on another day, says so", async () => {
@@ -804,7 +816,7 @@ describe("get_task_details", () => {
       status: "completed",
       summary: "Résumé long de : Page refaite.",
     });
-    assert.equal(context.registry.summaryOf("t2"), null);
+    assert.equal(context.registry.summaryOf("t2", "completed:run-9"), null);
   });
 
   test("several threads with that title: the user picks one", async () => {

@@ -6,17 +6,13 @@ import type { Clock } from "../ports/clock.ts";
 import type { Summarizer, TaskSummary } from "../ports/summarizer.ts";
 import type { T3Backend, Thread, ThreadMessage } from "../ports/t3Backend.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
-import { isCurrentEvent } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
-import type { ShellState } from "./shellState.ts";
 
 export interface TaskSummariesOptions {
   backend: T3Backend;
   /** Null when no OpenAI key is set up: there are no summaries then. */
   summarizer: Summarizer | null;
   registry: TaskRegistry;
-  /** The current T3 state, or null while the companion is not connected to T3. */
-  shell(): ShellState | null;
   clock: Clock;
   /** Operational lines only: never messages or summaries. */
   log(line: string): void;
@@ -42,10 +38,8 @@ export class TaskSummaries {
    * Null when there is none: no summarizer, nothing the agent wrote, or a failure.
    */
   summaryOf(thread: Thread, eventKey: string): Promise<TaskSummary | null> {
-    const saved = this.options.registry.summaryOf(thread.id);
-    if (saved !== null && saved.eventKey === eventKey) {
-      return Promise.resolve({ short: saved.short, long: saved.long });
-    }
+    const saved = this.options.registry.summaryOf(thread.id, eventKey);
+    if (saved !== null) return Promise.resolve(saved);
     const key = `${thread.id}|${eventKey}`;
     let making = this.making.get(key);
     if (making === undefined) {
@@ -78,25 +72,12 @@ export class TaskSummaries {
       this.options.log(`t3-voice: the summary of thread ${thread.id} took too long.`);
       return null;
     }
-    if (this.worthKeeping(thread.id, eventKey)) {
-      this.options.registry.saveSummary(thread.id, eventKey, summary);
-    }
-    return summary;
-  }
-
-  /**
-   * The registry keeps one summary per followed task: the one of its current event. A late
-   * summary of an earlier run must not replace the summary of the run after it.
-   */
-  private worthKeeping(threadId: string, eventKey: string): boolean {
+    // The registry keeps summaries of followed tasks only.
     const followed = this.options.registry
       .followedTasks()
-      .some((task) => task.threadId === threadId);
-    if (!followed) return false;
-    // While T3 is away, nothing tells whether the event is still current: keep none, it is
-    // made again when asked.
-    const shell = this.options.shell();
-    return shell !== null && isCurrentEvent(shell, threadId, eventKey);
+      .some((task) => task.threadId === thread.id);
+    if (followed) this.options.registry.saveSummary(thread.id, eventKey, summary);
+    return summary;
   }
 
   /** Null when `work` takes longer than SUMMARY_TIMEOUT_MS. */

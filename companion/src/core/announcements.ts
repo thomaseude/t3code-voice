@@ -10,7 +10,7 @@ import type { Thread } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
 import type { AnnouncementQueue } from "./announcementQueue.ts";
 import type { Announcement } from "./announcementText.ts";
-import { awarenessOf, eventKeyOf, isCurrentEvent } from "./awareness.ts";
+import { awarenessOf, eventKeyOf } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import type { TaskSummaries } from "./taskSummaries.ts";
@@ -97,11 +97,10 @@ export class TaskWatcher {
   /** The 5 s are over: announces the completion if it is still the thread's current state. */
   private settled(threadId: string, eventKey: string) {
     // While T3 is away, the next snapshot runs check() and settles the completion again.
-    const shell = this.options.shell();
+    const thread = this.options.shell()?.threads.get(threadId);
     const task = this.followed(threadId);
-    if (shell === null || task === undefined || !isCurrentEvent(shell, threadId, eventKey)) return;
-    const thread = shell.threads.get(threadId);
-    if (thread !== undefined) this.prepare(task, thread, eventKey);
+    if (thread === undefined || task === undefined || eventKeyOf(thread) !== eventKey) return;
+    this.prepare(task, thread, eventKey);
   }
 
   private prepare(task: FollowedTask, thread: Thread, eventKey: string) {

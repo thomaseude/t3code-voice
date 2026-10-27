@@ -68,24 +68,40 @@ describe("SQLite task registry", () => {
     second.close();
   });
 
-  test("a thread keeps its last summary, until it is unfollowed", async () => {
+  test("each event of a thread keeps its own summary, until the thread is unfollowed", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
     const first = SqliteTaskRegistry.open(path);
     first.follow(followedTask("t1"));
-    assert.equal(first.summaryOf("t1"), null);
+    assert.equal(first.summaryOf("t1", "completed:run-1"), null);
     first.saveSummary("t1", "completed:run-1", { short: "Court 1.", long: "Long 1." });
     first.saveSummary("t1", "completed:run-2", { short: "Court 2.", long: "Long 2." });
     first.close();
 
     const second = SqliteTaskRegistry.open(path);
-    assert.deepEqual(second.summaryOf("t1"), {
-      eventKey: "completed:run-2",
+    assert.deepEqual(second.summaryOf("t1", "completed:run-1"), {
+      short: "Court 1.",
+      long: "Long 1.",
+    });
+    assert.deepEqual(second.summaryOf("t1", "completed:run-2"), {
       short: "Court 2.",
       long: "Long 2.",
     });
     second.unfollow("t1");
-    assert.equal(second.summaryOf("t1"), null);
+    assert.equal(second.summaryOf("t1", "completed:run-2"), null);
     second.close();
+  });
+
+  test("a thread keeps the summaries of its last 10 events only", async () => {
+    const registry = SqliteTaskRegistry.open(join(await privateDir(), "tasks.sqlite"));
+    registry.follow(followedTask("t1"));
+    for (let run = 1; run <= 12; run++) {
+      registry.saveSummary("t1", `completed:run-${run}`, { short: "Court.", long: "Long." });
+    }
+
+    assert.equal(registry.summaryOf("t1", "completed:run-2"), null);
+    assert.notEqual(registry.summaryOf("t1", "completed:run-3"), null);
+    assert.notEqual(registry.summaryOf("t1", "completed:run-12"), null);
+    registry.close();
   });
 
   test("the database file is created readable by its owner only", async () => {

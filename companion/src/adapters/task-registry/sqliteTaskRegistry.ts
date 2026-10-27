@@ -13,6 +13,9 @@ import type { FollowedTask, TaskRegistry } from "../../ports/taskRegistry.ts";
 
 export const TASK_REGISTRY_FILE = "tasks.sqlite";
 
+/** Summaries kept per thread: its latest events are the ones anyone asks about. */
+const SUMMARIES_PER_THREAD = 10;
+
 /** Each step brings the schema from the version before it (`PRAGMA user_version`) to its own. */
 const MIGRATIONS = [
   `CREATE TABLE followed_tasks (
@@ -26,10 +29,11 @@ const MIGRATIONS = [
      followed_at TEXT NOT NULL
    )`,
   `CREATE TABLE task_summaries (
-     thread_id TEXT PRIMARY KEY,
+     thread_id TEXT NOT NULL,
      event_key TEXT NOT NULL,
      short TEXT NOT NULL,
-     long TEXT NOT NULL
+     long TEXT NOT NULL,
+     PRIMARY KEY (thread_id, event_key)
    )`,
 ];
 
@@ -117,17 +121,24 @@ export class SqliteTaskRegistry implements TaskRegistry {
     this.db
       .prepare(
         `INSERT INTO task_summaries (thread_id, event_key, short, long) VALUES (?, ?, ?, ?)
-         ON CONFLICT (thread_id) DO UPDATE
-         SET event_key = excluded.event_key, short = excluded.short, long = excluded.long`,
+         ON CONFLICT (thread_id, event_key) DO UPDATE
+         SET short = excluded.short, long = excluded.long`,
       )
       .run(threadId, eventKey, summary.short, summary.long);
+    this.db
+      .prepare(
+        `DELETE FROM task_summaries WHERE thread_id = ? AND rowid NOT IN (
+           SELECT rowid FROM task_summaries WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?
+         )`,
+      )
+      .run(threadId, threadId, SUMMARIES_PER_THREAD);
   }
 
-  summaryOf(threadId: string): (TaskSummary & { eventKey: string }) | null {
+  summaryOf(threadId: string, eventKey: string): TaskSummary | null {
     const row = this.db
-      .prepare("SELECT event_key, short, long FROM task_summaries WHERE thread_id = ?")
-      .get(threadId) as { event_key: string; short: string; long: string } | undefined;
-    return row === undefined ? null : { eventKey: row.event_key, short: row.short, long: row.long };
+      .prepare("SELECT short, long FROM task_summaries WHERE thread_id = ? AND event_key = ?")
+      .get(threadId, eventKey) as { short: string; long: string } | undefined;
+    return row === undefined ? null : { short: row.short, long: row.long };
   }
 
   close(): void {

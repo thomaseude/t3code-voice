@@ -331,7 +331,9 @@ export class InMemoryTaskRegistry implements TaskRegistry {
   unfollow(threadId: string) {
     const before = this.tasks.length;
     this.tasks = this.tasks.filter((task) => task.threadId !== threadId);
-    this.summaries.delete(threadId);
+    for (const key of this.summaries.keys()) {
+      if (key.startsWith(`${threadId}|`)) this.summaries.delete(key);
+    }
     return this.tasks.length < before;
   }
   markAnnounced(threadId: string, state: string, eventKey: string) {
@@ -341,12 +343,13 @@ export class InMemoryTaskRegistry implements TaskRegistry {
         : task,
     );
   }
-  readonly summaries = new Map<string, TaskSummary & { eventKey: string }>();
+  /** By "thread|event key". */
+  readonly summaries = new Map<string, TaskSummary>();
   saveSummary(threadId: string, eventKey: string, summary: TaskSummary) {
-    this.summaries.set(threadId, { eventKey, ...summary });
+    this.summaries.set(`${threadId}|${eventKey}`, summary);
   }
-  summaryOf(threadId: string) {
-    return this.summaries.get(threadId) ?? null;
+  summaryOf(threadId: string, eventKey: string) {
+    return this.summaries.get(`${threadId}|${eventKey}`) ?? null;
   }
   close() {}
 }
@@ -436,7 +439,6 @@ export function unusedSummaries(
     backend: new FakeT3Backend(),
     summarizer: null,
     registry,
-    shell: () => null,
     clock,
     log: () => {},
   });
