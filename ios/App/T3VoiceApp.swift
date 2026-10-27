@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 /// The one place that builds the real Keychain, network, WebRTC, Face ID and Live Activity.
-/// The Live Activity's End button reaches the session through here.
+/// The Live Activity's End button and the start intent (Action Button, Siri, Control Center)
+/// reach the session through here.
 @MainActor
 enum Services {
     static let store = KeychainConnectionStore()

@@ -9,7 +9,9 @@ Swift / SwiftUI, iOS 18 or later. Build it on a Mac with Xcode and
 ## Start a conversation
 
 Each way to start runs the same flow: Face ID, then the start sound, then you talk. When the
-iPhone is locked, iOS asks for Face ID to unlock it, and the app does not ask a second time.
+iPhone is locked, iOS asks for Face ID to unlock it. The app does not ask a second time if
+that unlock used Face ID less than 10 seconds before; after an unlock with the passcode, it
+asks again.
 When a conversation already runs, starting again does nothing.
 
 - **In the app**: the "Parler" button.
