@@ -6,7 +6,7 @@ import type { Clock } from "../ports/clock.ts";
 import type { PushSender } from "../ports/pushSender.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
 import { type Announcement, spokenAnnouncement } from "./announcementText.ts";
-import { eventKeyOf } from "./awareness.ts";
+import { isCurrentEvent } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 
@@ -177,9 +177,7 @@ export class AnnouncementQueue {
     if (task === undefined || task.lastEventKey === item.eventKey) return false;
     const shell = this.options.shell();
     // While T3 is away, the last news known is still the best there is.
-    if (shell === null) return true;
-    const thread = shell.threads.get(item.threadId);
-    return thread !== undefined && eventKeyOf(thread) === item.eventKey;
+    return shell === null || isCurrentEvent(shell, item.threadId, item.eventKey);
   }
 
   private recordTold(item: Announcement) {

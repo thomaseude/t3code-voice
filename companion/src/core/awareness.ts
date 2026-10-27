@@ -4,6 +4,7 @@
 // announcements all use it, so they never disagree.
 
 import type { Thread } from "../ports/t3Backend.ts";
+import type { ShellState } from "./shellState.ts";
 
 export type Awareness =
   | "running"
@@ -48,6 +49,16 @@ export function eventKeyOf(thread: Thread): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * Whether `eventKey` is still the thread's current event: false once its run went on, its
+ * question was answered, or the thread left T3's list. Each caller decides what to do while
+ * T3 is away, since there is no shell to ask then.
+ */
+export function isCurrentEvent(shell: ShellState, threadId: string, eventKey: string): boolean {
+  const thread = shell.threads.get(threadId);
+  return thread !== undefined && eventKeyOf(thread) === eventKey;
 }
 
 function stateOf(thread: Thread): Awareness | null {

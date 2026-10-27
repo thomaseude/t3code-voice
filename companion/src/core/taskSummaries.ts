@@ -6,7 +6,7 @@ import type { Clock } from "../ports/clock.ts";
 import type { Summarizer, TaskSummary } from "../ports/summarizer.ts";
 import type { T3Backend, Thread, ThreadMessage } from "../ports/t3Backend.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
-import { eventKeyOf } from "./awareness.ts";
+import { isCurrentEvent } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 
@@ -93,10 +93,10 @@ export class TaskSummaries {
       .followedTasks()
       .some((task) => task.threadId === threadId);
     if (!followed) return false;
+    // While T3 is away, nothing tells whether the event is still current: keep none, it is
+    // made again when asked.
     const shell = this.options.shell();
-    if (shell === null) return true;
-    const current = shell.threads.get(threadId);
-    return current !== undefined && eventKeyOf(current) === eventKey;
+    return shell !== null && isCurrentEvent(shell, threadId, eventKey);
   }
 
   /** Null when `work` takes longer than SUMMARY_TIMEOUT_MS. */

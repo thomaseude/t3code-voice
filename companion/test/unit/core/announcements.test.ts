@@ -347,6 +347,25 @@ describe("a followed task that fails or needs the user", () => {
     });
   });
 
+  test("a summary that lands while T3 is away is not kept: nobody can tell it is still current", async () => {
+    const { open, update, wait, summarizer, registry, disconnect } = setup();
+    await open();
+    let release = () => {};
+    summarizer.nextGates.push(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    update("t1", { status: "failed" });
+    await wait(0);
+    disconnect();
+    release();
+    await wait(0);
+
+    assert.equal(registry.summaryOf("t1"), null);
+  });
+
   test("a run T3 resumes by itself, on another day, says so", async () => {
     const { open, update, wait } = setup();
     const session = await open();
