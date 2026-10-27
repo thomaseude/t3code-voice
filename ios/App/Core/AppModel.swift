@@ -27,13 +27,16 @@ final class AppModel: ObservableObject {
 
     private let store: ConnectionStore
     private let client: CompanionClient
+    /// The name iOS gives the device ("iPhone"), used when the field is left empty.
     private let modelName: String
+    /// Changes on each "Oublier": an answer to a request sent before it is for nobody.
+    private var forgottenCount = 0
 
-    init(store: ConnectionStore, transport: HTTPTransport, deviceName: String) {
+    init(store: ConnectionStore, transport: HTTPTransport, modelName: String) {
         self.store = store
         client = CompanionClient(transport: transport, store: store)
-        modelName = deviceName
-        self.deviceName = deviceName
+        self.modelName = modelName
+        deviceName = modelName
         isPaired = (try? store.load()) != nil
     }
 
@@ -62,28 +65,37 @@ final class AppModel: ObservableObject {
     }
 
     func refreshActivity() async {
-        let status: ActivityStatus
+        let startedAfter = forgottenCount
+        let result: Result<Activity, Error>
         do {
-            status = .loaded(try await client.activity())
-        } catch CompanionError.unauthorized, CompanionError.notPaired {
-            // Revoked, reset, or the stored token is gone: nothing can reach the companion.
-            forget()
-            return
-        } catch CompanionError.t3Unavailable {
-            status = .failed("Le companion se reconnecte à T3. Réessaie dans un instant.")
-        } catch let CompanionError.limited(seconds) {
-            status = .failed("Trop de requêtes. Réessaie dans \(minutes(seconds)).")
+            result = .success(try await client.activity())
         } catch {
-            status = .failed("Le companion ne répond pas.")
+            result = .failure(error)
         }
-        // "Oublier" may have run while the request was out: its answer is for nobody.
-        guard isPaired else { return }
-        activityStatus = status
+        // "Oublier" ran while the request was out, and another companion may be paired now.
+        guard startedAfter == forgottenCount else { return }
+        switch result {
+        case let .success(activity):
+            activityStatus = .loaded(activity)
+        case let .failure(error):
+            switch error as? CompanionError {
+            case .unauthorized?, .notPaired?:
+                // Revoked, reset, or the stored token is gone: nothing can reach the companion.
+                forget()
+            case .t3Unavailable?:
+                activityStatus = .failed("Le companion se reconnecte à T3. Réessaie dans un instant.")
+            case let .limited(seconds)?:
+                activityStatus = .failed("Trop de requêtes. Réessaie dans \(minutes(seconds)).")
+            default:
+                activityStatus = .failed("Le companion ne répond pas.")
+            }
+        }
     }
 
     /// Deletes the connection on this iPhone only (decided by Thomas in #18). To revoke the
     /// device on the server, run `t3-voice devices revoke` there.
     func forget() {
+        forgottenCount += 1
         try? store.delete()
         isPaired = false
         pairingStatus = .scanning

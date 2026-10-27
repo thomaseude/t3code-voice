@@ -6,7 +6,7 @@ struct T3VoiceApp: App {
     @StateObject private var model = AppModel(
         store: KeychainConnectionStore(),
         transport: URLSessionTransport(),
-        deviceName: UIDevice.current.model
+        modelName: UIDevice.current.model
     )
 
     var body: some Scene {
