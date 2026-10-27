@@ -7,7 +7,7 @@ import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import type { Project, Thread } from "../../../src/ports/t3Backend.ts";
 import { project, thread } from "../builders.ts";
-import { FakeClock, FakeVoiceEngine } from "../fakePorts.ts";
+import { FakeClock, FakeVoiceEngine, settle } from "../fakePorts.ts";
 
 function shellWith(projects: Project[], threads: Thread[] = []): ShellState {
   const state = new ShellState();
@@ -41,11 +41,6 @@ function setup({
       connectedShell = null;
     },
   };
-}
-
-/** Lets the core answer a tool call: it checks the device first, which takes a turn. */
-async function settle() {
-  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }
 
 async function openOne(

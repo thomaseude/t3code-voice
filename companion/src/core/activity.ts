@@ -13,12 +13,17 @@ const FINISHED_SINCE_MS = 24 * 3_600_000;
 const LIVE_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 
 export function activityOf(state: ShellState, now: Date): Activity {
-  const since = new Date(now.getTime() - FINISHED_SINCE_MS).toISOString();
   const { running, finished } = allActivity(state);
   return {
     running: running.slice(0, MAX_PER_LIST),
-    finished: finished.filter((item) => item.updatedAt >= since).slice(0, MAX_PER_LIST),
+    finished: finishedSince24Hours(finished, now).slice(0, MAX_PER_LIST),
   };
+}
+
+/** The items that finished in the 24 hours before `now`. */
+export function finishedSince24Hours(items: ActivityItem[], now: Date): ActivityItem[] {
+  const since = new Date(now.getTime() - FINISHED_SINCE_MS).toISOString();
+  return items.filter((item) => item.updatedAt >= since);
 }
 
 /** Every top-level thread T3's awareness rule reports, the latest first, with no limit. */

@@ -9,6 +9,7 @@ import {
   FakeT3Connector,
   FakeVoiceEngine,
   InMemoryConfigStore,
+  settle,
 } from "../../fakePorts.ts";
 
 const NOW = new Date("2026-10-26T12:00:00.000Z");
@@ -67,11 +68,6 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
     stop: () => stop(),
     isClosed: () => closed,
   };
-}
-
-/** Lets the fake T3 connect and send its snapshot. */
-async function settle() {
-  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }
 
 describe("runServe", () => {

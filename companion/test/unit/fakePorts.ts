@@ -269,3 +269,8 @@ export class FakeClock implements Clock {
     this.time = end;
   }
 }
+
+/** Lets pending promises and callbacks run, as several turns of the event loop. */
+export async function settle() {
+  for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
+}

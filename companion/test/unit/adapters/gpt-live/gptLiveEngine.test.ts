@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { GptLiveEngine } from "../../../../src/adapters/gpt-live/gptLiveEngine.ts";
 import type { VoiceEvent, VoiceSessionRequest } from "../../../../src/ports/voiceEngine.ts";
-import { FakeClock } from "../../fakePorts.ts";
+import { FakeClock, settle } from "../../fakePorts.ts";
 import { FakeGptLiveTransport } from "./fakes.ts";
 
 const REQUEST: VoiceSessionRequest = {
@@ -237,11 +237,6 @@ describe("speaking and closing", () => {
 });
 
 describe("when the control channel drops", () => {
-  /** Lets an attach promise settle after the clock fired. */
-  const settle = async () => {
-    for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
-  };
-
   test("the adapter attaches again, and tool calls arrive on the new channel", async () => {
     const { transport, clock, events, open } = setup();
     await open();
@@ -288,5 +283,54 @@ describe("when the control channel drops", () => {
     transport.socket.receive({ type: "session.closed" });
     await closing;
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+
+  test("a tool result sent while the channel is down goes out once it is back", async () => {
+    const { transport, clock, open } = setup();
+    const session = await open();
+    transport.socket.receive(functionCall("call_1", "list_projects", "{}"));
+    transport.socket.drop();
+
+    session.resolveToolCall("call_1", { projects: ["Joombo"] });
+    clock.advance(1_000);
+    await settle();
+
+    assert.deepEqual(transport.socket.sentTypes(), ["response.item.create", "response.create"]);
+  });
+
+  test("a close asked while the channel is down waits for the attaches, not 5 s", async () => {
+    const { transport, clock, events, open } = setup();
+    const session = await open();
+    transport.attachFailures = 1;
+    transport.socket.drop();
+
+    const closing = session.close();
+    clock.advance(1_000);
+    await settle();
+    clock.advance(2_000);
+    await settle();
+    clock.advance(4_000);
+    assert.deepEqual(events, []);
+
+    assert.deepEqual(transport.socket.sentTypes(), ["session.close"]);
+    transport.socket.receive({ type: "session.closed" });
+    await closing;
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+
+  test("channels that open then drop at once count as failed attaches", async () => {
+    const { transport, clock, events, open } = setup();
+    await open();
+
+    transport.socket.drop();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      clock.advance(delay);
+      await settle();
+      // OpenAI accepts the socket, then closes it before any event.
+      if (events.length === 0) transport.socket.drop();
+    }
+
+    assert.deepEqual(events, [{ type: "closed", reason: "failed" }]);
+    assert.equal(transport.attached.length, 4);
   });
 });

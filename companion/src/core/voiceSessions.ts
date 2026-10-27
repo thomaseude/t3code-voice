@@ -9,7 +9,7 @@ import type {
 } from "../ports/apiServer.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
-import { allActivity } from "./activity.ts";
+import { allActivity, finishedSince24Hours } from "./activity.ts";
 import { randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
@@ -46,7 +46,6 @@ const REVOCATION_CHECK_MS = 30_000;
 
 /** Tasks per tool answer: a longer list is too long to listen to. */
 const SPOKEN_TASKS = 10;
-const FINISHED_SINCE_MS = 24 * 3_600_000;
 
 /** Time the model gets to say goodbye after end_session, before the session closes. */
 const GOODBYE_MS = 5_000;
@@ -243,10 +242,8 @@ export class VoiceSessionManager implements VoiceSessions {
     switch (scope) {
       case "running":
         return spokenList(running);
-      case "finished": {
-        const since = new Date(now.getTime() - FINISHED_SINCE_MS).toISOString();
-        return spokenList(finished.filter((item) => item.updatedAt >= since));
-      }
+      case "finished":
+        return spokenList(finishedSince24Hours(finished, now));
       case "today": {
         // The device's calendar day, which can last 23 or 25 hours.
         const today = dayIn(session.timeZone, now);

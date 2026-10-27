@@ -64,8 +64,9 @@ Routes:
   "timeZone": "Europe/Paris"}` (`timeZone` is optional; it sets what "today" means, and
   defaults to the server's). The companion sends the offer to GPT-Live with its own OpenAI
   key and answers `201` with `{"sessionId", "sdp": "<SDP answer>"}` as soon as GPT-Live
-  answers and the companion's control channel is attached (3 s at most): the app applies
-  the answer and does not wait for full ICE gathering. A device
+  answers and the companion's control channel is attached. GPT-Live's answer can take up
+  to 15 s; the attach after it waits 3 s at most. The app applies the answer and does not
+  wait for full ICE gathering. A device
   has one session at most: a new `POST /sessions` closes the one it still had. Errors:
   `400` `invalid_offer`, `502` `voice_engine_failed` (OpenAI refused or cannot be
   reached), `503` `voice_unavailable` (no OpenAI key).

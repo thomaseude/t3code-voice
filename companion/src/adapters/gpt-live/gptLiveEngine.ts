@@ -113,7 +113,8 @@ export class GptLiveEngine implements VoiceEngine {
 const CLOSE_TIMEOUT_MS = 5_000;
 /**
  * Waits before each new attach when the control channel drops. Only the companion's channel
- * dropped: the phone's call goes on, and only this channel can still close it.
+ * dropped: the phone's call goes on, and only this channel can still close it. A channel
+ * counts as back once it received an event: OpenAI may accept a socket and close it at once.
  */
 const REATTACH_DELAYS_MS = [1_000, 2_000, 4_000];
 
@@ -137,8 +138,12 @@ class LiveSession implements VoiceSession {
   private ended = false;
   private closing: Promise<void> | null = null;
   private resolveClosing: () => void = () => {};
-  private cancelCloseTimeout: () => void = () => {};
+  private cancelCloseTimeout: (() => void) | null = null;
   private cancelReattach: () => void = () => {};
+  /** Attaches tried since the last channel that received an event. */
+  private reattaches = 0;
+  /** Events sent while the channel is down, in order: they go out once it is back. */
+  private readonly unsent: string[] = [];
   /** Calls of the delegation model still waiting for a result (one at most per turn). */
   private readonly pendingCalls = new Set<string>();
   private nextEventId = 1;
@@ -155,31 +160,34 @@ class LiveSession implements VoiceSession {
   private use(socket: LiveSocket) {
     this.socket = socket;
     socket.onMessage((text) => {
-      if (this.socket === socket) this.receive(text);
+      if (this.socket !== socket) return;
+      this.reattaches = 0;
+      this.receive(text);
     });
     socket.onClose(() => {
       if (this.socket !== socket) return;
       this.socket = null;
-      this.reattach(0);
+      this.reattach();
     });
+    for (const text of this.unsent.splice(0)) socket.send(text);
+    if (this.closing !== null) this.startCloseTimeout();
   }
 
-  private reattach(attempt: number) {
+  private reattach() {
     if (this.ended) return;
-    const delay = REATTACH_DELAYS_MS[attempt];
+    const delay = REATTACH_DELAYS_MS[this.reattaches];
     if (delay === undefined) {
       this.end(this.closing === null ? "failed" : "closed");
       return;
     }
+    this.reattaches++;
     this.cancelReattach = this.clock.schedule(delay, () => {
       this.transport.attach(this.sessionId).then(
         (socket) => {
           if (this.ended) return socket.close();
           this.use(socket);
-          // A close asked while the channel was down: OpenAI has not received it yet.
-          if (this.closing !== null) this.send({ type: "session.close" });
         },
-        () => this.reattach(attempt + 1),
+        () => this.reattach(),
       );
     });
   }
@@ -207,15 +215,20 @@ class LiveSession implements VoiceSession {
       });
       // OpenAI sends its final `session.closed` (with usage) before it lets go.
       this.send({ type: "session.close" });
-      this.cancelCloseTimeout = this.clock.schedule(CLOSE_TIMEOUT_MS, () => this.end("closed"));
+      // While the channel is down, the close waits for it instead: only it can stop billing.
+      if (this.socket !== null) this.startCloseTimeout();
     }
     return this.closing;
+  }
+
+  private startCloseTimeout() {
+    this.cancelCloseTimeout ??= this.clock.schedule(CLOSE_TIMEOUT_MS, () => this.end("closed"));
   }
 
   private end(reason: "closed" | "failed") {
     if (this.ended) return;
     this.ended = true;
-    this.cancelCloseTimeout();
+    this.cancelCloseTimeout?.();
     this.cancelReattach();
     const socket = this.socket;
     this.socket = null;
@@ -224,10 +237,11 @@ class LiveSession implements VoiceSession {
     this.onEvent({ type: "closed", reason });
   }
 
-  /** Drops the event while the channel is down: a result sent then is lost. */
   private send(event: WireJson) {
-    if (this.ended || this.socket === null) return;
-    this.socket.send(JSON.stringify({ ...event, event_id: `t3voice_${this.nextEventId++}` }));
+    if (this.ended) return;
+    const text = JSON.stringify({ ...event, event_id: `t3voice_${this.nextEventId++}` });
+    if (this.socket === null) this.unsent.push(text);
+    else this.socket.send(text);
   }
 
   private receive(text: string) {
