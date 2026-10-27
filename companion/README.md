@@ -100,10 +100,21 @@ During a session the companion answers the voice model's tools from T3's state:
   interrupts its run. An undo that failed can be asked again within the 60 s. A steered message, or
   one the agent already took, answers `too_late`;
 - `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
-  a task by its spoken name;
+  a task by its spoken name. Two threads with one title are offered as "<title> sur
+  <project>";
+- `get_task_details` gives a task's status from T3 and the long summary of its last
+  finished run, with the cause and `resumes_at` of a failure. It takes a followed task's
+  spoken name, else the title of any thread;
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
 
 A reference that fits several projects or tasks acts on none: the answer lists the choices.
+
+While a session is open, the companion announces the news of each followed task: a run
+that completed (after 5 s, in case the agent goes on) with a short summary, a run that
+failed with its cause and when it can resume, a question or a permission request. It
+speaks at the next 2 s gap in the conversation, and each event once, even after a
+reconnect or a restart. With no session open, the news goes to the push sender, which
+only logs it until ntfy (#25).
 
 While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no T3 data:
 the companion checks the device before each tool call and every 30 s, and closes the
@@ -139,13 +150,24 @@ Settings in `config.json`, all optional:
     "clientIpHeader": "cf-connecting-ip",
     "publicUrl": "https://voice.example.com"
   },
-  "voice": { "model": "gpt-live-1", "voice": "brise", "delegationModel": "gpt-5.6-terra" }
+  "voice": {
+    "model": "gpt-live-1",
+    "voice": "brise",
+    "delegationModel": "gpt-5.6-terra",
+    "summaryModel": "gpt-5.4-mini"
+  }
 }
 ```
 
 `voice` sets the GPT-Live session. `delegationModel` is the Responses model GPT-Live hands
 the user's requests to; it calls the companion's tools by name. It is billed per token, on
 top of GPT-Live's $0.05 per minute.
+
+`summaryModel` is the cheap text model that summarizes what an agent did when a followed
+task completes or fails. The announcement speaks the short summary; `get_task_details` gives the
+long one. `get_task_details` on a finished thread nobody follows also asks for a summary,
+on each request, and keeps none. The model reads the agent's last messages of the run,
+with `store: false`. Without an OpenAI key there are no summaries.
 
 `publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
 in the QR code, and needs it.
@@ -232,12 +254,12 @@ open, and prints the `chmod` command that fixes it.
 
 | File | Content |
 |---|---|
-| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`) |
+| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`) |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), and what announcements last said. Only `serve` opens it |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. Only `serve` opens it |
 | `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.
@@ -279,14 +301,25 @@ src/
     apiServer.ts             what `serve` needs to start and stop the HTTP API; activity;
                              voice sessions as the API opens and ends them
     voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to
+    taskRegistry.ts          TaskRegistry: followed tasks, what was announced, summaries
+    summarizer.ts            Summarizer: the text model that tells what an agent did
+    pushSender.ts            PushSender: notifications when no voice session can speak
     clock.ts                 Clock: current time and timers, faked in tests
   core/
     shellState.ts            projects and threads kept up to date; "is this thread running?"
     rateLimiter.ts           requests per key (IP, device) in fixed windows
     pairing.ts               pairing window, one-time codes, global limit on wrong codes
+    awareness.ts             T3's awareness rule: running, finished or waiting for the user
     activity.ts              the running / finished list of GET /activity
     voiceSessions.ts         one voice session per device; answers the voice model's tools
     voiceConversation.ts     French instructions and tool definitions for the voice model
+    voiceTasks.ts            the task tools: start, message, follow, details, cancel
+    spokenNames.ts           short French names for tasks, and finding a task by name
+    folderClaims.ts          project folders a voice start just took
+    announcements.ts         watches followed tasks: 5 s settle, one announcement per event
+    announcementQueue.ts     per-session queue, spoken at the next gap, else pushed
+    announcementText.ts      what an announcement says, in French
+    taskSummaries.ts         summaries of finished runs, made once and cached
     clock.ts                 the real clock
     secrets.ts               masks credentials in anything the companion prints
   adapters/
@@ -298,6 +331,9 @@ src/
     http/                    the HTTP API: token check and rate limits on every route
     gpt-live/                VoiceEngine on OpenAI GPT-Live: session creation with the
                              phone's offer, control channel for tool calls and speech
+    task-registry/           TaskRegistry on SQLite (tasks.sqlite, node:sqlite)
+    openai-summarizer/       Summarizer on OpenAI's Responses API
+    log-push/                PushSender that only logs, until ntfy
     cli/                     `t3-voice` commands (setup, status, serve, pair, devices)
 deploy/
   t3-voice.service           systemd user unit template

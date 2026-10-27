@@ -51,6 +51,46 @@ describe("SQLite task registry", () => {
     registry.close();
   });
 
+  test("an announced event is still known after the registry is reopened", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const first = SqliteTaskRegistry.open(path);
+    first.follow(followedTask("t1"));
+    first.markAnnounced("t1", "completed", "completed:run-1");
+    // A thread no longer followed is left alone.
+    first.markAnnounced("t9", "failed", "failed:run-1");
+    first.close();
+
+    const second = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(second.followedTasks(), [
+      followedTask("t1", { lastAnnouncedState: "completed", lastEventKey: "completed:run-1" }),
+    ]);
+    second.close();
+  });
+
+  test("each event of a thread keeps its own summary, until the thread is unfollowed", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const first = SqliteTaskRegistry.open(path);
+    first.follow(followedTask("t1"));
+    assert.equal(first.summaryOf("t1", "completed:run-1"), null);
+    first.saveSummary("t1", "completed:run-1", { short: "Court 1.", long: "Long 1." });
+    first.saveSummary("t1", "completed:run-2", { short: "Court 2.", long: "Long 2." });
+    first.close();
+
+    const second = SqliteTaskRegistry.open(path);
+    assert.deepEqual(second.summaryOf("t1", "completed:run-1"), {
+      short: "Court 1.",
+      long: "Long 1.",
+    });
+    assert.deepEqual(second.summaryOf("t1", "completed:run-2"), {
+      short: "Court 2.",
+      long: "Long 2.",
+    });
+    second.unfollow("t1");
+    assert.equal(second.summaryOf("t1", "completed:run-2"), null);
+    second.close();
+  });
+
   test("the database file is created readable by its owner only", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
 

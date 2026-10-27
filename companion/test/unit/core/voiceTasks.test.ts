@@ -14,6 +14,8 @@ import {
   FakeVoiceEngine,
   InMemoryTaskRegistry,
   settle,
+  unusedAnnouncements,
+  unusedSummaries,
 } from "../fakePorts.ts";
 
 const CLAUDE = provider("claudeAgent", {
@@ -52,6 +54,7 @@ async function setup({
     backend,
     registry,
     shell: () => (connected ? shell : null),
+    summaries: unusedSummaries(clock, registry),
     clock,
     newId: () => `id-${++ids}`,
     log: (line) => logs.push(line),
@@ -60,6 +63,7 @@ async function setup({
     engine,
     shell: () => (connected ? shell : null),
     tasks,
+    announcements: unusedAnnouncements(),
     isRevoked: async () => false,
     clock,
     log: (line) => logs.push(line),
@@ -636,7 +640,12 @@ describe("follow_thread and unfollow_thread", () => {
       spoken_name: "offre totem",
     });
 
-    assert.deepEqual(result, { status: "followed", task: "offre totem", project: "joombo" });
+    assert.deepEqual(result, {
+      status: "followed",
+      task: "offre totem",
+      project: "joombo",
+      state: "running",
+    });
     assert.deepEqual(registry.followedTasks(), [
       followedTask("t9", { spokenName: "offre totem", origin: "followed" }),
     ]);

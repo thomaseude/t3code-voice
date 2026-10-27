@@ -1,5 +1,5 @@
 // Starting and steering T3 tasks by voice: the tools start_task, send_message,
-// follow_thread, unfollow_thread, and the undo behind cancel_last_action.
+// follow_thread, unfollow_thread, get_task_details, and the undo behind cancel_last_action.
 //
 // Every tool checks its arguments, finds the project or task the user named, and acts on
 // T3 only when exactly one fits. Several fits return the choices; nothing is guessed.
@@ -16,16 +16,20 @@ import type {
   Thread,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
+import { awarenessOf, eventKeyOf } from "./awareness.ts";
 import { FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
+import type { TaskSummaries } from "./taskSummaries.ts";
 
 export interface VoiceTasksOptions {
   backend: T3Backend;
   registry: TaskRegistry;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
+  /** The summaries get_task_details reads. */
+  summaries: TaskSummaries;
   clock: Clock;
   /** A new unique id, for T3 command and message ids. */
   newId(): string;
@@ -203,12 +207,10 @@ export class VoiceTasks {
     if (followed.kind === "found") {
       return { status: "already_followed", task: followed.task.spokenName };
     }
-    const match = findByName(reference, shell.topLevelThreads(), (thread) => thread.title);
+    const match = findThread(shell, reference);
     if (match.kind === "none") return { error: "unknown_task" };
-    if (match.kind === "ambiguous") {
-      return { status: "ambiguous_task", choices: match.items.map((thread) => thread.title) };
-    }
-    const thread: Thread = match.item;
+    if (match.kind === "ambiguous") return match.result;
+    const thread: Thread = match.thread;
     const already = this.options.registry
       .followedTasks()
       .find((task) => task.threadId === thread.id);
@@ -221,13 +223,63 @@ export class VoiceTasks {
       project: projectTitle,
       taken: this.takenNames(),
     });
+    // What already happened is not news: only the thread's next events are announced.
+    const state = awarenessOf(thread);
     this.follow({
       threadId: thread.id,
       projectId: thread.projectId,
       spokenName,
       origin: "followed",
+      lastAnnouncedState: eventKeyOf(thread) === null ? null : state,
+      lastEventKey: eventKeyOf(thread),
     });
-    return { status: "followed", task: spokenName, project: projectTitle };
+    return { status: "followed", task: spokenName, project: projectTitle, state: state ?? "idle" };
+  }
+
+  /**
+   * get_task_details: the task's status from T3, and the long summary of its finished run.
+   * A followed task by its spoken name, else any thread by its title (decided by Thomas in #22).
+   */
+  async taskDetails(args: unknown): Promise<ToolResult> {
+    const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
+    if (reference === null) return { error: "invalid_arguments" };
+    const shell = this.options.shell();
+    if (shell === null) return { error: "t3_unavailable" };
+    let thread: Thread | undefined;
+    let name: string;
+    const followed = this.findFollowed(reference);
+    if (followed.kind === "found") {
+      thread = shell.threads.get(followed.task.threadId);
+      name = followed.task.spokenName;
+    } else {
+      // Several followed tasks fit: the user picks among them before any other thread.
+      if (followed.result.status === "ambiguous_task") return followed.result;
+      const match = findThread(shell, reference);
+      if (match.kind === "none") return followed.result;
+      if (match.kind === "ambiguous") return match.result;
+      thread = match.thread;
+      name = match.thread.title;
+    }
+    if (thread === undefined) return { error: "unknown_task" };
+
+    const state = awarenessOf(thread);
+    const eventKey = eventKeyOf(thread);
+    const finished = state === "completed" || state === "failed";
+    const summary =
+      finished && eventKey !== null
+        ? await this.options.summaries.summaryOf(thread, eventKey)
+        : null;
+    const details: ToolResult = {
+      task: name,
+      project: shell.projects.get(thread.projectId)?.title ?? null,
+      status: state ?? "idle",
+      summary: summary?.long ?? null,
+    };
+    if (state === "failed") {
+      details.failure = thread.lastError?.failureClass ?? "unknown";
+      details.resumes_at = thread.lastError?.resumesAt ?? null;
+    }
+    return details;
   }
 
   unfollowThread(args: unknown): ToolResult {
@@ -351,11 +403,14 @@ export class VoiceTasks {
     return this.options.registry.followedTasks().map((task) => task.spokenName);
   }
 
-  private follow(task: Pick<FollowedTask, "threadId" | "projectId" | "spokenName" | "origin">) {
+  private follow(
+    task: Pick<FollowedTask, "threadId" | "projectId" | "spokenName" | "origin"> &
+      Partial<Pick<FollowedTask, "lastAnnouncedState" | "lastEventKey">>,
+  ) {
     this.options.registry.follow({
-      ...task,
       lastAnnouncedState: null,
       lastEventKey: null,
+      ...task,
       cursor: null,
       followedAt: new Date(this.options.clock.now()).toISOString(),
     });
@@ -365,6 +420,34 @@ export class VoiceTasks {
     this.options.log(`t3-voice: T3 refused ${tool} (${errorKind(error)}).`);
     return { error: "t3_failed" };
   }
+}
+
+type ThreadMatch =
+  | { kind: "found"; thread: Thread }
+  | { kind: "ambiguous"; result: ToolResult }
+  | { kind: "none" };
+
+/**
+ * A thread by its title; when no title fits, by its title and project together. Two threads
+ * with one title are then offered as "Fix tests sur Joombo", which finds one when repeated.
+ */
+function findThread(shell: ShellState, reference: string): ThreadMatch {
+  const threads = shell.topLevelThreads();
+  const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
+  const byTitle = findByName(reference, threads, (thread) => thread.title);
+  const match =
+    byTitle.kind === "none"
+      ? findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`)
+      : byTitle;
+  if (match.kind === "none") return { kind: "none" };
+  if (match.kind === "found") return { kind: "found", thread: match.item };
+  const choices = match.items.map((thread) => {
+    const shared = match.items.some(
+      (other) => other !== thread && keyOf(other.title) === keyOf(thread.title),
+    );
+    return shared ? `${thread.title} sur ${projectOf(thread)}` : thread.title;
+  });
+  return { kind: "ambiguous", result: { status: "ambiguous_task", choices } };
 }
 
 type WorkspaceChoice =

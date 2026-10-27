@@ -8,6 +8,7 @@ import { chmodSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ConfigError } from "../../ports/configStore.ts";
+import type { TaskSummary } from "../../ports/summarizer.ts";
 import type { FollowedTask, TaskRegistry } from "../../ports/taskRegistry.ts";
 
 export const TASK_REGISTRY_FILE = "tasks.sqlite";
@@ -23,6 +24,13 @@ const MIGRATIONS = [
      last_event_key TEXT,
      cursor INTEGER,
      followed_at TEXT NOT NULL
+   )`,
+  `CREATE TABLE task_summaries (
+     thread_id TEXT NOT NULL,
+     event_key TEXT NOT NULL,
+     short TEXT NOT NULL,
+     long TEXT NOT NULL,
+     PRIMARY KEY (thread_id, event_key)
    )`,
 ];
 
@@ -93,8 +101,34 @@ export class SqliteTaskRegistry implements TaskRegistry {
   }
 
   unfollow(threadId: string): boolean {
+    this.db.prepare("DELETE FROM task_summaries WHERE thread_id = ?").run(threadId);
     const result = this.db.prepare("DELETE FROM followed_tasks WHERE thread_id = ?").run(threadId);
     return Number(result.changes) > 0;
+  }
+
+  markAnnounced(threadId: string, state: string, eventKey: string): void {
+    this.db
+      .prepare(
+        "UPDATE followed_tasks SET last_announced_state = ?, last_event_key = ? WHERE thread_id = ?",
+      )
+      .run(state, eventKey, threadId);
+  }
+
+  saveSummary(threadId: string, eventKey: string, summary: TaskSummary): void {
+    this.db
+      .prepare(
+        `INSERT INTO task_summaries (thread_id, event_key, short, long) VALUES (?, ?, ?, ?)
+         ON CONFLICT (thread_id, event_key) DO UPDATE
+         SET short = excluded.short, long = excluded.long`,
+      )
+      .run(threadId, eventKey, summary.short, summary.long);
+  }
+
+  summaryOf(threadId: string, eventKey: string): TaskSummary | null {
+    const row = this.db
+      .prepare("SELECT short, long FROM task_summaries WHERE thread_id = ? AND event_key = ?")
+      .get(threadId, eventKey) as { short: string; long: string } | undefined;
+    return row === undefined ? null : { short: row.short, long: row.long };
   }
 
   close(): void {

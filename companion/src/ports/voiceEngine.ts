@@ -23,6 +23,11 @@ export interface VoiceSessionRequest {
  */
 export type VoiceEvent =
   | { type: "tool_call"; callId: string; name: string; arguments: unknown }
+  /**
+   * Someone is speaking now. The engine has no "done speaking" event: a silence is the
+   * absence of these events for a while. It never carries what was said.
+   */
+  | { type: "speech"; speaker: "user" | "assistant" }
   /** The session ended, by the companion, the phone or the engine. Sent once. */
   | { type: "closed"; reason: "closed" | "failed" };
 

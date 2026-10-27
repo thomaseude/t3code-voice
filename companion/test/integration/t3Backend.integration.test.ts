@@ -19,6 +19,7 @@ import {
   makeHttpTransport,
   WebSocketT3Backend,
 } from "../../src/adapters/t3-websocket/webSocketBackend.ts";
+import { awarenessOf, eventKeyOf } from "../../src/core/awareness.ts";
 import { isRunning, ShellState } from "../../src/core/shellState.ts";
 import { type ShellEvent, T3IncompatibleError, type Thread } from "../../src/ports/t3Backend.ts";
 import { findT3Binary, T3TestServer } from "./t3Server.ts";
@@ -188,6 +189,16 @@ describe("T3Backend WebSocket adapter against a real T3", {
       assert.equal(thread?.projectId, alpha.id);
       assert.equal(thread?.providerInstanceId, "claudeAgent");
       assert.ok(thread?.lastError?.message, "a failed thread carries T3's error");
+      // What announcements rely on: the run's id, T3's awareness, and the thread's messages.
+      assert.equal(typeof thread?.latestRunId, "string");
+      assert.deepEqual(thread?.backgroundTaskKinds, []);
+      assert.equal(thread?.settled, false);
+      assert.equal(awarenessOf(thread as Thread), "failed");
+      assert.equal(eventKeyOf(thread as Thread), `failed:${thread?.latestRunId}`);
+      const messages = await backend.readThread(threadId);
+      const request = messages.find((message) => message.role === "user");
+      assert.equal(request?.text, "Say hello.");
+      assert.equal(request?.runId, thread?.latestRunId);
 
       const sequences = events
         .filter((event) => event.type !== "snapshot")

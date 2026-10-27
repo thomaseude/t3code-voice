@@ -133,7 +133,7 @@ describe("tool calls", () => {
     transport.socket.receive(functionCall("call_1", "get_activity", '{"scope":"running"}'));
     transport.socket.receive(functionCall("call_2", "get_activity", "{not json"));
     // Other events, finished items that are not calls, and unknown shapes are ignored.
-    transport.socket.receive({ type: "session.output_transcript.delta", delta: "Bonjour" });
+    transport.socket.receive({ type: "session.usage.updated", usage: { seconds: 3 } });
     transport.socket.receive({
       type: "response.event",
       event: { type: "response.output_item.done", item: { type: "message" } },
@@ -175,6 +175,23 @@ describe("tool calls", () => {
     ]);
     const ids = transport.socket.sent.map((event) => event.event_id);
     assert.equal(new Set(ids).size, 2);
+  });
+});
+
+describe("speech activity", () => {
+  test("a piece of transcript says who is speaking now, never what was said", async () => {
+    const { transport, events, open } = setup();
+    await open();
+
+    transport.socket.receive({ type: "session.input_transcript.delta", delta: "Lance Claude" });
+    transport.socket.receive({ type: "session.output_transcript.delta", delta: "C'est parti" });
+    // An empty piece is no speech: GPT-Live streams silence too.
+    transport.socket.receive({ type: "session.output_transcript.delta", delta: "" });
+
+    assert.deepEqual(events, [
+      { type: "speech", speaker: "user" },
+      { type: "speech", speaker: "assistant" },
+    ]);
   });
 });
 

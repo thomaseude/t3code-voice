@@ -15,6 +15,7 @@ import {
   FakeDeviceAuth,
   FakeVoiceEngine,
   InMemoryConfigStore,
+  unusedAnnouncements,
   unusedVoiceTasks,
 } from "../../fakePorts.ts";
 
@@ -50,6 +51,7 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
     voiceSessions: new VoiceSessionManager({
       engine: new FakeVoiceEngine(),
       shell: () => null,
+      announcements: unusedAnnouncements(),
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
@@ -564,6 +566,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
     const voiceSessions = new VoiceSessionManager({
       engine,
       shell: () => null,
+      announcements: unusedAnnouncements(),
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
@@ -617,6 +620,7 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
     const voiceSessions = new VoiceSessionManager({
       engine: null,
       shell: () => null,
+      announcements: unusedAnnouncements(),
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),

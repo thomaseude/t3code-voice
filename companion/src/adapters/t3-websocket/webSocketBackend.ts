@@ -13,6 +13,7 @@ import {
   type T3Backend,
   type T3Config,
   T3IncompatibleError,
+  type ThreadMessage,
 } from "../../ports/t3Backend.ts";
 import {
   assertCompatible,
@@ -36,6 +37,7 @@ import {
   toMessageDispatch,
   toRepositoryInfo,
   toShellEvent,
+  toThreadMessages,
   type WireJson,
 } from "./wire.ts";
 
@@ -143,6 +145,10 @@ export class WebSocketT3Backend implements T3Backend {
     return toRepositoryInfo(answer);
   }
 
+  async readThread(threadId: string): Promise<ThreadMessage[]> {
+    return toThreadMessages(await this.projection(threadId));
+  }
+
   async launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }> {
     const answer: WireJson = await this.command(
       METHODS.launchThread,
@@ -225,7 +231,7 @@ export class WebSocketT3Backend implements T3Backend {
   }
 
   private projection(threadId: string): Promise<WireJson> {
-    return this.call(METHODS.getThreadProjection, { threadId }, "the thread's runs");
+    return this.call(METHODS.getThreadProjection, { threadId }, "the thread");
   }
 
   /** One request, sent once. Commands go through `command`, which can send it again. */

@@ -3,8 +3,11 @@
 
 import { randomUUID } from "node:crypto";
 import { activityOf } from "../../core/activity.ts";
+import { AnnouncementQueue } from "../../core/announcementQueue.ts";
+import { TaskWatcher } from "../../core/announcements.ts";
 import { systemClock } from "../../core/clock.ts";
 import { ShellState } from "../../core/shellState.ts";
+import { TaskSummaries } from "../../core/taskSummaries.ts";
 import { VoiceSessionManager } from "../../core/voiceSessions.ts";
 import { VoiceTasks } from "../../core/voiceTasks.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
@@ -15,6 +18,8 @@ import {
   DEFAULT_SERVER_PORT,
   DEFAULT_VOICE,
 } from "../../ports/configStore.ts";
+import type { PushSender } from "../../ports/pushSender.ts";
+import type { Summarizer } from "../../ports/summarizer.ts";
 import type { T3Backend, T3Connector } from "../../ports/t3Backend.ts";
 import type { TaskRegistry } from "../../ports/taskRegistry.ts";
 import type { VoiceEngine } from "../../ports/voiceEngine.ts";
@@ -28,6 +33,12 @@ export interface VoiceEngineSettings {
   delegationModel: string;
 }
 
+/** What the summarizer is built with. `apiKey` is a secret: never print it. */
+export interface SummarizerSettings {
+  apiKey: string;
+  model: string;
+}
+
 export interface ServeOptions {
   store: ConfigStore;
   t3: T3Connector;
@@ -35,6 +46,10 @@ export interface ServeOptions {
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   /** main.ts plugs the GPT-Live adapter in here. */
   voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
+  /** main.ts plugs the OpenAI summarizer in here. */
+  summarizer(settings: SummarizerSettings): Summarizer;
+  /** main.ts plugs the push adapter in here; `log` writes to the service's log. */
+  pushSender(log: (line: string) => void): PushSender;
   /** main.ts plugs the SQLite registry in here. */
   openTaskRegistry(): TaskRegistry;
   /** Resolves when the process must stop (SIGTERM from systemd, Ctrl-C). */
@@ -51,6 +66,8 @@ export async function runServe({
   t3,
   startServer,
   voiceEngine,
+  summarizer,
+  pushSender,
   openTaskRegistry,
   waitForStop,
   out,
@@ -74,6 +91,17 @@ export async function runServe({
   }
   const state = new ShellState();
   let connected = true;
+  const shell = () => (connected && state.hasSnapshot ? state : null);
+  const { summaryModel, ...voice } = { ...DEFAULT_VOICE, ...config.voice };
+  const queue = new AnnouncementQueue({ registry, shell, push: pushSender(out), clock, log: out });
+  const summaries = new TaskSummaries({
+    backend,
+    summarizer: apiKey === null ? null : summarizer({ apiKey, model: summaryModel }),
+    registry,
+    clock,
+    log: out,
+  });
+  const watcher = new TaskWatcher({ registry, shell, summaries, queue, clock, log: out });
   let fail: (error: Error) => void = () => {};
   const failed = new Promise<never>((_resolve, reject) => {
     fail = reject;
@@ -81,7 +109,10 @@ export async function runServe({
   // Handled by the race below; this only keeps an early failure from crashing the process.
   failed.catch(() => {});
   const subscription = backend.subscribeShell({
-    onEvent: (event) => state.apply(event),
+    onEvent: (event) => {
+      state.apply(event);
+      watcher.check();
+    },
     onConnectionChange: (change) => {
       connected = change === "connected";
     },
@@ -92,13 +123,12 @@ export async function runServe({
   // Without a key, serve still runs: pairing and GET /activity need no voice engine.
   if (apiKey === null)
     out(`No OpenAI key in ${store.location}/openai.env: voice sessions are off.`);
-  const engine =
-    apiKey === null ? null : voiceEngine({ apiKey, ...DEFAULT_VOICE, ...config.voice });
-  const shell = () => (connected && state.hasSnapshot ? state : null);
+  const engine = apiKey === null ? null : voiceEngine({ apiKey, ...voice });
   const voiceSessions = new VoiceSessionManager({
     engine,
     shell,
-    tasks: new VoiceTasks({ backend, registry, shell, clock, newId, log: out }),
+    tasks: new VoiceTasks({ backend, registry, shell, summaries, clock, newId, log: out }),
+    announcements: queue,
     // `t3-voice devices revoke` writes the revocation; serve reads it from the store.
     isRevoked: async (deviceId) => {
       const device = (await store.loadDevices()).find((candidate) => candidate.id === deviceId);
@@ -133,6 +163,7 @@ export async function runServe({
 
     await Promise.race([waitForStop(), failed]);
   } finally {
+    watcher.stop();
     // An open session keeps costing at OpenAI until it is closed.
     await voiceSessions.closeAll();
     await server?.close();

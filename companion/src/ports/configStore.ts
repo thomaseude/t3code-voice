@@ -7,11 +7,15 @@ export const DEFAULT_T3_URL = "http://127.0.0.1:3773";
 export const DEFAULT_SERVER_HOST = "127.0.0.1";
 export const DEFAULT_SERVER_PORT = 8787;
 
-/** The voice engine the companion opens sessions with (spec #15, decided with Thomas in #12 and #19). */
+/**
+ * The voice engine the companion opens sessions with (spec #15, decided with Thomas in #12
+ * and #19), and the cheap text model that summarizes finished tasks (#22).
+ */
 export const DEFAULT_VOICE = {
   model: "gpt-live-1",
   voice: "brise",
   delegationModel: "gpt-5.6-terra",
+  summaryModel: "gpt-5.4-mini",
 };
 
 export interface CompanionConfig {
@@ -30,12 +34,14 @@ export interface CompanionConfig {
     /** HTTPS address the iPhone reaches the companion at, e.g. "https://voice.example.com". */
     publicUrl?: string;
   };
-  /** GPT-Live settings; each one missing takes its DEFAULT_VOICE value. */
+  /** GPT-Live and summary settings; each one missing takes its DEFAULT_VOICE value. */
   voice?: {
     model?: string;
     voice?: string;
     /** The Responses model GPT-Live hands the user's requests and the tool calls to. */
     delegationModel?: string;
+    /** The text model that summarizes what an agent did, for announcements. */
+    summaryModel?: string;
   };
 }
 

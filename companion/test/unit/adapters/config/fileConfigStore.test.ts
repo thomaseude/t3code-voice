@@ -449,7 +449,12 @@ describe("OpenAI key and voice settings", () => {
 
   test("reads the voice settings, and refuses one that is not a name", async () => {
     const dir = await privateDir();
-    const voice = { model: "gpt-live-1", voice: "brise", delegationModel: "gpt-5.6-terra" };
+    const voice = {
+      model: "gpt-live-1",
+      voice: "brise",
+      delegationModel: "gpt-5.6-terra",
+      summaryModel: "gpt-5.4-mini",
+    };
     await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, voice });
     assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.voice, voice);
 
@@ -468,6 +473,13 @@ describe("OpenAI key and voice settings", () => {
     await assert.rejects(
       new FileConfigStore(dir).loadConfig(),
       /"voice.delegationModel" must be a name, e.g. "gpt-5.6-terra"/,
+    );
+
+    const summary = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { summaryModel: 5 } };
+    await writeFile(join(dir, "config.json"), JSON.stringify(summary), { mode: 0o600 });
+    await assert.rejects(
+      new FileConfigStore(dir).loadConfig(),
+      /"voice.summaryModel" must be a name, e.g. "gpt-5.4-mini"/,
     );
   });
 });

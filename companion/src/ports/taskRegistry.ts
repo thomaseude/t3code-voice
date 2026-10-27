@@ -2,6 +2,8 @@
 // short French name the user calls them by. It survives restarts. T3 stays the only source
 // of truth for their status: the registry never stores one as current.
 
+import type { TaskSummary } from "./summarizer.ts";
+
 export interface FollowedTask {
   threadId: string;
   projectId: string;
@@ -26,5 +28,11 @@ export interface TaskRegistry {
   follow(task: FollowedTask): void;
   /** False when the thread was not followed. */
   unfollow(threadId: string): boolean;
+  /** Records the event just spoken or pushed, so it is never told twice. Nothing when unfollowed. */
+  markAnnounced(threadId: string, state: string, eventKey: string): void;
+  /** Keeps the summary of one event of the thread, until the thread is unfollowed. */
+  saveSummary(threadId: string, eventKey: string, summary: TaskSummary): void;
+  /** The summary saved for this event of the thread, or null. */
+  summaryOf(threadId: string, eventKey: string): TaskSummary | null;
   close(): void;
 }
