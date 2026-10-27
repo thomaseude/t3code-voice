@@ -108,6 +108,16 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(feedback.shown, [.authenticating, .connecting, .ending(.failed(.voiceUnavailable)), .idle])
     }
 
+    func testAnUnexpectedAnswerOfTheCompanionGivesItsStatus() async {
+        // A companion too old for voice sessions answers 404: it is there, but says no.
+        transport.responses = [response(404)]
+
+        await controller.start()
+
+        XCTAssertEqual(controller.lastFailure, .companionRefused(status: 404))
+        XCTAssertEqual(controller.lastFailure?.message, "Le companion a répondu une erreur (404).")
+    }
+
     func testAnAnswerTheCallCannotApplyClosesTheSessionOnTheCompanion() async throws {
         controller = makeController(acceptError: VoiceCallError.failed)
         transport.responses = [opened, response(204)]

@@ -27,6 +27,8 @@ enum SessionFailure: Equatable {
     case voiceUnavailable
     case voiceEngineFailed
     case companionUnreachable
+    /// The companion answered with a status the app does not expect.
+    case companionRefused(status: Int)
     /// WebRTC could not make the offer or apply the answer.
     case callFailed
     /// The connection to the voice engine dropped.
@@ -40,6 +42,7 @@ enum SessionFailure: Equatable {
         case .voiceUnavailable: "La voix est désactivée sur le companion : il n'a pas de clé OpenAI."
         case .voiceEngineFailed: "OpenAI n'a pas ouvert la session. Réessaie dans un instant."
         case .companionUnreachable: "Le companion ne répond pas."
+        case let .companionRefused(status): "Le companion a répondu une erreur (\(status))."
         case .callFailed: "La connexion audio n'a pas pu s'établir."
         case .lost: "La connexion audio a été coupée."
         }
@@ -53,6 +56,7 @@ enum SessionFailure: Equatable {
         case CompanionError.limited: self = .limited
         case CompanionError.voiceUnavailable: self = .voiceUnavailable
         case CompanionError.voiceEngineFailed: self = .voiceEngineFailed
+        case let CompanionError.unexpected(status): self = .companionRefused(status: status)
         default: self = .companionUnreachable
         }
     }
