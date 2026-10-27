@@ -139,13 +139,23 @@ Settings in `config.json`, all optional:
     "clientIpHeader": "cf-connecting-ip",
     "publicUrl": "https://voice.example.com"
   },
-  "voice": { "model": "gpt-live-1", "voice": "brise", "delegationModel": "gpt-5.6-terra" }
+  "voice": {
+    "model": "gpt-live-1",
+    "voice": "brise",
+    "delegationModel": "gpt-5.6-terra",
+    "summaryModel": "gpt-5.4-mini"
+  }
 }
 ```
 
 `voice` sets the GPT-Live session. `delegationModel` is the Responses model GPT-Live hands
 the user's requests to; it calls the companion's tools by name. It is billed per token, on
 top of GPT-Live's $0.05 per minute.
+
+`summaryModel` is the cheap text model that summarizes what an agent did when a followed
+task completes. The announcement speaks the short summary; `get_task_details` gives the
+long one. It reads the agent's last messages of the run, with `store: false`. Without an
+OpenAI key there are no summaries.
 
 `publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
 in the QR code, and needs it.
@@ -232,12 +242,12 @@ open, and prints the `chmod` command that fixes it.
 
 | File | Content |
 |---|---|
-| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`) |
+| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`) |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), and what announcements last said. Only `serve` opens it |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each task's last finished run. Only `serve` opens it |
 | `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
 
 Secrets are never printed or logged.

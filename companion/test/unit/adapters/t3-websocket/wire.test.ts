@@ -62,10 +62,86 @@ describe("toShellEvent", () => {
     assert.deepEqual(event.thread.lastError, {
       message: "Provider hiccup",
       failureClass: "provider_error",
+      resumesAt: null,
+      autoResume: false,
     });
     assert.equal(event.thread.activeRunStatus, "running");
     assert.equal(event.thread.isSubagent, true);
     assert.equal(event.thread.model, "claude-opus-5-5");
+  });
+
+  test("reads the latest run, the work it left behind, and whether the user dismissed it", () => {
+    const event = toShellEvent({
+      kind: "thread.updated",
+      sequence: 5,
+      location: "active",
+      thread: wireThread("t1", {
+        status: "completed",
+        latestRunId: "run-2",
+        pendingBackgroundTasks: [
+          { taskId: "a", kind: "command", description: "npm run dev" },
+          { taskId: "b", kind: "subagent" },
+        ],
+        settledOverride: "settled",
+      }),
+    });
+
+    assert.equal(event?.type, "thread.updated");
+    if (event?.type !== "thread.updated") return;
+    assert.equal(event.thread.latestRunId, "run-2");
+    assert.deepEqual(event.thread.backgroundTaskKinds, ["command", "subagent"]);
+    assert.equal(event.thread.settled, true);
+  });
+
+  test("an older server without these fields reads as no run, no work left, not dismissed", () => {
+    const event = toShellEvent({
+      kind: "thread.updated",
+      sequence: 5,
+      location: "active",
+      thread: wireThread("t1", { status: "completed" }),
+    });
+
+    if (event?.type !== "thread.updated") return assert.fail("not a thread update");
+    assert.equal(event.thread.latestRunId, null);
+    assert.deepEqual(event.thread.backgroundTaskKinds, []);
+    assert.equal(event.thread.settled, false);
+  });
+
+  test("reads when a usage limit ends, and whether T3 resumes the run by itself", () => {
+    const failed = (fields: Record<string, unknown>) => {
+      const event = toShellEvent({
+        kind: "thread.updated",
+        sequence: 6,
+        location: "active",
+        thread: wireThread("t1", {
+          status: "failed",
+          lastError: "Usage limit reached",
+          lastErrorClass: "usage_limit",
+          ...fields,
+        }),
+      });
+      if (event?.type !== "thread.updated") throw new Error("not a thread update");
+      return event.thread.lastError;
+    };
+
+    assert.deepEqual(failed({ usageLimitResetAt: "2026-10-26T15:00:00.000Z" }), {
+      message: "Usage limit reached",
+      failureClass: "usage_limit",
+      resumesAt: "2026-10-26T15:00:00.000Z",
+      autoResume: false,
+    });
+    assert.deepEqual(
+      failed({
+        usageLimitResetAt: "2026-10-26T15:00:00.000Z",
+        limitRecovery: { runId: "run-1", resetAt: "2026-10-26T16:00:00.000Z", autoResume: true },
+      }),
+      {
+        message: "Usage limit reached",
+        failureClass: "usage_limit",
+        resumesAt: "2026-10-26T16:00:00.000Z",
+        autoResume: true,
+      },
+    );
   });
 
   test("says which list a removed thread left", () => {

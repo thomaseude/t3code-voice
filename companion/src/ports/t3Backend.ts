@@ -36,6 +36,10 @@ export interface ThreadError {
   message: string;
   /** "usage_limit", "provider_error", ... or null when T3 did not classify it. */
   failureClass: string | null;
+  /** ISO date when a usage limit ends and the run can resume, or null. */
+  resumesAt: string | null;
+  /** True when T3 resumes the run by itself at `resumesAt`. */
+  autoResume: boolean;
 }
 
 export interface Thread {
@@ -45,6 +49,15 @@ export interface Thread {
   status: ThreadStatus;
   /** Status of the run still doing work ("preparing" ... "waiting"), or null when none is. */
   activeRunStatus: string | null;
+  /** The thread's last run, or null before its first one. Each run has its own id. */
+  latestRunId: string | null;
+  /**
+   * Kinds of the work a finished run left behind ("subagent", "monitor", "command", ...).
+   * Some of it wakes the agent again, so the run is not over yet.
+   */
+  backgroundTaskKinds: string[];
+  /** The user dismissed the thread's result in T3 ("settled"): there is nothing to tell. */
+  settled: boolean;
   providerInstanceId: string;
   model: string;
   branch: string | null;
@@ -54,6 +67,16 @@ export interface Thread {
   isSubagent: boolean;
   archived: boolean;
   updatedAt: string;
+}
+
+/** A message of a thread: the user's, the agent's, or T3's own. */
+export interface ThreadMessage {
+  role: "user" | "assistant" | "system";
+  text: string;
+  /** The run the message belongs to, or null. */
+  runId: string | null;
+  /** ISO date. */
+  createdAt: string;
 }
 
 export interface ProviderModel {
@@ -157,6 +180,8 @@ export interface T3Backend {
   ): ShellSubscription;
   /** Reads the folder of a project. Only `orchestration:read` is needed. */
   inspectRepository(path: string): Promise<RepositoryInfo>;
+  /** The thread's messages, oldest first. Only `orchestration:read` is needed. */
+  readThread(threadId: string): Promise<ThreadMessage[]>;
   launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }>;
   sendMessage(request: SendMessageRequest): Promise<void>;
   /**

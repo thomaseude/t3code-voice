@@ -14,6 +14,8 @@ import {
   FakeVoiceEngine,
   InMemoryTaskRegistry,
   settle,
+  unusedAnnouncements,
+  unusedSummaries,
   unusedVoiceTasks,
 } from "../fakePorts.ts";
 
@@ -39,10 +41,12 @@ function setup({
       backend: new FakeT3Backend(),
       registry: new InMemoryTaskRegistry(),
       shell: () => connectedShell,
+      summaries: unusedSummaries(clock),
       clock,
       newId: () => "id",
       log: (line) => logs.push(line),
     }),
+    announcements: unusedAnnouncements(),
     isRevoked: async (deviceId) => revoked.has(deviceId),
     clock,
     log: (line) => logs.push(line),
@@ -111,6 +115,7 @@ describe("opening a voice session", () => {
         "cancel_last_action",
         "follow_thread",
         "unfollow_thread",
+        "get_task_details",
         "end_session",
       ],
     );
@@ -505,6 +510,7 @@ describe("revoked devices", () => {
       engine,
       shell: () => shellWith([project("p1")]),
       tasks: unusedVoiceTasks(),
+      announcements: unusedAnnouncements(),
       isRevoked: async () => {
         throw new Error("devices.json is damaged.");
       },
@@ -540,6 +546,7 @@ describe("failures and logs", () => {
       engine: null,
       shell: () => null,
       tasks: unusedVoiceTasks(),
+      announcements: unusedAnnouncements(),
       isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},

@@ -124,6 +124,19 @@ export const VOICE_TOOLS: VoiceTool[] = [
     },
   },
   {
+    name: "get_task_details",
+    description:
+      "Details on a followed task: its status, as T3 reports it, and a longer summary of " +
+      "what the agent did in its last finished run (null while it runs). For a failure, " +
+      "its cause and when the run can resume.",
+    parameters: {
+      type: "object",
+      properties: { task: { type: "string", description: "The task's spoken name." } },
+      required: ["task"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "end_session",
     description:
       'End the voice conversation, when the user says "fin", "c\'est bon, merci" or ' +
@@ -146,6 +159,7 @@ export function voiceInstructions(projectNames: string[]): string {
     'Un simple "stop", "tais-toi" ou "attends" veut seulement dire : arrête de parler.',
     "Après start_task ou send_message, relis toujours ce qui a été fait : pour un lancement, l'agent, le modèle, le projet, la demande et le nom de la tâche ; pour un message, la tâche et le message.",
     'Si l\'utilisateur dit "non, arrête" ou "annule" juste après cette relecture, appelle cancel_last_action.',
+    "Le compagnon t'envoie les nouvelles des tâches suivies (terminée, échouée, attend une réponse ou une autorisation) : dis-les telles quelles, sans en changer le statut. Si l'utilisateur veut en savoir plus, appelle get_task_details.",
     "Appelle les tâches par leur nom court. Quand un outil renvoie plusieurs choix, lis-les et demande lequel ; ne choisis jamais à la place de l'utilisateur. S'il répond par une position (« la deuxième »), rappelle l'outil avec le nom à cette position.",
     'Quand l\'utilisateur dit "fin" ou "c\'est bon, merci", dis au revoir en quelques mots et appelle end_session.',
   ].join("\n");

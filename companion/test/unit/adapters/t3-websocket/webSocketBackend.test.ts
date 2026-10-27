@@ -694,6 +694,52 @@ describe("commands", () => {
     assert.equal(connection.requests.length, 1);
   });
 
+  test("readThread reads the thread's messages, oldest first, with their run", async () => {
+    const { backend, connection } = await connected();
+    connection.answer = () => ({
+      runs: [],
+      messages: [
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          text: "J'ai corrigé les tests.",
+          streaming: false,
+          createdAt: "2026-10-26T10:05:00.000Z",
+        },
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          text: "Corrige les tests des Reviews",
+          streaming: false,
+          createdAt: "2026-10-26T10:00:00.000Z",
+        },
+        { id: "m3", role: "narrator", text: 42, createdAt: "2026-10-26T10:06:00.000Z" },
+      ],
+    });
+
+    const messages = await backend.readThread("t1");
+
+    assert.deepEqual(connection.requests, [
+      { tag: "orchestration.getThreadProjection", payload: { threadId: "t1" } },
+    ]);
+    assert.deepEqual(messages, [
+      {
+        role: "user",
+        text: "Corrige les tests des Reviews",
+        runId: "run-1",
+        createdAt: "2026-10-26T10:00:00.000Z",
+      },
+      {
+        role: "assistant",
+        text: "J'ai corrigé les tests.",
+        runId: "run-1",
+        createdAt: "2026-10-26T10:05:00.000Z",
+      },
+    ]);
+  });
+
   test("archiveThread sends T3's command", async () => {
     const { backend, connection } = await connected();
 

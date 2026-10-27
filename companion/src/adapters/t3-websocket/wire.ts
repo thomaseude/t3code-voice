@@ -13,6 +13,7 @@ import type {
   ShellEvent,
   T3Config,
   Thread,
+  ThreadMessage,
 } from "../../ports/t3Backend.ts";
 
 /** T3's `defaultThreadEnvMode` values, in the companion's words. */
@@ -47,12 +48,19 @@ function toModelSelection(wire: WireJson): ModelSelection | null {
 
 export function toThread(wire: WireJson, location: "active" | "archive" = "active"): Thread {
   const pending = wire.pendingRuntimeRequest;
+  const recovery = wire.limitRecovery;
+  const backgroundTasks: WireJson[] = Array.isArray(wire.pendingBackgroundTasks)
+    ? wire.pendingBackgroundTasks
+    : [];
   return {
     id: String(wire.id),
     projectId: String(wire.projectId),
     title: String(wire.title ?? ""),
     status: String(wire.status ?? "idle"),
     activeRunStatus: wire.activityRunStatus ?? null,
+    latestRunId: typeof wire.latestRunId === "string" ? wire.latestRunId : null,
+    backgroundTaskKinds: backgroundTasks.map((task) => String(task?.kind)),
+    settled: wire.settledOverride === "settled",
     providerInstanceId: String(wire.providerInstanceId ?? wire.modelSelection?.instanceId ?? ""),
     model: String(wire.modelSelection?.model ?? ""),
     branch: wire.branch ?? null,
@@ -61,7 +69,13 @@ export function toThread(wire: WireJson, location: "active" | "archive" = "activ
       ? { id: String(pending.id), kind: String(pending.kind), blocking: pending.blocking !== false }
       : null,
     lastError: wire.lastError
-      ? { message: String(wire.lastError), failureClass: wire.lastErrorClass ?? null }
+      ? {
+          message: String(wire.lastError),
+          failureClass: wire.lastErrorClass ?? null,
+          // A limit recovery is newer than the usage limit it recovers from.
+          resumesAt: recovery?.resetAt ?? wire.usageLimitResetAt ?? null,
+          autoResume: recovery?.autoResume === true,
+        }
       : null,
     isSubagent: wire.lineage?.relationshipToParent === "subagent",
     archived: location === "archive" || wire.archivedAt != null,
@@ -219,4 +233,20 @@ export function runOfMessage(
   const runs: WireJson[] = Array.isArray(projection?.runs) ? projection.runs : [];
   const run = runs.find((each) => each?.userMessageId === messageId);
   return typeof run?.id === "string" ? { id: run.id, status: String(run.status) } : null;
+}
+
+const MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
+
+/** The messages of a thread projection, oldest first. Malformed ones are left out. */
+export function toThreadMessages(projection: WireJson): ThreadMessage[] {
+  const messages: WireJson[] = Array.isArray(projection?.messages) ? projection.messages : [];
+  return messages
+    .filter((message) => MESSAGE_ROLES.has(message?.role) && typeof message.text === "string")
+    .map((message) => ({
+      role: message.role,
+      text: message.text,
+      runId: typeof message.runId === "string" ? message.runId : null,
+      createdAt: String(message.createdAt ?? ""),
+    }))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }

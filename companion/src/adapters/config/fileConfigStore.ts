@@ -82,7 +82,7 @@ export class FileConfigStore implements ConfigStore {
         `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
       );
     }
-    for (const field of ["model", "voice", "delegationModel"] as const) {
+    for (const field of ["model", "voice", "delegationModel", "summaryModel"] as const) {
       const value = data.voice?.[field];
       if (
         value !== undefined &&

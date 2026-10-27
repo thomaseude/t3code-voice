@@ -10,6 +10,7 @@ import type {
 import type { Clock } from "../ports/clock.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
+import type { AnnouncementQueue } from "./announcementQueue.ts";
 import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
@@ -22,6 +23,8 @@ export interface VoiceSessionManagerOptions {
   shell(): ShellState | null;
   /** The tools that start and steer T3 tasks. */
   tasks: VoiceTasks;
+  /** Speaks the news of followed tasks in the open sessions. */
+  announcements: AnnouncementQueue;
   /**
    * Whether the device was revoked (`t3-voice devices revoke` runs in another process).
    * A device that is not paired counts as revoked. A failure counts as revoked too.
@@ -139,6 +142,10 @@ export class VoiceSessionManager implements VoiceSessions {
       openedAt: this.options.clock.now(),
     };
     this.byDevice.set(deviceId, session);
+    this.options.announcements.openSession(session.id, {
+      speak: (text) => engineSession.speak(text),
+      timeZone,
+    });
     this.options.log(`t3-voice: voice session opened for device ${deviceId}.`);
     this.watchRevocations();
     return { status: "opened", sessionId: session.id, sdpAnswer: engineSession.sdpAnswer };
@@ -151,6 +158,7 @@ export class VoiceSessionManager implements VoiceSessions {
 
   private forget(session: ActiveSession) {
     session.cancelEnd?.();
+    this.options.announcements.closeSession(session.id);
     if (this.byDevice.get(session.deviceId) === session) this.byDevice.delete(session.deviceId);
   }
 
@@ -203,8 +211,17 @@ export class VoiceSessionManager implements VoiceSessions {
       );
       return;
     }
+    if (event.type === "speech") {
+      this.options.announcements.heardSpeech(session.id);
+      return;
+    }
     if (event.type === "tool_call") {
-      this.answerToolCall(session, event.callId, event.name, event.arguments).catch(() => {});
+      const { announcements } = this.options;
+      // The model speaks the result next: announcements wait until it is done.
+      announcements.toolCallStarted(session.id);
+      this.answerToolCall(session, event.callId, event.name, event.arguments)
+        .catch(() => {})
+        .finally(() => announcements.toolCallEnded(session.id));
     }
   }
 
@@ -243,6 +260,8 @@ export class VoiceSessionManager implements VoiceSessions {
         return tasks.followThread(args);
       case "unfollow_thread":
         return tasks.unfollowThread(args);
+      case "get_task_details":
+        return tasks.taskDetails(args);
       case "cancel_last_action": {
         const last = session.lastAction;
         if (last === undefined || this.options.clock.now() > last.until) {

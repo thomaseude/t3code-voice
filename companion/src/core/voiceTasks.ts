@@ -1,5 +1,5 @@
 // Starting and steering T3 tasks by voice: the tools start_task, send_message,
-// follow_thread, unfollow_thread, and the undo behind cancel_last_action.
+// follow_thread, unfollow_thread, get_task_details, and the undo behind cancel_last_action.
 //
 // Every tool checks its arguments, finds the project or task the user named, and acts on
 // T3 only when exactly one fits. Several fits return the choices; nothing is guessed.
@@ -16,16 +16,20 @@ import type {
   Thread,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
+import { awarenessOf, eventKeyOf } from "./awareness.ts";
 import { FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
+import type { TaskSummaries } from "./taskSummaries.ts";
 
 export interface VoiceTasksOptions {
   backend: T3Backend;
   registry: TaskRegistry;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
+  /** The summaries get_task_details reads. */
+  summaries: TaskSummaries;
   clock: Clock;
   /** A new unique id, for T3 command and message ids. */
   newId(): string;
@@ -221,13 +225,49 @@ export class VoiceTasks {
       project: projectTitle,
       taken: this.takenNames(),
     });
+    // What already happened is not news: only the thread's next events are announced.
+    const state = awarenessOf(thread);
     this.follow({
       threadId: thread.id,
       projectId: thread.projectId,
       spokenName,
       origin: "followed",
+      lastAnnouncedState: eventKeyOf(thread) === null ? null : state,
+      lastEventKey: eventKeyOf(thread),
     });
-    return { status: "followed", task: spokenName, project: projectTitle };
+    return { status: "followed", task: spokenName, project: projectTitle, state: state ?? "idle" };
+  }
+
+  /** get_task_details: the task's status from T3, and the long summary of its finished run. */
+  async taskDetails(args: unknown): Promise<ToolResult> {
+    const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
+    if (reference === null) return { error: "invalid_arguments" };
+    const shell = this.options.shell();
+    if (shell === null) return { error: "t3_unavailable" };
+    const match = this.findFollowed(reference);
+    if (match.kind !== "found") return match.result;
+    const task = match.task;
+    const thread = shell.threads.get(task.threadId);
+    if (thread === undefined) return { error: "unknown_task" };
+
+    const state = awarenessOf(thread);
+    const eventKey = eventKeyOf(thread);
+    const finished = state === "completed" || state === "failed";
+    const summary =
+      finished && eventKey !== null
+        ? await this.options.summaries.summaryOf(thread, eventKey)
+        : null;
+    const details: ToolResult = {
+      task: task.spokenName,
+      project: shell.projects.get(thread.projectId)?.title ?? null,
+      status: state ?? "idle",
+      summary: summary?.long ?? null,
+    };
+    if (state === "failed") {
+      details.failure = thread.lastError?.failureClass ?? "unknown";
+      details.resumes_at = thread.lastError?.resumesAt ?? null;
+    }
+    return details;
   }
 
   unfollowThread(args: unknown): ToolResult {
@@ -351,11 +391,14 @@ export class VoiceTasks {
     return this.options.registry.followedTasks().map((task) => task.spokenName);
   }
 
-  private follow(task: Pick<FollowedTask, "threadId" | "projectId" | "spokenName" | "origin">) {
+  private follow(
+    task: Pick<FollowedTask, "threadId" | "projectId" | "spokenName" | "origin"> &
+      Partial<Pick<FollowedTask, "lastAnnouncedState" | "lastEventKey">>,
+  ) {
     this.options.registry.follow({
-      ...task,
       lastAnnouncedState: null,
       lastEventKey: null,
+      ...task,
       cursor: null,
       followedAt: new Date(this.options.clock.now()).toISOString(),
     });

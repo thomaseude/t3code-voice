@@ -1,9 +1,13 @@
 // In-memory implementations of the ports, to test the core and the CLI without T3 or files.
 
+import { AnnouncementQueue } from "../../src/core/announcementQueue.ts";
+import { TaskSummaries } from "../../src/core/taskSummaries.ts";
 import { VoiceTasks } from "../../src/core/voiceTasks.ts";
 import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
+import type { PushNotification, PushSender } from "../../src/ports/pushSender.ts";
+import type { Summarizer, SummaryRequest, TaskSummary } from "../../src/ports/summarizer.ts";
 import {
   type LaunchThreadRequest,
   type Project,
@@ -18,6 +22,7 @@ import {
   T3IncompatibleError,
   type T3Pairing,
   type Thread,
+  type ThreadMessage,
 } from "../../src/ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../../src/ports/taskRegistry.ts";
 import {
@@ -97,7 +102,7 @@ export class FakeT3Backend implements T3Backend {
   readonly repositories = new Map<string, RepositoryInfo>();
   readonly commands: T3Command[] = [];
   /** Makes the next command (or the next one of this type) fail, like T3 refusing it. */
-  failNextCommand: boolean | T3Command["type"] = false;
+  failNextCommand: boolean | T3Command["type"] | "read" = false;
   /** While set, launchThread waits for it, like a T3 slow to answer. */
   launchGate: Promise<void> | null = null;
   /** What cancelQueuedMessage answers: false once the agent has the message. */
@@ -116,6 +121,18 @@ export class FakeT3Backend implements T3Backend {
   }
   async inspectRepository(path: string): Promise<RepositoryInfo> {
     return this.repositories.get(path) ?? { isGitRepository: true, defaultBranch: "main" };
+  }
+  /** Messages of each thread, by thread id. */
+  readonly messages = new Map<string, ThreadMessage[]>();
+  /** Thread ids readThread was called with, in order. */
+  readonly reads: string[] = [];
+  async readThread(threadId: string) {
+    this.reads.push(threadId);
+    if (this.failNextCommand === "read") {
+      this.failNextCommand = false;
+      throw new Error("T3 did not answer.");
+    }
+    return this.messages.get(threadId) ?? [];
   }
   async launchThread(request: LaunchThreadRequest) {
     if (this.launchGate !== null) await this.launchGate;
@@ -239,6 +256,8 @@ export class FakeDeviceAuth implements DeviceAuth {
 export interface FakeVoiceSession extends VoiceSession {
   readonly request: VoiceSessionRequest;
   readonly toolResults: Array<{ callId: string; result: unknown }>;
+  /** What the core asked the engine to say, in order. */
+  readonly spoken: string[];
   closed: boolean;
   /** Sends an event to the core, as the engine would. */
   emit(event: VoiceEvent): void;
@@ -267,9 +286,12 @@ export class FakeVoiceEngine implements VoiceEngine {
       request,
       sdpAnswer: `answer to ${request.sdpOffer}`,
       toolResults: [],
+      spoken: [],
       closed: false,
       emit: onEvent,
-      speak: () => {},
+      speak: (text) => {
+        session.spoken.push(text);
+      },
       resolveToolCall: (callId, result) => {
         session.toolResults.push({ callId, result });
       },
@@ -309,9 +331,56 @@ export class InMemoryTaskRegistry implements TaskRegistry {
   unfollow(threadId: string) {
     const before = this.tasks.length;
     this.tasks = this.tasks.filter((task) => task.threadId !== threadId);
+    this.summaries.delete(threadId);
     return this.tasks.length < before;
   }
+  markAnnounced(threadId: string, state: string, eventKey: string) {
+    this.tasks = this.tasks.map((task) =>
+      task.threadId === threadId
+        ? { ...task, lastAnnouncedState: state, lastEventKey: eventKey }
+        : task,
+    );
+  }
+  readonly summaries = new Map<string, TaskSummary & { eventKey: string }>();
+  saveSummary(threadId: string, eventKey: string, summary: TaskSummary) {
+    this.summaries.set(threadId, { eventKey, ...summary });
+  }
+  summaryOf(threadId: string) {
+    return this.summaries.get(threadId) ?? null;
+  }
   close() {}
+}
+
+/** Answers with a summary built from the request, or fails or waits when told to. */
+export class FakeSummarizer implements Summarizer {
+  readonly requests: SummaryRequest[] = [];
+  /** Makes the next summarize() fail, like OpenAI down. */
+  failNext = false;
+  /** While set, summarize() waits for it, like a slow model. */
+  gate: Promise<void> | null = null;
+
+  async summarize(request: SummaryRequest) {
+    this.requests.push(request);
+    if (this.gate !== null) await this.gate;
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error("OpenAI did not answer.");
+    }
+    return { short: `Résumé de : ${request.output}`, long: `Résumé long de : ${request.output}` };
+  }
+}
+
+export class FakePushSender implements PushSender {
+  readonly sent: PushNotification[] = [];
+  failNext = false;
+
+  async send(notification: PushNotification) {
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error("ntfy did not answer.");
+    }
+    this.sent.push(notification);
+  }
 }
 
 /** A clock the test moves by hand: scheduled callbacks run only when `advance` passes them. */
@@ -354,12 +423,37 @@ export async function settle() {
   for (let turn = 0; turn < 5; turn++) await new Promise(setImmediate);
 }
 
+/** Summaries with no summarizer, for tests that do not use them. */
+export function unusedSummaries(
+  clock: Clock = new FakeClock(),
+  registry: TaskRegistry = new InMemoryTaskRegistry(),
+): TaskSummaries {
+  return new TaskSummaries({
+    backend: new FakeT3Backend(),
+    summarizer: null,
+    registry,
+    clock,
+    log: () => {},
+  });
+}
+
+/** An announcement queue nothing is announced to, for tests that do not use it. */
+export function unusedAnnouncements(clock: Clock = new FakeClock()): AnnouncementQueue {
+  return new AnnouncementQueue({
+    registry: new InMemoryTaskRegistry(),
+    push: new FakePushSender(),
+    clock,
+    log: () => {},
+  });
+}
+
 /** Task tools on a fake T3 with no project, for tests that do not use them. */
 export function unusedVoiceTasks(clock: Clock = new FakeClock()): VoiceTasks {
   return new VoiceTasks({
     backend: new FakeT3Backend(),
     registry: new InMemoryTaskRegistry(),
     shell: () => null,
+    summaries: unusedSummaries(clock),
     clock,
     newId: () => "id",
     log: () => {},

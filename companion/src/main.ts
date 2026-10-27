@@ -9,6 +9,9 @@ import { OpaqueTokenAuth } from "./adapters/device-auth/opaqueTokenAuth.ts";
 import { GptLiveEngine } from "./adapters/gpt-live/gptLiveEngine.ts";
 import { openAiTransport } from "./adapters/gpt-live/openAiTransport.ts";
 import { startHttpApi } from "./adapters/http/httpApi.ts";
+import { LogPushSender } from "./adapters/log-push/logPushSender.ts";
+import { OpenAiSummarizer } from "./adapters/openai-summarizer/openAiSummarizer.ts";
+import { openAiResponsesTransport } from "./adapters/openai-summarizer/openAiTransport.ts";
 import { WebSocketT3Connector } from "./adapters/t3-websocket/connector.ts";
 import {
   SqliteTaskRegistry,
@@ -34,5 +37,8 @@ process.exitCode = await runCli(process.argv.slice(2), {
     startHttpApi({ ...options, auth, devicePairing: new DevicePairing({ store, auth }) }),
   voiceEngine: ({ apiKey, ...settings }) =>
     new GptLiveEngine({ transport: openAiTransport(apiKey), clock: systemClock, ...settings }),
+  summarizer: ({ apiKey, model }) =>
+    new OpenAiSummarizer({ transport: openAiResponsesTransport(apiKey), model }),
+  pushSender: (log) => new LogPushSender(log),
   openTaskRegistry: () => SqliteTaskRegistry.open(join(configDir, TASK_REGISTRY_FILE)),
 });

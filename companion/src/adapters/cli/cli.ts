@@ -4,13 +4,15 @@
 import { scrubSecrets } from "../../core/secrets.ts";
 import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.ts";
 import { type ConfigStore, DEFAULT_T3_URL } from "../../ports/configStore.ts";
+import type { PushSender } from "../../ports/pushSender.ts";
+import type { Summarizer } from "../../ports/summarizer.ts";
 import { type T3Connector, T3IncompatibleError } from "../../ports/t3Backend.ts";
 import type { TaskRegistry } from "../../ports/taskRegistry.ts";
 import type { VoiceEngine } from "../../ports/voiceEngine.ts";
 import { listDevices, revokeDevice } from "./devices.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
 import { runPair } from "./pair.ts";
-import { runServe, type VoiceEngineSettings } from "./serve.ts";
+import { runServe, type SummarizerSettings, type VoiceEngineSettings } from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
 
@@ -19,6 +21,8 @@ export interface CliDependencies {
   t3: T3Connector;
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
+  summarizer(settings: SummarizerSettings): Summarizer;
+  pushSender(log: (line: string) => void): PushSender;
   /** main.ts plugs the SQLite registry in here. */
   openTaskRegistry(): TaskRegistry;
 }
@@ -57,7 +61,15 @@ export async function runCli(argv: string[], deps: CliDependencies): Promise<num
 
 async function dispatch(
   argv: string[],
-  { store, t3, startServer, voiceEngine, openTaskRegistry }: CliDependencies,
+  {
+    store,
+    t3,
+    startServer,
+    voiceEngine,
+    summarizer,
+    pushSender,
+    openTaskRegistry,
+  }: CliDependencies,
 ): Promise<number> {
   const [command, ...args] = argv;
   const out = (line: string) => process.stdout.write(`${line}\n`);
@@ -83,6 +95,8 @@ async function dispatch(
         t3,
         startServer,
         voiceEngine,
+        summarizer,
+        pushSender,
         openTaskRegistry,
         waitForStop,
         out,

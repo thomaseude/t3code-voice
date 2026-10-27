@@ -21,7 +21,12 @@ describe("ShellState", () => {
         thread("done", { status: "completed" }),
         thread("failed", {
           status: "failed",
-          lastError: { message: "Usage limit reached", failureClass: "usage_limit" },
+          lastError: {
+            message: "Usage limit reached",
+            failureClass: "usage_limit",
+            resumesAt: null,
+            autoResume: false,
+          },
         }),
         thread("running", { status: "running", updatedAt: "2026-10-26T10:01:00.000Z" }),
         thread("checkpoint", { status: "waiting", updatedAt: "2026-10-26T10:02:00.000Z" }),

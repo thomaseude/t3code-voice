@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { runServe, type VoiceEngineSettings } from "../../../../src/adapters/cli/serve.ts";
+import {
+  runServe,
+  type SummarizerSettings,
+  type VoiceEngineSettings,
+} from "../../../../src/adapters/cli/serve.ts";
 import type { ActivityItem, ApiServerOptions } from "../../../../src/ports/apiServer.ts";
 import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
-import { pairedDevice, project, provider, thread } from "../../builders.ts";
+import { followedTask, pairedDevice, project, provider, thread } from "../../builders.ts";
 import {
   FakeClock,
+  FakePushSender,
+  FakeSummarizer,
   FakeT3Connector,
   FakeVoiceEngine,
   InMemoryConfigStore,
@@ -39,6 +45,9 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   const lines: string[] = [];
   const engines: VoiceEngineSettings[] = [];
   const engine = new FakeVoiceEngine();
+  const summarizers: SummarizerSettings[] = [];
+  const push = new FakePushSender();
+  const clock = new FakeClock(NOW.getTime());
   const started: ApiServerOptions[] = [];
   const registry = new ClosableTaskRegistry();
   let closed = false;
@@ -60,9 +69,14 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
       engines.push(settings);
       return engine;
     },
+    summarizer: (settings) => {
+      summarizers.push(settings);
+      return new FakeSummarizer();
+    },
+    pushSender: () => push,
     openTaskRegistry: () => registry,
     out: (line) => lines.push(line),
-    clock: new FakeClock(NOW.getTime()),
+    clock,
   });
   const listenOptions = () =>
     started.map(({ activity: _activity, voiceSessions: _voiceSessions, ...rest }) => rest);
@@ -70,6 +84,9 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   return {
     lines,
     engines,
+    summarizers,
+    push,
+    clock,
     engine,
     registry,
     started,
@@ -179,7 +196,12 @@ describe("runServe", () => {
         thread("t5", {
           title: "Deploy",
           status: "failed",
-          lastError: { message: "usage limit", failureClass: "usage_limit" },
+          lastError: {
+            message: "usage limit",
+            failureClass: "usage_limit",
+            resumesAt: null,
+            autoResume: false,
+          },
           updatedAt: "2026-10-26T10:00:00.000Z",
         }),
         thread("old", {
@@ -351,6 +373,7 @@ describe("voice sessions", () => {
         delegationModel: "gpt-5.6-terra",
       },
     ]);
+    assert.deepEqual(run.summarizers, [{ apiKey: "sk-test-key-123456", model: "gpt-5.4-mini" }]);
     assert.ok(run.lines.every((line) => !line.includes("sk-test")));
     run.stop();
     await run.done;
@@ -368,6 +391,7 @@ describe("voice sessions", () => {
     });
 
     assert.deepEqual(result, { status: "unavailable" });
+    assert.deepEqual(run.summarizers, []);
     assert.ok(
       run.lines.includes(
         "No OpenAI key in /home/me/.config/t3voice/openai.env: voice sessions are off.",
@@ -456,5 +480,80 @@ describe("voice sessions", () => {
     assert.equal(run.engine.last.closed, true);
     run.stop();
     await run.done;
+  });
+
+  test("summaries use the summary model of the config", async () => {
+    const store = setUpStore();
+    store.config = {
+      t3: { baseUrl: "http://127.0.0.1:3773" },
+      voice: { summaryModel: "gpt-5.4-nano" },
+    };
+    const run = serve(store);
+    await settle();
+
+    assert.deepEqual(run.summarizers, [{ apiKey: "sk-test-key-123456", model: "gpt-5.4-nano" }]);
+    assert.equal(run.engines[0]?.model, "gpt-live-1");
+    run.stop();
+    await run.done;
+  });
+});
+
+describe("announcements", () => {
+  function followedRun(store = setUpStore()) {
+    store.devices = [pairedDevice({ id: "d1" })];
+    const t3 = new FakeT3Connector();
+    t3.backend.projects = [project("p1", "Joombo")];
+    t3.backend.threads = [thread("t1", { status: "running", latestRunId: "run-1" })];
+    const run = serve(store, t3);
+    run.registry.tasks = [followedTask("t1", { spokenName: "tests Reviews" })];
+    const finish = (status: "failed" | "completed") =>
+      t3.backend.subscriber?.onEvent({
+        type: "thread.updated",
+        sequence: 2,
+        thread: thread("t1", { status, latestRunId: "run-1" }),
+      });
+    return { run, fail: () => finish("failed"), complete: () => finish("completed") };
+  }
+
+  test("a followed task that fails is announced in the open session", async () => {
+    const { run, fail } = followedRun();
+    await settle();
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    fail();
+    await settle();
+
+    assert.deepEqual(run.engine.last.spoken, [
+      "«tests Reviews» sur Joombo a échoué : erreur inconnue.",
+    ]);
+    run.stop();
+    await run.done;
+  });
+
+  test("with no session open, the news goes to the push sender", async () => {
+    const { run, fail } = followedRun();
+    await settle();
+
+    fail();
+    await settle();
+
+    assert.deepEqual(run.push.sent, [
+      { threadId: "t1", spokenName: "tests Reviews", project: "Joombo", state: "failed" },
+    ]);
+    run.stop();
+    await run.done;
+  });
+
+  test("a completion still settling when serve stops is never announced", async () => {
+    const { run, complete } = followedRun();
+    await settle();
+    complete();
+
+    run.stop();
+    await run.done;
+    run.clock.advance(10_000);
+    await settle();
+
+    assert.deepEqual(run.push.sent, []);
   });
 });

@@ -127,6 +127,12 @@ const REATTACH_DELAYS_MS = [1_000, 2_000, 4_000];
  */
 const USABLE_AFTER_MS = 10_000;
 
+/** Transcript events, and who speaks when one arrives. */
+const TRANSCRIPT_SPEAKERS = new Map<unknown, "user" | "assistant">([
+  ["session.input_transcript.delta", "user"],
+  ["session.output_transcript.delta", "assistant"],
+]);
+
 interface LiveSessionOptions {
   sdpAnswer: string;
   sessionId: string;
@@ -287,6 +293,12 @@ class LiveSession implements VoiceSession {
       return;
     }
     if (event?.type === "session.closed") return this.end("closed");
+    // Only the transcript tells when someone speaks: the audio streams silence too.
+    const speaker = TRANSCRIPT_SPEAKERS.get(event?.type);
+    if (speaker !== undefined && typeof event.delta === "string" && event.delta !== "") {
+      this.onEvent({ type: "speech", speaker });
+      return;
+    }
     // The delegation model's events come wrapped; a finished function item is a tool call.
     // Its "arguments done" event alone does not identify the call.
     const item = event?.type === "response.event" ? event.event?.item : undefined;
