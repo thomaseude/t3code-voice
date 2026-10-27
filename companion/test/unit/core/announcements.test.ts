@@ -738,6 +738,45 @@ describe("get_task_details", () => {
     });
   });
 
+  test("a thread nobody follows is found by its title, and summarized without being kept", async () => {
+    const offer = thread("t2", {
+      title: "Refonte page offre",
+      status: "completed",
+      latestRunId: "run-9",
+    });
+    const context = setup({ threads: [RUNNING, offer] });
+    context.backend.messages.set("t2", [
+      { role: "assistant", text: "Page refaite.", runId: "run-9", createdAt: "2026-10-26T09:00Z" },
+    ]);
+
+    const result = await details(context, { task: "refonte page offre" });
+
+    assert.deepEqual(result, {
+      task: "Refonte page offre",
+      project: "Joombo",
+      status: "completed",
+      summary: "Résumé long de : Page refaite.",
+    });
+    assert.equal(context.registry.summaryOf("t2"), null);
+  });
+
+  test("several threads with that title: the user picks one", async () => {
+    const context = setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Page offre Joombo" }),
+        thread("t3", { title: "Page offre Totem" }),
+      ],
+    });
+
+    const result = await details(context, { task: "page offre" });
+
+    assert.deepEqual(result, {
+      status: "ambiguous_task",
+      choices: ["Page offre Joombo", "Page offre Totem"],
+    });
+  });
+
   test("an unknown task lists the followed ones", async () => {
     const result = await details(setup(), { task: "migration base" });
 

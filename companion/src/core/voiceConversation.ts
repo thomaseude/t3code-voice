@@ -126,12 +126,18 @@ export const VOICE_TOOLS: VoiceTool[] = [
   {
     name: "get_task_details",
     description:
-      "Details on a followed task: its status, as T3 reports it, and a longer summary of " +
+      "Details on a task: its status, as T3 reports it, and a longer summary of " +
       "what the agent did in its last finished run (null while it runs). For a failure, " +
       "its cause and when the run can resume.",
     parameters: {
       type: "object",
-      properties: { task: { type: "string", description: "The task's spoken name." } },
+      properties: {
+        task: {
+          type: "string",
+          description:
+            "A followed task's spoken name, or the title of any thread, as get_activity gives it.",
+        },
+      },
       required: ["task"],
       additionalProperties: false,
     },

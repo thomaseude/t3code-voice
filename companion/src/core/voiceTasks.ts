@@ -238,16 +238,31 @@ export class VoiceTasks {
     return { status: "followed", task: spokenName, project: projectTitle, state: state ?? "idle" };
   }
 
-  /** get_task_details: the task's status from T3, and the long summary of its finished run. */
+  /**
+   * get_task_details: the task's status from T3, and the long summary of its finished run.
+   * A followed task by its spoken name, else any thread by its title (decided by Thomas in #22).
+   */
   async taskDetails(args: unknown): Promise<ToolResult> {
     const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
     if (reference === null) return { error: "invalid_arguments" };
     const shell = this.options.shell();
     if (shell === null) return { error: "t3_unavailable" };
-    const match = this.findFollowed(reference);
-    if (match.kind !== "found") return match.result;
-    const task = match.task;
-    const thread = shell.threads.get(task.threadId);
+    let thread: Thread | undefined;
+    let name: string;
+    const followed = this.findFollowed(reference);
+    if (followed.kind === "found") {
+      thread = shell.threads.get(followed.task.threadId);
+      name = followed.task.spokenName;
+    } else {
+      if (followed.result.status === "ambiguous_task") return followed.result;
+      const match = findByName(reference, shell.topLevelThreads(), (each) => each.title);
+      if (match.kind === "none") return followed.result;
+      if (match.kind === "ambiguous") {
+        return { status: "ambiguous_task", choices: match.items.map((each) => each.title) };
+      }
+      thread = match.item;
+      name = match.item.title;
+    }
     if (thread === undefined) return { error: "unknown_task" };
 
     const state = awarenessOf(thread);
@@ -258,7 +273,7 @@ export class VoiceTasks {
         ? await this.options.summaries.summaryOf(thread, eventKey)
         : null;
     const details: ToolResult = {
-      task: task.spokenName,
+      task: name,
       project: shell.projects.get(thread.projectId)?.title ?? null,
       status: state ?? "idle",
       summary: summary?.long ?? null,
