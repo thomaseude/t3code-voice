@@ -6,13 +6,17 @@ import type { Clock } from "../ports/clock.ts";
 import type { Summarizer, TaskSummary } from "../ports/summarizer.ts";
 import type { T3Backend, Thread, ThreadMessage } from "../ports/t3Backend.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
+import { eventKeyOf } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
+import type { ShellState } from "./shellState.ts";
 
 export interface TaskSummariesOptions {
   backend: T3Backend;
   /** Null when no OpenAI key is set up: there are no summaries then. */
   summarizer: Summarizer | null;
   registry: TaskRegistry;
+  /** The current T3 state, or null while the companion is not connected to T3. */
+  shell(): ShellState | null;
   clock: Clock;
   /** Operational lines only: never messages or summaries. */
   log(line: string): void;
@@ -74,12 +78,25 @@ export class TaskSummaries {
       this.options.log(`t3-voice: the summary of thread ${thread.id} took too long.`);
       return null;
     }
-    // Saved only if the thread is still followed: the registry keeps summaries of followed tasks.
+    if (this.worthKeeping(thread.id, eventKey)) {
+      this.options.registry.saveSummary(thread.id, eventKey, summary);
+    }
+    return summary;
+  }
+
+  /**
+   * The registry keeps one summary per followed task: the one of its current event. A late
+   * summary of an earlier run must not replace the summary of the run after it.
+   */
+  private worthKeeping(threadId: string, eventKey: string): boolean {
     const followed = this.options.registry
       .followedTasks()
-      .some((task) => task.threadId === thread.id);
-    if (followed) this.options.registry.saveSummary(thread.id, eventKey, summary);
-    return summary;
+      .some((task) => task.threadId === threadId);
+    if (!followed) return false;
+    const shell = this.options.shell();
+    if (shell === null) return true;
+    const current = shell.threads.get(threadId);
+    return current !== undefined && eventKeyOf(current) === eventKey;
   }
 
   /** Null when `work` takes longer than SUMMARY_TIMEOUT_MS. */

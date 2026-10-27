@@ -100,10 +100,21 @@ During a session the companion answers the voice model's tools from T3's state:
   interrupts its run. An undo that failed can be asked again within the 60 s. A steered message, or
   one the agent already took, answers `too_late`;
 - `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
-  a task by its spoken name;
+  a task by its spoken name. Two threads with one title are offered as "<title> sur
+  <project>";
+- `get_task_details` gives a task's status from T3 and the long summary of its last
+  finished run, with the cause and `resumes_at` of a failure. It takes a followed task's
+  spoken name, else the title of any thread;
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
 
 A reference that fits several projects or tasks acts on none: the answer lists the choices.
+
+While a session is open, the companion announces the news of each followed task: a run
+that completed (after 5 s, in case the agent goes on) with a short summary, a run that
+failed with its cause and when it can resume, a question or a permission request. It
+speaks at the next 2 s gap in the conversation, and each event once, even after a
+reconnect or a restart. With no session open, the news goes to the push sender, which
+only logs it until ntfy (#25).
 
 While T3 reconnects, the tools answer `t3_unavailable`. A revoked device gets no T3 data:
 the companion checks the device before each tool call and every 30 s, and closes the
@@ -154,8 +165,9 @@ top of GPT-Live's $0.05 per minute.
 
 `summaryModel` is the cheap text model that summarizes what an agent did when a followed
 task completes or fails. The announcement speaks the short summary; `get_task_details` gives the
-long one. It reads the agent's last messages of the run, with `store: false`. Without an
-OpenAI key there are no summaries.
+long one. `get_task_details` on a finished thread nobody follows also asks for a summary,
+on each request, and keeps none. The model reads the agent's last messages of the run,
+with `store: false`. Without an OpenAI key there are no summaries.
 
 `publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
 in the QR code, and needs it.

@@ -358,9 +358,13 @@ export class FakeSummarizer implements Summarizer {
   failNext = false;
   /** While set, summarize() waits for it, like a slow model. */
   gate: Promise<void> | null = null;
+  /** Waits for the next calls only, one each, in order. */
+  readonly nextGates: Promise<void>[] = [];
 
   async summarize(request: SummaryRequest) {
     this.requests.push(request);
+    const own = this.nextGates.shift();
+    if (own !== undefined) await own;
     if (this.gate !== null) await this.gate;
     if (this.failNext) {
       this.failNext = false;
@@ -432,6 +436,7 @@ export function unusedSummaries(
     backend: new FakeT3Backend(),
     summarizer: null,
     registry,
+    shell: () => null,
     clock,
     log: () => {},
   });

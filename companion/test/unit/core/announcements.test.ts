@@ -51,7 +51,7 @@ function setup({
   let connected = true;
   const shell = () => (connected ? state : null);
   const queue = new AnnouncementQueue({ registry, shell, push, clock, log });
-  const summaries = new TaskSummaries({ backend, summarizer, registry, clock, log });
+  const summaries = new TaskSummaries({ backend, summarizer, registry, shell, clock, log });
   const watcher = new TaskWatcher({ registry, shell, summaries, queue, clock, log });
   const engine = new FakeVoiceEngine();
   const tasks = new VoiceTasks({
@@ -317,6 +317,34 @@ describe("a followed task that fails or needs the user", () => {
       { request: "Corrige les tests", output: "J'ai corrigé les tests.", outcome: "failed" },
     ]);
     assert.equal(registry.summaryOf("t1")?.eventKey, "failed:run-1");
+  });
+
+  test("a failure's late summary does not replace the summary of the run after it", async () => {
+    const { open, update, wait, summarizer, registry, backend } = setup();
+    await open();
+    let release = () => {};
+    summarizer.nextGates.push(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    update("t1", { status: "failed" });
+    await wait(0);
+    backend.messages.set("t1", [
+      { role: "assistant", text: "Tout est fait.", runId: "run-2", createdAt: "2026-10-26T11:00Z" },
+    ]);
+    update("t1", { status: "running", latestRunId: "run-2" });
+    update("t1", { status: "completed" });
+    await wait(5_000);
+    release();
+    await wait(0);
+
+    assert.deepEqual(registry.summaryOf("t1"), {
+      eventKey: "completed:run-2",
+      short: "Résumé de : Tout est fait.",
+      long: "Résumé long de : Tout est fait.",
+    });
   });
 
   test("a run T3 resumes by itself, on another day, says so", async () => {
@@ -774,6 +802,28 @@ describe("get_task_details", () => {
     assert.deepEqual(result, {
       status: "ambiguous_task",
       choices: ["Page offre Joombo", "Page offre Totem"],
+    });
+  });
+
+  test("two threads with the same title are told apart by their project", async () => {
+    const context = setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Fix tests", projectId: "p1" }),
+        thread("t3", { title: "Fix tests", projectId: "p2" }),
+      ],
+    });
+    context.state.apply({ type: "project.updated", sequence: 50, project: project("p2", "Totem") });
+
+    assert.deepEqual(await details(context, { task: "fix tests" }), {
+      status: "ambiguous_task",
+      choices: ["Fix tests sur Joombo", "Fix tests sur Totem"],
+    });
+    assert.deepEqual(await details(context, { task: "Fix tests sur Totem" }), {
+      task: "Fix tests",
+      project: "Totem",
+      status: "idle",
+      summary: null,
     });
   });
 

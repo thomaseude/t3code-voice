@@ -98,6 +98,7 @@ export async function runServe({
     backend,
     summarizer: apiKey === null ? null : summarizer({ apiKey, model: summaryModel }),
     registry,
+    shell,
     clock,
     log: out,
   });

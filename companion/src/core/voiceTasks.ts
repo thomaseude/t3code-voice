@@ -207,12 +207,10 @@ export class VoiceTasks {
     if (followed.kind === "found") {
       return { status: "already_followed", task: followed.task.spokenName };
     }
-    const match = findByName(reference, shell.topLevelThreads(), (thread) => thread.title);
+    const match = findThread(shell, reference);
     if (match.kind === "none") return { error: "unknown_task" };
-    if (match.kind === "ambiguous") {
-      return { status: "ambiguous_task", choices: match.items.map((thread) => thread.title) };
-    }
-    const thread: Thread = match.item;
+    if (match.kind === "ambiguous") return match.result;
+    const thread: Thread = match.thread;
     const already = this.options.registry
       .followedTasks()
       .find((task) => task.threadId === thread.id);
@@ -254,14 +252,13 @@ export class VoiceTasks {
       thread = shell.threads.get(followed.task.threadId);
       name = followed.task.spokenName;
     } else {
+      // Several followed tasks fit: the user picks among them before any other thread.
       if (followed.result.status === "ambiguous_task") return followed.result;
-      const match = findByName(reference, shell.topLevelThreads(), (each) => each.title);
+      const match = findThread(shell, reference);
       if (match.kind === "none") return followed.result;
-      if (match.kind === "ambiguous") {
-        return { status: "ambiguous_task", choices: match.items.map((each) => each.title) };
-      }
-      thread = match.item;
-      name = match.item.title;
+      if (match.kind === "ambiguous") return match.result;
+      thread = match.thread;
+      name = match.thread.title;
     }
     if (thread === undefined) return { error: "unknown_task" };
 
@@ -423,6 +420,34 @@ export class VoiceTasks {
     this.options.log(`t3-voice: T3 refused ${tool} (${errorKind(error)}).`);
     return { error: "t3_failed" };
   }
+}
+
+type ThreadMatch =
+  | { kind: "found"; thread: Thread }
+  | { kind: "ambiguous"; result: ToolResult }
+  | { kind: "none" };
+
+/**
+ * A thread by its title; when no title fits, by its title and project together. Two threads
+ * with one title are then offered as "Fix tests sur Joombo", which finds one when repeated.
+ */
+function findThread(shell: ShellState, reference: string): ThreadMatch {
+  const threads = shell.topLevelThreads();
+  const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
+  const byTitle = findByName(reference, threads, (thread) => thread.title);
+  const match =
+    byTitle.kind === "none"
+      ? findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`)
+      : byTitle;
+  if (match.kind === "none") return { kind: "none" };
+  if (match.kind === "found") return { kind: "found", thread: match.item };
+  const choices = match.items.map((thread) => {
+    const shared = match.items.some(
+      (other) => other !== thread && keyOf(other.title) === keyOf(thread.title),
+    );
+    return shared ? `${thread.title} sur ${projectOf(thread)}` : thread.title;
+  });
+  return { kind: "ambiguous", result: { status: "ambiguous_task", choices } };
 }
 
 type WorkspaceChoice =
