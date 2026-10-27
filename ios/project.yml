@@ -14,11 +14,18 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
     # Set your Apple team id here, or pick the team in Xcode > Signing & Capabilities.
     DEVELOPMENT_TEAM: ""
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: 155.0.0
 targets:
   T3Voice:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Shared]
+    dependencies:
+      - package: WebRTC
+      - target: T3VoiceWidget
     info:
       path: App/Info.plist
       properties:
@@ -27,9 +34,30 @@ targets:
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSCameraUsageDescription: T3 Voice uses the camera to scan the pairing QR code that the companion shows.
+        NSMicrophoneUsageDescription: T3 Voice sends your voice to the voice engine your companion opens, to talk to T3.
+        NSFaceIDUsageDescription: T3 Voice asks for Face ID before each conversation, so that nobody else can drive T3 from your phone.
+        NSSupportsLiveActivities: true
+        # Keeps the conversation going with the screen locked.
+        UIBackgroundModes: [audio]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.joombo.t3voice
+  # The Live Activity (lock screen and Dynamic Island) with its End button.
+  T3VoiceWidget:
+    type: app-extension
+    platform: iOS
+    sources: [Widget, Shared]
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: T3 Voice
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.joombo.t3voice.widget
+        # Shared/ code checks it to leave out what only the app has.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
   T3VoiceTests:
     type: bundle.unit-test
     platform: iOS

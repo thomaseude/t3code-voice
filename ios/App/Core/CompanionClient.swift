@@ -12,18 +12,6 @@ protocol HTTPTransport {
     func send(_ request: URLRequest) async throws -> HTTPResponse
 }
 
-struct URLSessionTransport: HTTPTransport {
-    func send(_ request: URLRequest) async throws -> HTTPResponse {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        var headers: [String: String] = [:]
-        for (name, value) in http.allHeaderFields {
-            if let name = name as? String, let value = value as? String { headers[name.lowercased()] = value }
-        }
-        return HTTPResponse(status: http.statusCode, headers: headers, body: data)
-    }
-}
-
 enum PairingResult: Equatable {
     case paired(CompanionConnection)
     /// A wrong, used or expired code, or no pairing window open: the companion says no more.
@@ -39,6 +27,10 @@ enum CompanionError: Error, Equatable {
     case unauthorized
     /// The companion is reconnecting to T3 and has no fresh state to give.
     case t3Unavailable
+    /// The companion has no OpenAI key: voice conversations are off.
+    case voiceUnavailable
+    /// OpenAI refused the session or could not be reached.
+    case voiceEngineFailed
     case limited(retryAfterSeconds: Int?)
     case unexpected(status: Int)
 }
@@ -70,10 +62,80 @@ struct CompanionClient {
     }
 
     func activity() async throws -> Activity {
+        let response = try await sendWithToken(method: "GET", path: "activity", connection: storedConnection())
+        switch response.status {
+        case 200:
+            return try JSONDecoder().decode(Activity.self, from: response.body)
+        case 503:
+            throw CompanionError.t3Unavailable
+        default:
+            throw commonError(response)
+        }
+    }
+
+    /// Starts a voice conversation: the companion sends the offer to the voice engine and
+    /// gives back its answer. It can take up to about 18 seconds.
+    func openSession(offer: String, timeZone: String) async throws -> OpenedSession {
+        let connection = try storedConnection()
+        let body = try JSONEncoder().encode(["sdp": offer, "timeZone": timeZone])
+        let response = try await sendWithToken(method: "POST", path: "sessions", body: body, connection: connection)
+        switch response.status {
+        case 201:
+            let answer = try JSONDecoder().decode(SessionAnswer.self, from: response.body)
+            return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
+        case 502:
+            throw CompanionError.voiceEngineFailed
+        case 503:
+            throw CompanionError.voiceUnavailable
+        default:
+            throw commonError(response)
+        }
+    }
+
+    /// Ends the conversation on the companion. A session it no longer has is already ended.
+    func closeSession(_ session: OpenedSession) async throws {
+        let connection = newestConnection(of: session)
+        let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: connection)
+        switch response.status {
+        case 204, 404:
+            return
+        default:
+            throw commonError(response)
+        }
+    }
+
+    /// The newest token of the device that opened the session: the companion closes a session
+    /// only for that device, and refuses an old token once its replacement was used. The
+    /// stored connection is that device's when it holds the session's token or its
+    /// replacement. Otherwise it is gone ("Oublier") or another device's (paired again), and
+    /// the session's own connection is used.
+    private func newestConnection(of session: OpenedSession) -> CompanionConnection {
+        guard let stored = try? store.load(),
+              stored.companionURL == session.connection.companionURL,
+              stored.token == session.connection.token || stored.replacedToken == session.connection.token
+        else { return session.connection }
+        return stored
+    }
+
+    private func storedConnection() throws -> CompanionConnection {
         guard let connection = try store.load() else { throw CompanionError.notPaired }
-        var request = URLRequest(url: connection.companionURL.appending(path: "activity"))
-        request.httpMethod = "GET"
+        return connection
+    }
+
+    /// Sends a request with the device token, and stores the new token the companion may give.
+    private func sendWithToken(
+        method: String,
+        path: String,
+        body: Data? = nil,
+        connection: CompanionConnection
+    ) async throws -> HTTPResponse {
+        var request = URLRequest(url: connection.companionURL.appending(path: path))
+        request.httpMethod = method
         request.setValue("Bearer \(connection.token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
         let response = try await transport.send(request)
         // A token 30 days old is replaced on use: the old one works until the new one is used.
         // A connection forgotten or replaced while the request was out is left as it is.
@@ -81,19 +143,18 @@ struct CompanionClient {
            try store.load() == connection {
             var rotated = connection
             rotated.token = replacement
+            rotated.replacedToken = connection.token
             try store.save(rotated)
         }
+        return response
+    }
+
+    /// The answers every route with a device token can give.
+    private func commonError(_ response: HTTPResponse) -> CompanionError {
         switch response.status {
-        case 200:
-            return try JSONDecoder().decode(Activity.self, from: response.body)
-        case 401:
-            throw CompanionError.unauthorized
-        case 429:
-            throw CompanionError.limited(retryAfterSeconds: retryAfter(response))
-        case 503:
-            throw CompanionError.t3Unavailable
-        default:
-            throw CompanionError.unexpected(status: response.status)
+        case 401: .unauthorized
+        case 429: .limited(retryAfterSeconds: retryAfter(response))
+        default: .unexpected(status: response.status)
         }
     }
 
@@ -104,6 +165,19 @@ struct CompanionClient {
 
 private struct PairAnswer: Decodable {
     let token: String
+}
+
+private struct SessionAnswer: Decodable {
+    let sessionId: String
+    let sdp: String
+}
+
+/// A voice conversation the companion opened: its id, the voice engine's SDP answer, and the
+/// connection that opened it.
+struct OpenedSession: Equatable {
+    let id: String
+    let answer: String
+    let connection: CompanionConnection
 }
 
 /// What T3 runs now and what finished in the last 24 hours (`GET /activity`).

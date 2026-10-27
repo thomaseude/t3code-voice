@@ -105,6 +105,19 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(model.isPaired)
     }
 
+    func testForgettingEndsTheVoiceSession() async {
+        // Without it, the microphone and the Live Activity would stay on after "Oublier".
+        let store = InMemoryConnectionStore(paired)
+        var ended = false
+        let model = AppModel(store: store, transport: FakeTransport(), modelName: "iPhone", endSession: { ended = true })
+
+        await model.forget()
+
+        XCTAssertTrue(ended)
+        XCTAssertNil(store.connection)
+        XCTAssertFalse(model.isPaired)
+    }
+
     func testForgettingDuringARefreshKeepsTheAppUnpaired() async {
         let transport = FakeTransport()
         let store = InMemoryConnectionStore(paired)

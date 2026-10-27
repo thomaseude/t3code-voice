@@ -30,6 +30,9 @@ Issues are GitHub issues via `gh` (`docs/agents/issue-tracker.md`). Search the s
   builds and pastes the errors back.
 - Logic goes in plain Swift under `App/Core/`, tested with XCTest through fakes
   (`Tests/Fakes.swift`); views stay thin and are checked by hand on the iPhone.
+- The real implementations of Core's protocols (Keychain, network, WebRTC, Face ID,
+  Live Activity) go in `App/Device/`. They stay thin. Test one with XCTest when the
+  simulator can run it (the Keychain store); check the others by hand on the iPhone.
 
 ## Architecture: hexagonal (enforced)
 

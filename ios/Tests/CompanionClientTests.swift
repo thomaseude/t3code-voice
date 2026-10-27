@@ -10,6 +10,7 @@ final class CompanionClientTests: XCTestCase {
         companionURL: URL(string: "https://voice.example.com")!,
         token: "device-token-1"
     )
+    private var session: OpenedSession { OpenedSession(id: "s1", answer: "v=0 answer", connection: paired) }
 
     // MARK: Pairing
 
@@ -82,6 +83,7 @@ final class CompanionClientTests: XCTestCase {
         _ = try await CompanionClient(transport: transport, store: store).activity()
 
         XCTAssertEqual(store.connection?.token, "device-token-2")
+        XCTAssertEqual(store.connection?.replacedToken, "device-token-1")
         XCTAssertEqual(store.connection?.companionURL, paired.companionURL)
     }
 
@@ -121,6 +123,129 @@ final class CompanionClientTests: XCTestCase {
             _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore()).activity()
         }
         XCTAssertTrue(transport.requests.isEmpty)
+    }
+
+    // MARK: Voice sessions
+
+    func testOpeningASessionSendsTheOfferAndTheTimeZoneAndReadsTheAnswer() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(201, json: #"{"sessionId":"s1","sdp":"v=0 answer"}"#)]
+        let client = CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+
+        let session = try await client.openSession(offer: "v=0 offer", timeZone: "Europe/Paris")
+
+        XCTAssertEqual(session, OpenedSession(id: "s1", answer: "v=0 answer", connection: paired))
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(transport.jsonBody(of: request), ["sdp": "v=0 offer", "timeZone": "Europe/Paris"])
+    }
+
+    func testOpeningASessionStoresANewTokenFromTheCompanionAndClosesWithIt() async throws {
+        // Once the new token is used, the old one stops working.
+        let transport = FakeTransport()
+        transport.responses = [
+            response(201, json: #"{"sessionId":"s1","sdp":"v=0"}"#, headers: ["t3voice-token": "device-token-2"]),
+            response(204),
+        ]
+        let store = InMemoryConnectionStore(paired)
+        let client = CompanionClient(transport: transport, store: store)
+
+        let opened = try await client.openSession(offer: "v=0", timeZone: "Europe/Paris")
+        try await client.closeSession(opened)
+
+        XCTAssertEqual(store.connection?.token, "device-token-2")
+        XCTAssertEqual(transport.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-2")
+    }
+
+    func testClosingASessionAfterAnotherRequestGotANewTokenUsesTheNewToken() async throws {
+        // GET /activity received the new token while the session was open with the old one.
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+        var rotated = paired
+        rotated.token = "device-token-2"
+        rotated.replacedToken = "device-token-1"
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(rotated)).closeSession(session)
+
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-2")
+    }
+
+    func testWithoutAnOpenAIKeyOnTheCompanionVoiceIsUnavailable() async {
+        let transport = FakeTransport()
+        transport.responses = [response(503, json: #"{"error":"voice_unavailable"}"#)]
+
+        await assertThrows(CompanionError.voiceUnavailable) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testWhenOpenAIRefusesTheVoiceEngineFailed() async {
+        let transport = FakeTransport()
+        transport.responses = [response(502, json: #"{"error":"voice_engine_failed"}"#)]
+
+        await assertThrows(CompanionError.voiceEngineFailed) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testARevokedDeviceCannotOpenASession() async {
+        let transport = FakeTransport()
+        transport.responses = [response(401)]
+
+        await assertThrows(CompanionError.unauthorized) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testClosingASessionSendsADeleteWithTheToken() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).closeSession(session)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions/s1"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+    }
+
+    func testClosingASessionTheCompanionNoLongerHasIsNotAnError() async throws {
+        // The voice model may have ended it already ("fin"), or a newer session replaced it.
+        let transport = FakeTransport()
+        transport.responses = [response(404, json: #"{"error":"not_found"}"#)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).closeSession(session)
+    }
+
+    func testClosingASessionAfterTheConnectionWasForgottenUsesTheConnectionThatOpenedIt() async throws {
+        // "Oublier" while the companion opens the session deletes the token before the close.
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore()).closeSession(session)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions/s1"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+    }
+
+    func testClosingASessionAfterPairingAgainUsesTheDeviceThatOpenedIt() async throws {
+        // Pairing again with the same companion creates a new device, and the companion
+        // closes a session only for the device that opened it.
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+        var newDevice = paired
+        newDevice.token = "new-device-token"
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(newDevice)).closeSession(session)
+
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
     }
 
     private func assertThrows(
