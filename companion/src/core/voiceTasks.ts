@@ -10,6 +10,7 @@ import type {
   ModelSelection,
   Project,
   Provider,
+  ProviderModel,
   T3Backend,
   T3Config,
   Thread,
@@ -423,18 +424,14 @@ function chooseModel(
     const offers = providers.flatMap((each) =>
       each.models.map((model) => ({ provider: each, model })),
     );
-    const match = findByName(modelName, offers, ({ model }) => `${model.name} ${model.slug}`);
+    const match = findByName(modelWords(modelName), offers, ({ model }) => modelLabel(model));
     if (
       match.kind === "ambiguous" &&
       new Set(match.items.map(({ model }) => model.slug)).size > 1
     ) {
       // Several models fit ("sonnet" with two Sonnet models): the user must pick one. The
       // agent goes with each choice, since two agents can give a model the same name.
-      const choices = match.items.map((each) => ({
-        agent: each.provider.displayName,
-        model: each.model.name,
-      }));
-      return { kind: "other", result: { status: "ambiguous_model", choices } };
+      return { kind: "other", result: ambiguousModel(match.items) };
     }
     // The same model offered by two instances of an agent: the one the defaults use.
     const offer =
@@ -487,7 +484,14 @@ function chooseModel(
       defaults.find((selection) => selection.providerInstanceId === instanceId)?.model ??
       models[0]?.slug;
   } else {
-    const match = findByName(modelName, models, (model) => `${model.name} ${model.slug}`);
+    const match = findByName(modelWords(modelName), models, modelLabel);
+    if (match.kind === "ambiguous") {
+      const named = provider;
+      return {
+        kind: "other",
+        result: ambiguousModel(match.items.map((model) => ({ provider: named, model }))),
+      };
+    }
     slug = match.kind === "found" ? match.item.slug : undefined;
   }
   if (slug === undefined) {
@@ -498,6 +502,28 @@ function chooseModel(
     provider,
     model: { providerInstanceId: provider.instanceId, model: slug },
   };
+}
+
+/** The answer when several models fit: the user must pick one, by its agent and model. */
+function ambiguousModel(offers: Array<{ provider: Provider; model: ProviderModel }>): ToolResult {
+  const choices = offers.map((each) => ({
+    agent: each.provider.displayName,
+    model: each.model.name,
+  }));
+  return { status: "ambiguous_model", choices };
+}
+
+/** What a model is matched against: its name and slug, with their versions kept whole. */
+function modelLabel(model: ProviderModel): string {
+  return modelWords(`${model.name} ${model.slug}`);
+}
+
+/**
+ * Keeps a short version number one word: "5.5" and "5-5" give "55", so "Opus 5.5" is not
+ * "Opus 5". A longer number, like the date in "sonnet-4-20250514", stays a word of its own.
+ */
+function modelWords(text: string): string {
+  return text.replace(/(?<!\d)(\d)[.,-](\d)(?!\d)/g, "$1$2");
 }
 
 /** The first item `prefer` accepts, else the first item. */

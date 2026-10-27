@@ -226,6 +226,51 @@ describe("start_task", () => {
     );
   });
 
+  test("a model T3 names by its dated slug only is found by its version", async () => {
+    const { backend, call } = await setup();
+    backend.config.providers = [
+      provider("claudeAgent", {
+        displayName: "Claude",
+        models: [
+          { slug: "claude-sonnet-4-20250514", name: "claude-sonnet-4-20250514" },
+          { slug: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+        ],
+      }),
+    ];
+
+    await call("start_task", { ...startArgs, model: "Sonnet 4" });
+
+    assert.equal(
+      backend.commands[0]?.type === "launch" && backend.commands[0].model.model,
+      "claude-sonnet-4-20250514",
+    );
+  });
+
+  test("with the agent named, a model that fits several asks which one too", async () => {
+    const { backend, call } = await setup();
+
+    assert.deepEqual(await call("start_task", { ...startArgs, model: "claude" }), {
+      status: "ambiguous_model",
+      choices: [
+        { agent: "Claude", model: "Claude Opus 5.5" },
+        { agent: "Claude", model: "Claude Sonnet 5.5" },
+      ],
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("project folders whose names differ only by punctuation can each be picked", async () => {
+    const projects = [
+      project("p1", "api", { workspaceRoot: "/home/me/api-5-5" }),
+      project("p2", "api", { workspaceRoot: "/home/me/api-55" }),
+    ];
+    const { backend, call } = await setup({ projects });
+
+    await call("start_task", { ...startArgs, project: "api", folder: "api-55" });
+
+    assert.equal(backend.commands[0]?.type === "launch" && backend.commands[0].projectId, "p2");
+  });
+
   test("an unknown agent or model starts nothing and lists the choices", async () => {
     const { backend, call } = await setup();
 
