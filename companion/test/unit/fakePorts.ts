@@ -11,6 +11,7 @@ import type { Summarizer, SummaryRequest, TaskSummary } from "../../src/ports/su
 import {
   type LaunchThreadRequest,
   type Project,
+  type ReadThreadOptions,
   type RepositoryInfo,
   type SendMessageRequest,
   type ServerInfo,
@@ -23,6 +24,7 @@ import {
   type T3Pairing,
   type Thread,
   type ThreadMessage,
+  type ThreadPage,
 } from "../../src/ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../../src/ports/taskRegistry.ts";
 import {
@@ -122,14 +124,23 @@ export class FakeT3Backend implements T3Backend {
   async inspectRepository(path: string): Promise<RepositoryInfo> {
     return this.repositories.get(path) ?? { isGitRepository: true, defaultBranch: "main" };
   }
-  /** Messages of each thread, by thread id. */
-  readonly messages = new Map<string, ThreadMessage[]>();
-  async readThread(threadId: string) {
+  /** Messages of each thread, by thread id. A message with no id gets "m<its index>". */
+  readonly messages = new Map<string, Array<Omit<ThreadMessage, "id"> & { id?: string }>>();
+  async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<ThreadPage> {
     if (this.failNextCommand === "read") {
       this.failNextCommand = false;
       throw new Error("T3 did not answer.");
     }
-    return this.messages.get(threadId) ?? [];
+    const all = (this.messages.get(threadId) ?? []).map((message, index) => ({
+      ...message,
+      id: message.id ?? `m${index}`,
+    }));
+    const end =
+      options.before == null ? all.length : all.findIndex((each) => each.id === options.before);
+    if (end === -1) return { messages: [], olderCursor: null };
+    const start = options.limit === undefined ? 0 : Math.max(end - options.limit, 0);
+    const messages = all.slice(start, end);
+    return { messages, olderCursor: start > 0 ? (messages[0]?.id ?? null) : null };
   }
   async launchThread(request: LaunchThreadRequest) {
     if (this.launchGate !== null) await this.launchGate;

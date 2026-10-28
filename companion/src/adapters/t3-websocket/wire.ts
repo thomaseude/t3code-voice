@@ -237,12 +237,22 @@ export function runOfMessage(
 
 const MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
 
-/** The messages of a thread projection, oldest first. Malformed ones are left out. */
+/**
+ * The messages of a thread projection, oldest first. Malformed ones are left out, and so are
+ * workflow scripts: T3 shows them as code, not as conversation.
+ */
 export function toThreadMessages(projection: WireJson): ThreadMessage[] {
   const messages: WireJson[] = Array.isArray(projection?.messages) ? projection.messages : [];
   return messages
-    .filter((message) => MESSAGE_ROLES.has(message?.role) && typeof message.text === "string")
+    .filter(
+      (message) =>
+        MESSAGE_ROLES.has(message?.role) &&
+        typeof message.text === "string" &&
+        typeof message.id === "string" &&
+        message.workflowScript !== true,
+    )
     .map((message) => ({
+      id: message.id,
       role: message.role,
       text: message.text,
       runId: typeof message.runId === "string" ? message.runId : null,

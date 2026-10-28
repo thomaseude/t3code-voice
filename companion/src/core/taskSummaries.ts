@@ -54,7 +54,7 @@ export class TaskSummaries {
     if (summarizer === null) return null;
     let summary: TaskSummary | null;
     try {
-      const messages = await this.options.backend.readThread(thread.id);
+      const { messages } = await this.options.backend.readThread(thread.id);
       const { request, output } = lastRunOf(messages, thread.latestRunId);
       if (output === "") return null;
       summary = await this.withTimeout(

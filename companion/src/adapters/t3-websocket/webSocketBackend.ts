@@ -4,6 +4,7 @@
 import {
   type LaunchThreadRequest,
   type Project,
+  type ReadThreadOptions,
   type RepositoryInfo,
   type SendMessageRequest,
   type ServerInfo,
@@ -13,7 +14,7 @@ import {
   type T3Backend,
   type T3Config,
   T3IncompatibleError,
-  type ThreadMessage,
+  type ThreadPage,
 } from "../../ports/t3Backend.ts";
 import {
   assertCompatible,
@@ -145,8 +146,16 @@ export class WebSocketT3Backend implements T3Backend {
     return toRepositoryInfo(answer);
   }
 
-  async readThread(threadId: string): Promise<ThreadMessage[]> {
-    return toThreadMessages(await this.projection(threadId));
+  async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<ThreadPage> {
+    // The projection holds every message: the pages are cut here. The cursor is the id of
+    // the oldest message of the page.
+    const all = toThreadMessages(await this.projection(threadId));
+    const end =
+      options.before == null ? all.length : all.findIndex((each) => each.id === options.before);
+    if (end === -1) return { messages: [], olderCursor: null };
+    const start = options.limit === undefined ? 0 : Math.max(end - options.limit, 0);
+    const messages = all.slice(start, end);
+    return { messages, olderCursor: start > 0 ? (messages[0]?.id ?? null) : null };
   }
 
   async launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }> {

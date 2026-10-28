@@ -195,10 +195,21 @@ describe("T3Backend WebSocket adapter against a real T3", {
       assert.equal(thread?.settled, false);
       assert.equal(awarenessOf(thread as Thread), "failed");
       assert.equal(eventKeyOf(thread as Thread), `failed:${thread?.latestRunId}`);
-      const messages = await backend.readThread(threadId);
+      const { messages, olderCursor } = await backend.readThread(threadId);
       const request = messages.find((message) => message.role === "user");
       assert.equal(request?.text, "Say hello.");
       assert.equal(request?.runId, thread?.latestRunId);
+      assert.equal(typeof request?.id, "string");
+      assert.equal(olderCursor, null);
+      // What get_recent_messages relies on: the newest messages first, then a cursor back.
+      const newest = await backend.readThread(threadId, { limit: 1 });
+      assert.deepEqual(newest.messages, messages.slice(-1));
+      if (messages.length > 1) {
+        const older = await backend.readThread(threadId, { limit: 1, before: newest.olderCursor });
+        assert.deepEqual(older.messages, messages.slice(-2, -1));
+      } else {
+        assert.equal(newest.olderCursor, null);
+      }
 
       const sequences = events
         .filter((event) => event.type !== "snapshot")
