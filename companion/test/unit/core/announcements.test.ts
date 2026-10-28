@@ -10,6 +10,7 @@ import { ShellState } from "../../../src/core/shellState.ts";
 import { TaskSummaries } from "../../../src/core/taskSummaries.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
+import { DEFAULT_SESSION_LIMITS } from "../../../src/ports/configStore.ts";
 import type { Thread } from "../../../src/ports/t3Backend.ts";
 import type { FollowedTask } from "../../../src/ports/taskRegistry.ts";
 import { followedTask, project, thread } from "../builders.ts";
@@ -69,6 +70,8 @@ function setup({
     tasks,
     announcements: queue,
     isRevoked: async () => false,
+    registry: registry,
+    limits: DEFAULT_SESSION_LIMITS,
     clock,
     log,
   });
@@ -734,6 +737,26 @@ describe("speaking at the next gap", () => {
     await wait(0);
 
     assert.equal(session.spoken.length, 1);
+  });
+
+  test("a session is not at a gap while a confirmation question waits for its answer", () => {
+    const clock = new FakeClock();
+    const queue = new AnnouncementQueue({
+      registry: new InMemoryTaskRegistry(),
+      shell: () => null,
+      push: new FakePushSender(),
+      clock,
+      log: () => {},
+    });
+    queue.openSession("s1", { speak: () => {}, timeZone: "Europe/Paris" });
+    clock.advance(2_000);
+    assert.equal(queue.isQuiet("s1"), true);
+
+    queue.questionOpen("s1", true);
+    assert.equal(queue.isQuiet("s1"), false);
+
+    queue.questionOpen("s1", false);
+    assert.equal(queue.isQuiet("s1"), true);
   });
 });
 

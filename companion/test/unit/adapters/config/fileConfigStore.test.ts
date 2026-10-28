@@ -482,4 +482,32 @@ describe("OpenAI key and voice settings", () => {
       /"voice.summaryModel" must be a name, e.g. "gpt-5.4-mini"/,
     );
   });
+
+  test("reads the session limits, and refuses one that is not a positive number", async () => {
+    const dir = await privateDir();
+    const voice = { idleMinutes: 2, idleMinutesWhileTasksRun: 15, dailyBudgetUsd: 4.5 };
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, voice });
+    assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.voice, voice);
+
+    // The warning comes 30 s before the stop, so a silence lasts 1 minute at least.
+    for (const [field, value] of [
+      ["idleMinutes", 0.5],
+      ["idleMinutesWhileTasksRun", "20"],
+    ] as const) {
+      const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { [field]: value } };
+      await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+      await assert.rejects(
+        new FileConfigStore(dir).loadConfig(),
+        new RegExp(`"voice.${field}" must be a number of minutes, 1 or more`),
+      );
+    }
+    for (const value of [0, -1, "10"]) {
+      const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { dailyBudgetUsd: value } };
+      await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+      await assert.rejects(
+        new FileConfigStore(dir).loadConfig(),
+        /"voice.dailyBudgetUsd" must be an amount in US dollars above 0, e.g. 10/,
+      );
+    }
+  });
 });

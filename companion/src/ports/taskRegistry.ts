@@ -1,6 +1,7 @@
 // The tasks the user follows: the threads whose news the assistant speaks about, with the
 // short French name the user calls them by. It survives restarts. T3 stays the only source
 // of truth for their status: the registry never stores one as current.
+// It also keeps what each voice session cost, for the daily budget.
 
 import type { TaskSummary } from "./summarizer.ts";
 
@@ -21,6 +22,21 @@ export interface FollowedTask {
   followedAt: string;
 }
 
+/** What one voice session cost. The daily budget adds up the records of a day. */
+export interface UsageRecord {
+  sessionId: string;
+  /** The engine's model, e.g. "gpt-live-1". */
+  engine: string;
+  /** The calendar day the session started on, in the server's time zone: "2026-10-26". */
+  day: string;
+  /** ISO date. */
+  startedAt: string;
+  /** Minutes the session was open at the engine. */
+  minutes: number;
+  /** Minutes × the engine's price. Tokens of the model GPT-Live delegates to are not counted. */
+  estimatedCostUsd: number;
+}
+
 export interface TaskRegistry {
   /** Every followed task, the oldest first. */
   followedTasks(): FollowedTask[];
@@ -34,5 +50,9 @@ export interface TaskRegistry {
   saveSummary(threadId: string, eventKey: string, summary: TaskSummary): void;
   /** The summary saved for this event of the thread, or null. */
   summaryOf(threadId: string, eventKey: string): TaskSummary | null;
+  /** Saves the usage of a session, replacing what was saved for it before. */
+  saveUsage(record: UsageRecord): void;
+  /** The usage records of the day ("2026-10-26"), the oldest first. */
+  usageOn(day: string): UsageRecord[];
   close(): void;
 }

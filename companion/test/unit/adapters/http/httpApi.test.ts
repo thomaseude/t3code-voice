@@ -8,6 +8,7 @@ import { OpaqueTokenAuth } from "../../../../src/adapters/device-auth/opaqueToke
 import { type HttpApiOptions, startHttpApi } from "../../../../src/adapters/http/httpApi.ts";
 import { DevicePairing, openPairingWindow } from "../../../../src/core/pairing.ts";
 import { VoiceSessionManager } from "../../../../src/core/voiceSessions.ts";
+import { DEFAULT_SESSION_LIMITS } from "../../../../src/ports/configStore.ts";
 import type { PairedDevice } from "../../../../src/ports/deviceAuth.ts";
 import { pairedDevice } from "../../builders.ts";
 import {
@@ -15,6 +16,7 @@ import {
   FakeDeviceAuth,
   FakeVoiceEngine,
   InMemoryConfigStore,
+  InMemoryTaskRegistry,
   unusedAnnouncements,
   unusedVoiceTasks,
 } from "../../fakePorts.ts";
@@ -52,6 +54,8 @@ async function startApi(options: Partial<HttpApiOptions> = {}): Promise<string> 
       engine: new FakeVoiceEngine(),
       shell: () => null,
       announcements: unusedAnnouncements(),
+      registry: new InMemoryTaskRegistry(),
+      limits: DEFAULT_SESSION_LIMITS,
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
@@ -554,11 +558,11 @@ describe("Device tokens issued by pairing", () => {
   });
 });
 
-describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
+describe("Voice sessions (POST /sessions, POST /sessions/:id/events, DELETE /sessions/:id)", () => {
   // A real WebRTC offer is a few kilobytes: bigger than the other routes' body limit.
   const OFFER = `v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n${"a=candidate:1 1 udp 1 192.0.2.1 9 typ host\r\n".repeat(150)}`;
 
-  function voiceApi() {
+  function voiceApi(limits = DEFAULT_SESSION_LIMITS) {
     const engine = new FakeVoiceEngine();
     const auth = new FakeDeviceAuth();
     auth.addDevice("phone-1", { id: "d1", name: "iPhone" });
@@ -567,6 +571,8 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
       engine,
       shell: () => null,
       announcements: unusedAnnouncements(),
+      registry: new InMemoryTaskRegistry(),
+      limits,
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
@@ -621,6 +627,8 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
       engine: null,
       shell: () => null,
       announcements: unusedAnnouncements(),
+      registry: new InMemoryTaskRegistry(),
+      limits: DEFAULT_SESSION_LIMITS,
       isRevoked: async () => false,
       tasks: unusedVoiceTasks(),
       clock: new FakeClock(),
@@ -643,6 +651,42 @@ describe("Voice sessions (POST /sessions, DELETE /sessions/:id)", () => {
 
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: "voice_engine_failed" });
+  });
+
+  test("403 once today's sessions cost the daily budget", async () => {
+    const { engine, auth, voiceSessions } = voiceApi({
+      ...DEFAULT_SESSION_LIMITS,
+      dailyBudgetUsd: 0,
+    });
+    const url = await startApi({ auth, voiceSessions });
+
+    const response = await openSession(url, { sdp: OFFER });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "budget_reached" });
+    assert.equal(engine.sessions.length, 0);
+  });
+
+  test("events mute and unmute the device's own session: 204, else 404 or 400", async () => {
+    const { auth, voiceSessions } = voiceApi();
+    const url = await startApi({ auth, voiceSessions });
+    const { sessionId } = (await (await openSession(url, { sdp: OFFER })).json()) as {
+      sessionId: string;
+    };
+    const send = (body: unknown, token = "phone-1", id = sessionId) =>
+      fetch(`${url}/sessions/${id}/events`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    assert.equal((await send({ type: "mute" })).status, 204);
+    assert.equal((await send({ type: "unmute" })).status, 204);
+    assert.equal((await send({ type: "mute" }, "phone-2")).status, 404);
+    assert.equal((await send({ type: "mute" }, "phone-1", "other")).status, 404);
+    const unknown = await send({ type: "dance" });
+    assert.equal(unknown.status, 400);
+    assert.deepEqual(await unknown.json(), { error: "invalid_event" });
   });
 
   test("DELETE ends the device's own session and answers 204, then 404", async () => {

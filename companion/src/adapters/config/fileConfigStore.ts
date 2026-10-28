@@ -11,6 +11,7 @@ import {
   type CompanionConfig,
   ConfigError,
   type ConfigStore,
+  DEFAULT_SESSION_LIMITS,
   DEFAULT_VOICE,
   type PairingWindow,
 } from "../../ports/configStore.ts";
@@ -92,6 +93,21 @@ export class FileConfigStore implements ConfigStore {
           `${path}: "voice.${field}" must be a name, e.g. "${DEFAULT_VOICE[field]}".`,
         );
       }
+    }
+    for (const field of ["idleMinutes", "idleMinutesWhileTasksRun"] as const) {
+      const value = data.voice?.[field];
+      // The warning comes 30 s before the stop.
+      if (value !== undefined && !(Number.isFinite(value) && value >= 1)) {
+        throw new ConfigError(
+          `${path}: "voice.${field}" must be a number of minutes, 1 or more, e.g. ${DEFAULT_SESSION_LIMITS[field]}.`,
+        );
+      }
+    }
+    const budget = data.voice?.dailyBudgetUsd;
+    if (budget !== undefined && !(Number.isFinite(budget) && budget > 0)) {
+      throw new ConfigError(
+        `${path}: "voice.dailyBudgetUsd" must be an amount in US dollars above 0, e.g. ${DEFAULT_SESSION_LIMITS.dailyBudgetUsd}.`,
+      );
     }
     return data as CompanionConfig;
   }

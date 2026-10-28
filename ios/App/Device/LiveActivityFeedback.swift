@@ -11,7 +11,7 @@ final class LiveActivityFeedback: SessionFeedback {
     private var player: AVAudioPlayer?
     /// What the Live Activity shows. Each event changes its own field and sends the whole
     /// state, so one update never brings back what another replaced.
-    private var content = VoiceActivityAttributes.ContentState(live: false, speaker: false, status: "")
+    private var content = VoiceActivityAttributes.ContentState(live: false, speaker: false, status: "", muted: false)
 
     func showSpeaker(_ on: Bool) {
         content.speaker = on
@@ -21,6 +21,7 @@ final class LiveActivityFeedback: SessionFeedback {
     func show(_ state: SessionState) {
         content.status = state.label ?? ""
         content.live = false
+        content.muted = false
         switch state {
         case .idle:
             end()
@@ -28,9 +29,9 @@ final class LiveActivityFeedback: SessionFeedback {
             break
         case .connecting:
             start()
-        case .live:
-            playStartSound()
+        case let .live(muted):
             content.live = true
+            content.muted = muted
             update()
         case .ending:
             update()
@@ -61,7 +62,7 @@ final class LiveActivityFeedback: SessionFeedback {
         }
     }
 
-    private func playStartSound() {
+    func playStartSound() {
         player = try? AVAudioPlayer(data: Self.startSound)
         player?.play()
     }
