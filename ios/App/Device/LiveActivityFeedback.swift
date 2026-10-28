@@ -18,9 +18,8 @@ final class LiveActivityFeedback: SessionFeedback {
             break
         case .connecting:
             start(status: state.label ?? "")
-        case .live:
-            playStartSound()
-            update(status: state.label ?? "")
+        case let .live(muted):
+            update(status: state.label ?? "", muted: muted)
         case .ending:
             update(status: state.label ?? "")
         }
@@ -30,14 +29,15 @@ final class LiveActivityFeedback: SessionFeedback {
         end()
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(status: status), staleDate: nil),
+            content: ActivityContent(state: .init(status: status, muted: false), staleDate: nil),
             pushType: nil
         )
     }
 
-    private func update(status: String) {
+    private func update(status: String, muted: Bool = false) {
         guard let activity else { return }
-        Task { await activity.update(ActivityContent(state: .init(status: status), staleDate: nil)) }
+        let state = VoiceActivityAttributes.ContentState(status: status, muted: muted)
+        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
     }
 
     /// Ends every Live Activity of the app, also one left by a killed process: it would show
@@ -49,7 +49,7 @@ final class LiveActivityFeedback: SessionFeedback {
         }
     }
 
-    private func playStartSound() {
+    func playStartSound() {
         player = try? AVAudioPlayer(data: Self.startSound)
         player?.play()
     }

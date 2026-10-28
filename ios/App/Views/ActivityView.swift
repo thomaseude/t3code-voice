@@ -69,10 +69,15 @@ struct ActivityView: View {
             case .authenticating:
                 ProgressView()
             case .connecting, .live:
+                let muted = session.state == .live(muted: true)
                 HStack {
-                    Label(session.state.label ?? "", systemImage: "mic.fill")
-                        .foregroundStyle(.red)
+                    Label(session.state.label ?? "", systemImage: muted ? "mic.slash.fill" : "mic.fill")
+                        .foregroundStyle(muted ? Color.secondary : Color.red)
                     Spacer()
+                    if session.state.isLive {
+                        Button(muted ? "Micro" : "Muet") { Task { await session.toggleMute() } }
+                            .buttonStyle(.bordered)
+                    }
                     Button("Fin", role: .destructive) { Task { await session.end() } }
                         .buttonStyle(.borderedProminent)
                 }

@@ -24,7 +24,7 @@ import {
   type Thread,
   type ThreadMessage,
 } from "../../src/ports/t3Backend.ts";
-import type { FollowedTask, TaskRegistry } from "../../src/ports/taskRegistry.ts";
+import type { FollowedTask, TaskRegistry, UsageRecord } from "../../src/ports/taskRegistry.ts";
 import {
   type VoiceEngine,
   VoiceEngineError,
@@ -261,6 +261,8 @@ export interface FakeVoiceSession extends VoiceSession {
 }
 
 export class FakeVoiceEngine implements VoiceEngine {
+  readonly model = "fake-live";
+  readonly usdPerMinute = 0.05;
   readonly sessions: FakeVoiceSession[] = [];
   /** Makes the next openSession() fail, like an engine that refuses the offer. */
   failNextOpen = false;
@@ -347,6 +349,14 @@ export class InMemoryTaskRegistry implements TaskRegistry {
   }
   summaryOf(threadId: string, eventKey: string) {
     return this.summaries.get(`${threadId}|${eventKey}`) ?? null;
+  }
+  /** By session id. */
+  readonly usage = new Map<string, UsageRecord>();
+  saveUsage(record: UsageRecord) {
+    this.usage.set(record.sessionId, record);
+  }
+  usageOn(day: string) {
+    return [...this.usage.values()].filter((record) => record.day === day);
   }
   close() {}
 }

@@ -31,6 +31,8 @@ enum CompanionError: Error, Equatable {
     case voiceUnavailable
     /// OpenAI refused the session or could not be reached.
     case voiceEngineFailed
+    /// Today's sessions cost the companion's daily budget: no new one until tomorrow.
+    case budgetReached
     case limited(retryAfterSeconds: Int?)
     case unexpected(status: Int)
 }
@@ -88,6 +90,8 @@ struct CompanionClient {
         case 201:
             let answer = try JSONDecoder().decode(SessionAnswer.self, from: response.body)
             return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
+        case 403:
+            throw CompanionError.budgetReached
         case 502:
             throw CompanionError.voiceEngineFailed
         case 503:
@@ -101,6 +105,24 @@ struct CompanionClient {
     func closeSession(_ session: OpenedSession) async throws {
         let connection = newestConnection(of: session)
         let response = try await sendWithToken(method: "DELETE", path: "sessions/\(session.id)", connection: connection)
+        switch response.status {
+        case 204, 404:
+            return
+        default:
+            throw commonError(response)
+        }
+    }
+
+    /// Tells the companion the microphone was muted or unmuted. A session it no longer has
+    /// has nothing to count.
+    func send(_ event: SessionEvent, in session: OpenedSession) async throws {
+        let body = try JSONEncoder().encode(["type": event.rawValue])
+        let response = try await sendWithToken(
+            method: "POST",
+            path: "sessions/\(session.id)/events",
+            body: body,
+            connection: newestConnection(of: session)
+        )
         switch response.status {
         case 204, 404:
             return
@@ -175,6 +197,12 @@ private struct PairAnswer: Decodable {
 private struct SessionAnswer: Decodable {
     let sessionId: String
     let sdp: String
+}
+
+/// What the app tells the companion about its session (`POST /sessions/:id/events`).
+enum SessionEvent: String {
+    case mute
+    case unmute
 }
 
 /// A voice conversation the companion opened: its id, the voice engine's SDP answer, and the

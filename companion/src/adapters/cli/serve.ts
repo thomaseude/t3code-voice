@@ -16,6 +16,7 @@ import {
   type ConfigStore,
   DEFAULT_SERVER_HOST,
   DEFAULT_SERVER_PORT,
+  DEFAULT_SESSION_LIMITS,
   DEFAULT_VOICE,
 } from "../../ports/configStore.ts";
 import type { PushSender } from "../../ports/pushSender.ts";
@@ -92,7 +93,11 @@ export async function runServe({
   const state = new ShellState();
   let connected = true;
   const shell = () => (connected && state.hasSnapshot ? state : null);
-  const { summaryModel, ...voice } = { ...DEFAULT_VOICE, ...config.voice };
+  const { model, voice, delegationModel, summaryModel } = { ...DEFAULT_VOICE, ...config.voice };
+  const { idleMinutes, idleMinutesWhileTasksRun, dailyBudgetUsd } = {
+    ...DEFAULT_SESSION_LIMITS,
+    ...config.voice,
+  };
   const queue = new AnnouncementQueue({ registry, shell, push: pushSender(out), clock, log: out });
   const summaries = new TaskSummaries({
     backend,
@@ -123,12 +128,14 @@ export async function runServe({
   // Without a key, serve still runs: pairing and GET /activity need no voice engine.
   if (apiKey === null)
     out(`No OpenAI key in ${store.location}/openai.env: voice sessions are off.`);
-  const engine = apiKey === null ? null : voiceEngine({ apiKey, ...voice });
+  const engine = apiKey === null ? null : voiceEngine({ apiKey, model, voice, delegationModel });
   const voiceSessions = new VoiceSessionManager({
     engine,
     shell,
     tasks: new VoiceTasks({ backend, registry, shell, summaries, clock, newId, log: out }),
     announcements: queue,
+    registry,
+    limits: { idleMinutes, idleMinutesWhileTasksRun, dailyBudgetUsd },
     // `t3-voice devices revoke` writes the revocation; serve reads it from the store.
     isRevoked: async (deviceId) => {
       const device = (await store.loadDevices()).find((candidate) => candidate.id === deviceId);

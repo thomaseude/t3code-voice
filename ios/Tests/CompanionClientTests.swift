@@ -193,6 +193,36 @@ final class CompanionClientTests: XCTestCase {
         }
     }
 
+    func testOverTheDailyBudgetNoSessionOpens() async {
+        let transport = FakeTransport()
+        transport.responses = [response(403, json: #"{"error":"budget_reached"}"#)]
+
+        await assertThrows(CompanionError.budgetReached) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testMutingSendsTheEventOfTheSession() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(204)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).send(.mute, in: session)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions/s1/events"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token-1")
+        XCTAssertEqual(transport.jsonBody(of: request), ["type": "mute"])
+    }
+
+    func testAnEventForASessionTheCompanionNoLongerHasIsNotAnError() async throws {
+        let transport = FakeTransport()
+        transport.responses = [response(404, json: #"{"error":"not_found"}"#)]
+
+        try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).send(.unmute, in: session)
+    }
+
     func testARevokedDeviceCannotOpenASession() async {
         let transport = FakeTransport()
         transport.responses = [response(401)]

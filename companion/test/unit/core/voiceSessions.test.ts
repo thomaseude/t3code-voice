@@ -6,6 +6,7 @@ import { describe, test } from "node:test";
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
+import { DEFAULT_SESSION_LIMITS } from "../../../src/ports/configStore.ts";
 import type { Project, Thread } from "../../../src/ports/t3Backend.ts";
 import { project, thread } from "../builders.ts";
 import {
@@ -47,6 +48,8 @@ function setup({
       log: (line) => logs.push(line),
     }),
     announcements: unusedAnnouncements(),
+    registry: new InMemoryTaskRegistry(),
+    limits: DEFAULT_SESSION_LIMITS,
     isRevoked: async (deviceId) => revoked.has(deviceId),
     clock,
     log: (line) => logs.push(line),
@@ -524,6 +527,8 @@ describe("revoked devices", () => {
       shell: () => shellWith([project("p1")]),
       tasks: unusedVoiceTasks(),
       announcements: unusedAnnouncements(),
+      registry: new InMemoryTaskRegistry(),
+      limits: DEFAULT_SESSION_LIMITS,
       isRevoked: async () => {
         throw new Error("devices.json is damaged.");
       },
@@ -560,6 +565,8 @@ describe("failures and logs", () => {
       shell: () => null,
       tasks: unusedVoiceTasks(),
       announcements: unusedAnnouncements(),
+      registry: new InMemoryTaskRegistry(),
+      limits: DEFAULT_SESSION_LIMITS,
       isRevoked: async () => false,
       clock: new FakeClock(),
       log: () => {},
@@ -589,7 +596,7 @@ describe("failures and logs", () => {
 
     assert.deepEqual(logs, [
       "t3-voice: voice session opened for device d1.",
-      "t3-voice: voice session of device d1 ended after 1.5 min.",
+      "t3-voice: voice session of device d1 ended after 1.5 min (~$0.07; today ~$0.07 of the $10.00 budget).",
     ]);
   });
 });

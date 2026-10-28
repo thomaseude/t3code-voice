@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, test } from "node:test";
 import { SqliteTaskRegistry } from "../../../../src/adapters/task-registry/sqliteTaskRegistry.ts";
 import { ConfigError } from "../../../../src/ports/configStore.ts";
@@ -112,5 +113,47 @@ describe("SQLite task registry", () => {
     await chmod(dir, 0o755);
 
     assert.throws(() => SqliteTaskRegistry.open(join(dir, "tasks.sqlite")), ConfigError);
+  });
+
+  test("usage records are kept per day, and saving a session again replaces its record", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const first = SqliteTaskRegistry.open(path);
+    const record = {
+      sessionId: "s1",
+      engine: "gpt-live-1",
+      day: "2026-10-26",
+      startedAt: "2026-10-26T10:00:00.000Z",
+      minutes: 1,
+      estimatedCostUsd: 0.05,
+    };
+    first.saveUsage(record);
+    first.saveUsage({ ...record, minutes: 2.5, estimatedCostUsd: 0.125 });
+    first.saveUsage({ ...record, sessionId: "s0", day: "2026-10-25" });
+    first.close();
+
+    const second = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(second.usageOn("2026-10-26"), [
+      { ...record, minutes: 2.5, estimatedCostUsd: 0.125 },
+    ]);
+    assert.equal(second.usageOn("2026-10-25").length, 1);
+    second.close();
+  });
+
+  test("a registry made before usage records gets their table, and keeps its tasks", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const old = SqliteTaskRegistry.open(path);
+    old.follow(followedTask("t1"));
+    old.close();
+    // As the registry of #22 left it: two migrations.
+    const db = new DatabaseSync(path);
+    db.exec("DROP TABLE usage_records; PRAGMA user_version = 2;");
+    db.close();
+
+    const registry = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(registry.usageOn("2026-10-26"), []);
+    assert.equal(registry.followedTasks().length, 1);
+    registry.close();
   });
 });
