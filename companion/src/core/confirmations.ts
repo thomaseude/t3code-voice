@@ -92,16 +92,17 @@ interface Question {
   readAt: number | null;
   /** What the user said in those turns, as the engine transcribed it. */
   heard: string;
-  lastSpeechAt: number | null;
+  /** "complete" once the user was quiet ANSWER_QUIET_MS after their last word. */
+  answer: "none" | "speaking" | "complete";
   /** Whether the model sent the token back: it works once. */
   taken: boolean;
   /** Why the question ended, or null while it is still open. */
   ended: "judged" | "doubted" | "expired" | "replaced" | "session_closed" | null;
-  /** Wakes the judging of the answer: the user spoke, or the question ended. */
+  /** Wakes the judging of the answer: the user spoke, the answer is complete, or the question ended. */
   wake: () => void;
   stopTimer: () => void;
-  /** Cancels the check that closes the question once the answer's words are complete. */
-  stopQuietCheck: () => void;
+  /** Cancels the timer that makes the answer complete. */
+  stopAnswerTimer: () => void;
 }
 
 /** The question of one voice session. */
@@ -131,12 +132,12 @@ export class Confirmations {
       run: request.run,
       readAt: null,
       heard: "",
-      lastSpeechAt: null,
+      answer: "none",
       taken: false,
       ended: null,
       wake: () => {},
       stopTimer: () => {},
-      stopQuietCheck: () => {},
+      stopAnswerTimer: () => {},
     };
     question.stopTimer = this.clock.schedule(CONFIRM_WINDOW_MS, () =>
       this.end(question, "expired"),
@@ -167,13 +168,11 @@ export class Confirmations {
     if (question === null || question.ended !== null || question.readAt === null) return;
     if (this.userTurnStartedAt < question.readAt) return;
     question.heard += text;
-    question.lastSpeechAt = now;
-    // "non", "attends"…: the answer can no longer be a yes. Checked once the user was quiet,
-    // because a transcript piece can end inside a word ("n" of "nickel").
-    question.stopQuietCheck();
-    question.stopQuietCheck = this.clock.schedule(ANSWER_QUIET_MS, () => {
-      if (hasDoubt(question.heard)) this.end(question, "doubted");
-    });
+    question.answer = "speaking";
+    question.stopAnswerTimer();
+    question.stopAnswerTimer = this.clock.schedule(ANSWER_QUIET_MS, () =>
+      this.answerComplete(question),
+    );
     question.wake();
   }
 
@@ -194,36 +193,42 @@ export class Confirmations {
     const ended = question.ended;
     this.end(question, "judged");
     if (ended === "expired") return { kind: "refused", result: { error: "confirmation_expired" } };
-    if (ended !== null || !isClearYes(question.heard)) {
+    if (ended !== null || !hasYes(question.heard)) {
       return { kind: "refused", result: { error: "not_confirmed" } };
     }
     return { kind: "confirmed", run: question.run };
   }
 
   /**
-   * Waits until the user was quiet ANSWER_QUIET_MS, or said nothing for TRANSCRIPT_WAIT_MS,
-   * or the question ended.
+   * The user was quiet ANSWER_QUIET_MS: their words are complete, so a piece that ended
+   * inside a word ("n" of "nickel") is whole again. A doubt word ("non", "attends"…) then
+   * closes the question: the answer can no longer be a yes.
    */
+  private answerComplete(question: Question): void {
+    question.answer = "complete";
+    if (hasDoubt(question.heard)) this.end(question, "doubted");
+    else question.wake();
+  }
+
+  /** Waits until the answer is complete, or the user said nothing for TRANSCRIPT_WAIT_MS. */
   private async answerEnded(question: Question): Promise<void> {
-    if (question.ended === null && question.lastSpeechAt === null) {
+    if (question.ended === null && question.answer === "none") {
       await this.sleep(question, TRANSCRIPT_WAIT_MS);
     }
-    while (question.ended === null && question.lastSpeechAt !== null) {
-      const quietFor = this.clock.now() - question.lastSpeechAt;
-      if (quietFor >= ANSWER_QUIET_MS) return;
-      await this.sleep(question, ANSWER_QUIET_MS - quietFor);
+    while (question.ended === null && question.answer === "speaking") {
+      await this.sleep(question, null);
     }
   }
 
-  /** Waits `ms`, or less if the question is woken. */
-  private sleep(question: Question, ms: number): Promise<void> {
+  /** Waits until the question is woken, or `ms` at most. */
+  private sleep(question: Question, ms: number | null): Promise<void> {
     return new Promise((resolve) => {
       const done = () => {
         cancel();
         question.wake = () => {};
         resolve();
       };
-      const cancel = this.clock.schedule(ms, done);
+      const cancel = ms === null ? () => {} : this.clock.schedule(ms, done);
       question.wake = done;
     });
   }
@@ -233,18 +238,15 @@ export class Confirmations {
     if (question.ended !== null) return;
     question.ended = reason;
     question.stopTimer();
-    question.stopQuietCheck();
+    question.stopAnswerTimer();
     question.wake();
     if (this.question === question) this.onQuestionOpen(false);
   }
 }
 
-/**
- * A yes word, with no doubt word. The judging can end before the quiet check that closes a
- * doubted question: both come 1 s after the last word.
- */
-function isClearYes(heard: string): boolean {
-  return !hasDoubt(heard) && wordsOf(heard).some((word) => YES_WORDS.has(word));
+/** A yes word. An answer with a doubt word never gets here: answerComplete closed it. */
+function hasYes(heard: string): boolean {
+  return wordsOf(heard).some((word) => YES_WORDS.has(word));
 }
 
 function hasDoubt(heard: string): boolean {
