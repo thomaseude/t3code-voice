@@ -254,6 +254,85 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertFalse(calls[1].hungUp)
     }
 
+    // MARK: Speaker
+
+    func testTheSpeakerButtonSendsTheVoiceToTheSpeakerAndBack() async {
+        await startLiveSession()
+
+        controller.toggleSpeaker()
+
+        XCTAssertTrue(controller.speaker)
+        XCTAssertTrue(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [true])
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [true, false])
+        // Only the output changes: the call and the session go on.
+        XCTAssertFalse(call.hungUp)
+    }
+
+    func testEachNewSessionStartsWithTheSpeakerOff() async {
+        await startLiveSession()
+        controller.toggleSpeaker()
+        await controller.end()
+
+        transport.responses = [opened]
+        await controller.start()
+        await calls[1].emit(.sessionStarted)
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(calls[1].speakerOn)
+        XCTAssertEqual(feedback.speakerShown.last, false)
+    }
+
+    func testTheSpeakerButtonDoesNothingBeforeTheSessionIsLive() async {
+        transport.responses = [opened]
+        await controller.start()
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testASpeakerTheCallCannotSetStaysOff() async {
+        await startLiveSession()
+        call.speakerError = VoiceCallError.failed
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testWhenIOSMovesTheVoiceOffTheSpeakerTheButtonShowsItOff() async {
+        // Plugging in the AirPods while the speaker is on: iOS sends the voice to them.
+        await startLiveSession()
+        controller.toggleSpeaker()
+
+        await call.emit(.speakerLost)
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [true, false])
+        XCTAssertFalse(call.hungUp)
+    }
+
+    func testARouteChangeNeverTurnsTheSpeakerOn() async {
+        // Taking out the AirPods with the speaker off: the voice goes to the earpiece, not
+        // to the speaker, so an answer about the code never plays aloud by surprise.
+        await startLiveSession()
+
+        await call.emit(.speakerLost)
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
     // MARK: Helpers
 
     private func makeController(callStartError: Error? = nil, acceptError: Error? = nil) -> VoiceSessionController {

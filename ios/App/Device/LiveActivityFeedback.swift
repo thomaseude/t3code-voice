@@ -9,6 +9,15 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
+    private var speaker = false
+
+    func showSpeaker(_ on: Bool) {
+        speaker = on
+        guard let activity else { return }
+        var state = activity.content.state
+        state.speaker = on
+        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+    }
 
     func show(_ state: SessionState) {
         switch state {
@@ -30,14 +39,14 @@ final class LiveActivityFeedback: SessionFeedback {
         end()
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(status: status), staleDate: nil),
+            content: ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil),
             pushType: nil
         )
     }
 
     private func update(status: String) {
         guard let activity else { return }
-        Task { await activity.update(ActivityContent(state: .init(status: status), staleDate: nil)) }
+        Task { await activity.update(ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil)) }
     }
 
     /// Ends every Live Activity of the app, also one left by a killed process: it would show

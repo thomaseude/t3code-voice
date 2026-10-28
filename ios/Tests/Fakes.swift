@@ -57,6 +57,8 @@ final class FakeVoiceCall: VoiceCall {
     var offer = "v=0 offer"
     var startError: Error?
     var acceptError: Error?
+    var speakerError: Error?
+    private(set) var speakerOn = false
     private(set) var acceptedAnswer: String?
     private(set) var hungUp = false
     private var onEvent: (@MainActor (VoiceCallEvent) async -> Void)?
@@ -80,14 +82,25 @@ final class FakeVoiceCall: VoiceCall {
     func emit(_ event: VoiceCallEvent) async {
         await onEvent?(event)
     }
+
+    func setSpeaker(_ on: Bool) throws {
+        if let speakerError { throw speakerError }
+        speakerOn = on
+    }
 }
 
 /// Records every state the user was shown (Live Activity, start sound, screen).
 @MainActor
 final class FakeFeedback: SessionFeedback {
+    /// Each time the speaker was shown on or off.
+    private(set) var speakerShown: [Bool] = []
     private(set) var shown: [SessionState] = []
 
     func show(_ state: SessionState) {
         shown.append(state)
+    }
+
+    func showSpeaker(_ on: Bool) {
+        speakerShown.append(on)
     }
 }

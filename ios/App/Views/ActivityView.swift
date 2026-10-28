@@ -73,6 +73,15 @@ struct ActivityView: View {
                     Label(session.state.label ?? "", systemImage: "mic.fill")
                         .foregroundStyle(.red)
                     Spacer()
+                    if case .live = session.state {
+                        Button { session.toggleSpeaker() } label: {
+                            Label("Haut-parleur", systemImage: session.speaker ? "speaker.wave.3.fill" : "speaker.fill")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(session.speaker ? Color.accentColor : Color.secondary)
+                        .accessibilityValue(session.speaker ? "Activé" : "Désactivé")
+                    }
                     Button("Fin", role: .destructive) { Task { await session.end() } }
                         .buttonStyle(.borderedProminent)
                 }

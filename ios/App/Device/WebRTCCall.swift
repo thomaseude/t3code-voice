@@ -18,6 +18,7 @@ final class WebRTCCall: VoiceCall {
     private var hungUp = false
     /// Only the call that activated the audio session deactivates it.
     private var audioActive = false
+    private var speakerObserver: NSObjectProtocol?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
         guard await AVAudioApplication.requestRecordPermission() else { throw VoiceCallError.microphoneDenied }
@@ -28,6 +29,7 @@ final class WebRTCCall: VoiceCall {
             let observer = CallObserver(onEvent: onEvent)
             self.observer = observer
             let peer = try makePeer(observer: observer)
+            watchSpeaker(observer: observer)
             let offer = try await peer.makeOffer()
             try stopIfHungUp()
             try await peer.setLocal(offer)
@@ -51,6 +53,13 @@ final class WebRTCCall: VoiceCall {
         }
     }
 
+    func setSpeaker(_ on: Bool) throws {
+        let audio = RTCAudioSession.sharedInstance()
+        audio.lockForConfiguration()
+        defer { audio.unlockForConfiguration() }
+        try audio.overrideOutputAudioPort(on ? .speaker : .none)
+    }
+
     func hangUp() {
         hungUp = true
         release()
@@ -70,6 +79,8 @@ final class WebRTCCall: VoiceCall {
         peer?.close()
         peer = nil
         observer = nil
+        if let speakerObserver { NotificationCenter.default.removeObserver(speakerObserver) }
+        speakerObserver = nil
         guard audioActive else { return }
         audioActive = false
         let audio = RTCAudioSession.sharedInstance()
@@ -94,7 +105,22 @@ final class WebRTCCall: VoiceCall {
         defer { audio.unlockForConfiguration() }
         try audio.setConfiguration(config, active: true)
         audioActive = true
+        // Each session starts on the earpiece or the headset, even if the last one used the speaker.
+        try? audio.overrideOutputAudioPort(.none)
         audio.isAudioEnabled = true
+    }
+
+    /// iOS drops the speaker when the route changes (a headset comes or goes). It never turns
+    /// the speaker on by itself: without `.defaultToSpeaker`, a headset lost goes to the earpiece.
+    private func watchSpeaker(observer: CallObserver) {
+        speakerObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] _ in
+            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
+            if !outputs.contains(.builtInSpeaker) { observer?.report(.speakerLost) }
+        }
     }
 
     private func makePeer(observer: CallObserver) throws -> RTCPeerConnection {
@@ -115,10 +141,10 @@ final class WebRTCCall: VoiceCall {
     }
 }
 
-/// WebRTC calls its delegates on its own threads: this passes the events that matter to the
-/// main actor, in the order they came, and only the first one that ends the call (the data
-/// channel closes right after `session.closed`). It reads only the type of each data channel
-/// message, never its content.
+/// WebRTC and the audio session call back on their own threads: this passes the events that
+/// matter to the main actor, in the order they came, and only the first one that ends the
+/// call (the data channel closes right after `session.closed`). It reads only the type of
+/// each data channel message, never its content.
 private final class CallObserver: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate {
     private let events: AsyncStream<VoiceCallEvent>.Continuation
     private let lock = NSLock()
@@ -137,11 +163,11 @@ private final class CallObserver: NSObject, RTCPeerConnectionDelegate, RTCDataCh
         events.finish()
     }
 
-    private func report(_ event: VoiceCallEvent) {
+    func report(_ event: VoiceCallEvent) {
         lock.lock()
         defer { lock.unlock() }
         guard !ended else { return }
-        if event != .sessionStarted { ended = true }
+        if event == .sessionClosed || event == .lost { ended = true }
         events.yield(event)
     }
 
