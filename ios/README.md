@@ -15,7 +15,8 @@ asks again.
 When a conversation already runs, starting again does nothing.
 
 - **In the app**: the "Parler" button.
-- **Siri**: say "Dis Siri, T3 Voix". "Dis Siri, parler à T3 Voix" works too.
+- **Siri**: say "Dis Siri, T3 Voix". "Dis Siri, parler à T3 Voix" works too. With Siri in
+  English, say "Hey Siri, talk to T3 Voice".
 - **Control Center**: open Control Center, tap "+" (top left), then "Ajouter une commande",
   and pick "Parler à T3" under T3 Voice.
 - **Action Button**: in Settings > Action Button, swipe to "Raccourci", tap "Choisir un

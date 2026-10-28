@@ -1,0 +1,4 @@
+/* The Siri phrases for Siri in English. The keys are the French phrases of T3VoiceShortcuts. */
+"${applicationName}" = "${applicationName}";
+"Parler à ${applicationName}" = "Talk to ${applicationName}";
+"Démarre ${applicationName}" = "Start ${applicationName}";
