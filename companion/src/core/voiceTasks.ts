@@ -527,9 +527,10 @@ export class VoiceTasks {
     // Several followed tasks fit: the user picks among them before any other thread.
     if (followed.result.status === "ambiguous_task") return followed;
     let match = findThread(shell, reference, shell.topLevelThreads());
-    // A bare project name never searches the archive: it would offer all of it.
-    if (match.kind === "none" && archived && !namesAProject(shell, reference)) {
-      match = findThread(shell, reference, shell.archivedThreads());
+    // A bare project name finds its project's only archived thread, never a list of them.
+    if (match.kind === "none" && archived) {
+      const inArchive = findThread(shell, reference, shell.archivedThreads());
+      if (!(inArchive.kind === "ambiguous" && namesAProject(shell, reference))) match = inArchive;
     }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };

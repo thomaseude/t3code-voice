@@ -308,16 +308,30 @@ describe("get_recent_messages", () => {
     assert.equal(result.task, "Refonte page offre");
   });
 
-  test("a bare project name never finds an archived thread, even a single one", async () => {
+  test("a bare project name finds its project's only archived thread", async () => {
     const { call, state } = await setup({
       threads: [RUNNING, thread("t2", { title: "Fix tests", projectId: "p2", archived: true })],
     });
     state.apply({ type: "project.updated", sequence: 2, project: project("p2", "Totem") });
 
-    assert.deepEqual(await call("summarize_thread", { task: "Totem" }), {
-      error: "unknown_task",
-      followed: ["tests Reviews"],
+    const result = (await call("summarize_thread", { task: "Totem" })) as { task: string };
+
+    assert.equal(result.task, "Fix tests");
+  });
+
+  test("an archived thread is found by its exact title, even when a project has that word", async () => {
+    const { call, state } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Voice", projectId: "p2", archived: true }),
+        thread("t3", { title: "Refonte", projectId: "p2", archived: true }),
+      ],
     });
+    state.apply({ type: "project.updated", sequence: 2, project: project("p2", "t3code-voice") });
+
+    const result = (await call("summarize_thread", { task: "voice" })) as { task: string };
+
+    assert.equal(result.task, "Voice");
   });
 
   test("a bare project name never lists the project's whole archive", async () => {
@@ -406,6 +420,23 @@ describe("get_recent_messages", () => {
     };
 
     assert.equal(result.status, "completed");
+  });
+
+  test("a huge run of spaces is cut quickly", async () => {
+    const { call, backend } = await setup();
+    backend.messages.set("t1", [
+      {
+        role: "assistant",
+        text: `début${" ".repeat(200_000)}fin`,
+        runId: null,
+        createdAt: "2026-10-26T10:00Z",
+      },
+    ]);
+
+    const started = performance.now();
+    await call("get_recent_messages", { task: "tests Reviews" });
+
+    assert.ok(performance.now() - started < 500, "the event loop is never blocked for long");
   });
 
   test("a huge message with no space is cut quickly", async () => {

@@ -117,8 +117,8 @@ During a session the companion answers the voice model's tools from T3's state:
   true`). `older` is a cursor: passed back as `before`, it reads the messages just older.
   Tool calls and diffs are not messages;
 - both reading tools take a followed task's spoken name, else the title of any thread,
-  archived ones too when no active thread fits; a bare project name ("Joombo") never
-  searches the archive. They
+  archived ones too when no active thread fits. A bare project name ("Joombo") finds its
+  project's only archived thread, never a list of them. They
   give T3's state even for a result the user dismissed in T3, `queued` for a run that waits
   its turn, and `idle` for a thread with no run. They read the whole thread over T3's HTTP
   route `GET /api/orchestration/threads/:id`: the WebSocket's projection is only a window

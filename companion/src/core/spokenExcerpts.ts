@@ -38,8 +38,12 @@ export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
  * marker: "1. Lance :" then 4 spaces is a second paragraph of the item, 7 spaces is code.
  */
 function withoutCodeBlocks(text: string): string {
-  // The name keeps the fence's indentation: it ends a list exactly when the fence does.
-  const unfenced = text.replace(/([ \t]*)(```|~~~)[\s\S]*?(?:\2|$)/g, `\n$1${CODE_BLOCK}\n`);
+  // The name keeps the fence's indentation: it ends a list exactly when the fence does. A
+  // match starts only where a run of spaces starts, to stay quick on long runs.
+  const unfenced = text.replace(
+    /(?<![ \t])([ \t]*)(```|~~~)[\s\S]*?(?:\2|$)/g,
+    `\n$1${CODE_BLOCK}\n`,
+  );
   const lines: string[] = [];
   let inBlock = false;
   // Where the text of the current list item starts, or 0 outside a list.
