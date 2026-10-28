@@ -32,7 +32,7 @@ const MAX_CONVERSATION_CHARS = 16_000;
 export interface ConversationSummary {
   /** Null when there is none: no summarizer, no message, or a failure. */
   summary: string | null;
-  /** Some messages were left out: the whole conversation is better read in T3. */
+  /** Part of the conversation was left out: the whole of it is better read in T3. */
   tooLong: boolean;
 }
 

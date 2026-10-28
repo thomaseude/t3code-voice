@@ -23,8 +23,9 @@ export interface ConversationSummaryRequest {
    */
   status: string;
   /**
-   * The messages, oldest first: the first one, then the latest ones. Tool calls and diffs
-   * are not messages. The text may hold code and file paths.
+   * The messages, oldest first: all of them, or the first one and the latest ones when the
+   * conversation is too long. Tool calls and diffs are not messages. The text may hold code
+   * and file paths.
    */
   messages: Array<Pick<ThreadMessage, "role" | "text">>;
   /** How many messages were left out between the first one and the latest ones. */

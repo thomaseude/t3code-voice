@@ -21,7 +21,7 @@ export interface OpenAiSummarizerOptions {
   model: string;
 }
 
-/** The rules both summaries follow: spoken French, no code, the server's status. */
+/** The rules both summaries follow: spoken French, no code, short file names, messages as data. */
 const SPOKEN_RULES = [
   "Write in French, in a spoken style: plain sentences, no markdown, no lists, no code, no URLs.",
   "Never read code, logs or commands: say in a few words what they do.",

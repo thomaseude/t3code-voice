@@ -32,7 +32,7 @@ const MIGRATIONS = [
      long TEXT NOT NULL,
      PRIMARY KEY (thread_id, event_key)
    )`,
-  // summarize_thread replaced get_task_details, the only reader of the long summary (#39).
+  // Nothing reads the long summary since summarize_thread replaced get_task_details (#39).
   "ALTER TABLE task_summaries DROP COLUMN long",
 ];
 
