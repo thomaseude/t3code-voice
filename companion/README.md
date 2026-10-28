@@ -108,7 +108,7 @@ During a session the companion answers the voice model's tools from T3's state:
   <project>";
 - `summarize_thread` gives a task's status from T3 and a spoken summary of its whole
   conversation, also while the agent runs. When T3's status changes while the summary is
-  made, the new status comes with no summary, with the cause and `resumes_at` of a failure.
+  made, the new status comes with no summary. A failure also gives its cause and `resumes_at`.
   `too_long: true` means part of the conversation was left out: the assistant suggests
   opening T3;
 - `get_recent_messages` gives a task's last messages (3 by default, at most 10), oldest
