@@ -19,7 +19,7 @@ import type {
   ThreadPage,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
-import { awarenessOf, eventKeyOf, threadStatusOf } from "./awareness.ts";
+import { awarenessOf, eventKeyOf, readingStatusOf } from "./awareness.ts";
 import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
@@ -64,6 +64,9 @@ const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "co
 /** How many messages get_recent_messages reads when the model does not say, and at most. */
 const DEFAULT_MESSAGE_COUNT = 3;
 const MAX_MESSAGE_COUNT = 10;
+
+/** How many times summarize_thread makes the summary while T3's status keeps changing. */
+const SUMMARY_ATTEMPTS = 3;
 
 /** Who wrote a message, in the words the voice model gets. */
 const SPEAKERS = { user: "user", assistant: "agent", system: "t3" } as const;
@@ -296,7 +299,7 @@ export class VoiceTasks {
     if (followed.kind === "found") {
       return { status: "already_followed", task: followed.task.spokenName };
     }
-    const match = findThread(shell, reference);
+    const match = findThread(shell, reference, shell.topLevelThreads());
     if (match.kind === "none") return { error: "unknown_task" };
     if (match.kind === "ambiguous") return match.result;
     const thread: Thread = match.thread;
@@ -335,33 +338,37 @@ export class VoiceTasks {
     if (reference === null) return { error: "invalid_arguments" };
     const shell = this.options.shell();
     if (shell === null) return { error: "t3_unavailable" };
-    const match = this.findTask(shell, reference);
+    const match = this.findTask(shell, reference, { archived: true });
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
-    let status = threadStatusOf(thread);
-    let conversation: ConversationSummary;
+    // The run may change while it is summarized: the summary is made again for T3's new
+    // status, so that it never contradicts the status the tool gives.
+    let current = thread;
+    let conversation: ConversationSummary = { summary: null, tooLong: false };
+    let settled = false;
     try {
-      conversation = await this.options.summaries.conversationSummaryOf(thread, status);
-      // The run may have changed while it was summarized: the summary must not contradict T3.
-      const now = this.options.shell()?.threads.get(thread.id);
-      if (now !== undefined && threadStatusOf(now) !== status) {
-        status = threadStatusOf(now);
-        conversation = await this.options.summaries.conversationSummaryOf(now, status);
+      for (let attempt = 0; attempt < SUMMARY_ATTEMPTS && !settled; attempt++) {
+        const status = readingStatusOf(current);
+        conversation = await this.options.summaries.conversationSummaryOf(current, status);
+        const now = this.options.shell()?.threads.get(thread.id) ?? current;
+        settled = readingStatusOf(now) === status;
+        current = now;
       }
     } catch (error) {
       return this.failed("summarize_thread", error);
     }
+    const status = readingStatusOf(current);
     const details: ToolResult = {
       task: name,
-      project: shell.projects.get(thread.projectId)?.title ?? null,
+      project: shell.projects.get(current.projectId)?.title ?? null,
       status,
-      summary: conversation.summary,
+      summary: settled ? conversation.summary : null,
       too_long: conversation.tooLong,
     };
     if (status === "failed") {
-      details.failure = thread.lastError?.failureClass ?? "unknown";
-      details.resumes_at = thread.lastError?.resumesAt ?? null;
+      details.failure = current.lastError?.failureClass ?? "unknown";
+      details.resumes_at = current.lastError?.resumesAt ?? null;
     }
     return details;
   }
@@ -384,7 +391,7 @@ export class VoiceTasks {
     }
     const shell = this.options.shell();
     if (shell === null) return { error: "t3_unavailable" };
-    const match = this.findTask(shell, reference);
+    const match = this.findTask(shell, reference, { archived: true });
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
@@ -397,10 +404,12 @@ export class VoiceTasks {
     } catch (error) {
       return this.failed("get_recent_messages", error);
     }
+    // Read after the messages: a run that ended meanwhile is not told as running.
+    const now = this.options.shell()?.threads.get(thread.id) ?? thread;
     return {
       task: name,
       project: shell.projects.get(thread.projectId)?.title ?? null,
-      status: threadStatusOf(thread),
+      status: readingStatusOf(now),
       messages: page.messages.map((message) => {
         const { excerpt, cut } = spokenExcerpt(message.text);
         return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };
@@ -506,10 +515,14 @@ export class VoiceTasks {
     return projectFolder();
   }
 
-  /** A followed task by its spoken name, else any thread by its title. */
+  /**
+   * A followed task by its spoken name, else any thread by its title. With `archived`, an
+   * archived thread is found too, when no active one fits.
+   */
   private findTask(
     shell: ShellState,
     reference: string,
+    { archived = false } = {},
   ): { kind: "found"; thread: Thread; name: string } | { kind: "other"; result: ToolResult } {
     const followed = this.findFollowed(reference);
     if (followed.kind === "found") {
@@ -519,7 +532,13 @@ export class VoiceTasks {
     }
     // Several followed tasks fit: the user picks among them before any other thread.
     if (followed.result.status === "ambiguous_task") return followed;
-    const match = findThread(shell, reference);
+    let match = findThread(shell, reference, shell.topLevelThreads());
+    if (match.kind === "none" && archived) {
+      const archivedThreads = [...shell.threads.values()].filter(
+        (thread) => thread.archived && !thread.isSubagent,
+      );
+      match = findThread(shell, reference, archivedThreads);
+    }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };
     return { kind: "found", thread: match.thread, name: match.thread.title };
@@ -582,11 +601,10 @@ type ThreadMatch =
   | { kind: "none" };
 
 /**
- * A thread by its title; when no title fits, by its title and project together. Two threads
+ * One of `threads` by its title; when no title fits, by its title and project together. Two threads
  * with one title are then offered as "Fix tests sur Joombo", which finds one when repeated.
  */
-function findThread(shell: ShellState, reference: string): ThreadMatch {
-  const threads = shell.topLevelThreads();
+function findThread(shell: ShellState, reference: string, threads: Thread[]): ThreadMatch {
   const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
   const byTitle = findByName(reference, threads, (thread) => thread.title);
   const match =

@@ -5,7 +5,7 @@ import { after, before, describe, test } from "node:test";
 import {
   exchangePairingCredential,
   fetchDescriptor,
-  fetchThreadProjection,
+  fetchWholeThreadProjection,
   issueWebSocketTicket,
   parsePairingCredential,
   T3HttpError,
@@ -192,7 +192,7 @@ describe("issueWebSocketTicket", () => {
   });
 });
 
-describe("fetchThreadProjection", () => {
+describe("fetchWholeThreadProjection", () => {
   test("reads the whole thread with the bearer token and protocol 2", async () => {
     routes = {
       "GET /api/orchestration/threads/t%201": (request, _body, response) =>
@@ -202,16 +202,21 @@ describe("fetchThreadProjection", () => {
           : json(response, 401, {}),
     };
 
-    assert.deepEqual(await fetchThreadProjection(baseUrl, "my-token", "t 1"), { messages: [] });
+    assert.deepEqual(await fetchWholeThreadProjection(baseUrl, "my-token", "t 1"), {
+      messages: [],
+    });
   });
 
   test("an unknown thread fails with T3's status", async () => {
     routes = {};
 
-    await assert.rejects(fetchThreadProjection(baseUrl, "my-token", "gone"), (error: unknown) => {
-      assert.ok(error instanceof T3HttpError);
-      assert.equal(error.status, 404);
-      return true;
-    });
+    await assert.rejects(
+      fetchWholeThreadProjection(baseUrl, "my-token", "gone"),
+      (error: unknown) => {
+        assert.ok(error instanceof T3HttpError);
+        assert.equal(error.status, 404);
+        return true;
+      },
+    );
   });
 });

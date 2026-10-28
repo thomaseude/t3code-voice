@@ -131,7 +131,10 @@ export class FakeT3Backend implements T3Backend {
   }
   /** Messages of each thread, by thread id. A message with no id gets "m<its index>". */
   readonly messages = new Map<string, Array<Omit<ThreadMessage, "id"> & { id?: string }>>();
+  /** While set, readThread waits for it, like a T3 slow to answer. */
+  readGate: Promise<void> | null = null;
   async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<ThreadPage> {
+    if (this.readGate !== null) await this.readGate;
     if (this.failNextCommand === "read") {
       this.failNextCommand = false;
       throw new Error("T3 did not answer.");
@@ -393,6 +396,8 @@ export class FakeSummarizer implements Summarizer {
 
   async summarizeConversation(request: ConversationSummaryRequest) {
     this.conversations.push(request);
+    const own = this.nextGates.shift();
+    if (own !== undefined) await own;
     if (this.gate !== null) await this.gate;
     if (this.failNext) {
       this.failNext = false;

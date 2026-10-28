@@ -7,7 +7,7 @@ import type { Clock } from "../ports/clock.ts";
 import type { ConversationSummaryRequest, Summarizer, TaskSummary } from "../ports/summarizer.ts";
 import type { T3Backend, Thread, ThreadMessage } from "../ports/t3Backend.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
-import type { ThreadStatus } from "./awareness.ts";
+import type { ReadingStatus } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
 
 export interface TaskSummariesOptions {
@@ -70,7 +70,7 @@ export class TaskSummaries {
    * A summary of the thread's conversation so far, also while a run goes on. `status` is
    * T3's: the summary is made again when it changes, or when the last message does.
    */
-  async conversationSummaryOf(thread: Thread, status: ThreadStatus): Promise<ConversationSummary> {
+  async conversationSummaryOf(thread: Thread, status: ReadingStatus): Promise<ConversationSummary> {
     const { summarizer } = this.options;
     if (summarizer === null) return { summary: null, tooLong: false };
     const { messages } = await this.options.backend.readThread(thread.id);
@@ -80,14 +80,8 @@ export class TaskSummaries {
     const key = `${last.id}|${last.text.length}|${status}`;
     const kept = this.conversations.get(thread.id);
     if (kept?.key === key) return kept.summary;
-    const tooLong =
-      messages.reduce((total, message) => total + message.text.length, 0) > MAX_CONVERSATION_CHARS;
-    const summary = this.makeConversation(
-      summarizer,
-      thread,
-      conversationRequest(messages, status),
-      tooLong,
-    );
+    const { request, tooLong } = conversationRequest(messages, status);
+    const summary = this.makeConversation(summarizer, thread, request, tooLong);
     this.conversations.set(thread.id, { key, summary });
     // A failure is not kept: asking again tries again.
     summary.then(({ summary: text }) => {
@@ -193,19 +187,22 @@ function lastRunOf(
 }
 
 /**
- * What the summarizer reads of a conversation: the first message, which is often the user's
- * request, then as many of the latest messages as MAX_CONVERSATION_CHARS allows. A newest
- * message too long to fit keeps its end, where the agent concludes.
+ * What the summarizer reads of a conversation: all of it when it fits in
+ * MAX_CONVERSATION_CHARS. Else the first message, which is often the user's request, then as
+ * many of the latest messages as fit, and `tooLong`. A newest message too long to fit keeps
+ * its end, where the agent concludes.
  */
 function conversationRequest(
   messages: ThreadMessage[],
   status: string,
-): ConversationSummaryRequest {
+): { request: ConversationSummaryRequest; tooLong: boolean } {
   const all = messages.map(({ role, text }) => ({ role, text }));
   const total = all.reduce((sum, message) => sum + message.text.length, 0);
-  if (total <= MAX_CONVERSATION_CHARS) return { status, messages: all, omitted: 0 };
+  if (total <= MAX_CONVERSATION_CHARS) {
+    return { request: { status, messages: all, omitted: 0 }, tooLong: false };
+  }
   const [first, ...rest] = all;
-  if (first === undefined) return { status, messages: [], omitted: 0 };
+  if (first === undefined) return { request: { status, messages: [], omitted: 0 }, tooLong: false };
   const head = { ...first, text: first.text.slice(0, MAX_CONVERSATION_CHARS / 4) };
   let room = MAX_CONVERSATION_CHARS - head.text.length;
   const latest: ConversationSummaryRequest["messages"] = [];
@@ -217,5 +214,8 @@ function conversationRequest(
     latest.unshift({ ...message, text });
     room -= text.length;
   }
-  return { status, messages: [head, ...latest], omitted: rest.length - latest.length };
+  return {
+    request: { status, messages: [head, ...latest], omitted: rest.length - latest.length },
+    tooLong: true,
+  };
 }

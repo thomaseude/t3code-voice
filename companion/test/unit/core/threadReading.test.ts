@@ -206,6 +206,9 @@ describe("get_recent_messages", () => {
       "Avant :\n\n~~~ruby\nnotes.blank?\n~~~\n\nAprès.",
       "Lance :\n\n    bin/rails test\n    bin/rails db:migrate\n\nPuis vérifie.",
       "Étapes :\n\n- un\n    - sous-point",
+      "1. Étape\n\n    suite de l'étape un\n\n2. Étape deux",
+      "    npm test\n\nC'est tout.",
+      "Voir C:\\Users\\Thomas\\joombo\\src\\main.ts et D:\\logs\\run.log.",
     ];
     backend.messages.set(
       "t1",
@@ -217,7 +220,7 @@ describe("get_recent_messages", () => {
       })),
     );
 
-    const result = (await call("get_recent_messages", { task: "tests Reviews", count: 5 })) as {
+    const result = (await call("get_recent_messages", { task: "tests Reviews", count: 8 })) as {
       messages: Array<{ excerpt: string }>;
     };
 
@@ -229,8 +232,71 @@ describe("get_recent_messages", () => {
         "Avant : (bloc de code) Après.",
         "Lance : (bloc de code) Puis vérifie.",
         "Étapes : un sous-point",
+        "Étape suite de l'étape un Étape deux",
+        "(bloc de code) C'est tout.",
+        "Voir main.ts et run.log.",
       ],
     );
+  });
+
+  test("the status comes from T3 after the messages are read, not before", async () => {
+    const { engine, backend, state } = await setup();
+    let release = () => {};
+    backend.readGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "read",
+      name: "get_recent_messages",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    state.apply({
+      type: "thread.updated",
+      sequence: 2,
+      thread: { ...RUNNING, status: "completed" },
+    });
+    release();
+    await settle();
+
+    const result = engine.last.toolResults[0]?.result as { status: string };
+    assert.equal(result.status, "completed");
+  });
+
+  test("an archived thread can be read, by its title", async () => {
+    const { call, backend } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Refonte page offre", status: "completed", archived: true }),
+      ],
+    });
+    backend.messages.set("t2", [
+      { role: "user", text: "Refais la page offre", runId: null, createdAt: "2026-10-26T09:00Z" },
+    ]);
+
+    const result = (await call("get_recent_messages", { task: "refonte page offre" })) as {
+      task: string;
+    };
+
+    assert.equal(result.task, "Refonte page offre");
+  });
+
+  test("an active thread is found before an archived one with the same title", async () => {
+    const { call } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Page offre", archived: true }),
+        thread("t3", { title: "Page offre", status: "completed" }),
+      ],
+    });
+
+    const result = (await call("summarize_thread", { task: "page offre" })) as {
+      status: string;
+    };
+
+    assert.equal(result.status, "completed");
   });
 
   test("a huge message with no space is cut quickly", async () => {
@@ -495,6 +561,77 @@ describe("summarize_thread", () => {
     const result = engine.last.toolResults[0]?.result as { status: string; summary: string };
     assert.equal(result.status, "completed");
     assert.equal(result.summary, "Résumé (completed) de 4 messages, dont : J'écris le test.");
+  });
+
+  test("a run that fails while it is summarized gives the failure's cause", async () => {
+    const { engine, summarizer, state } = await setup();
+    let release = () => {};
+    summarizer.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "race",
+      name: "summarize_thread",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    state.apply({
+      type: "thread.updated",
+      sequence: 2,
+      thread: {
+        ...RUNNING,
+        status: "failed",
+        lastError: {
+          message: "Usage limit reached",
+          failureClass: "usage_limit",
+          resumesAt: "2026-10-26T15:00:00.000Z",
+          autoResume: false,
+        },
+      },
+    });
+    release();
+    await settle();
+
+    const result = engine.last.toolResults[0]?.result as Record<string, unknown>;
+    assert.equal(result.status, "failed");
+    assert.equal(result.failure, "usage_limit");
+    assert.equal(result.resumes_at, "2026-10-26T15:00:00.000Z");
+  });
+
+  test("a status that keeps changing while it is summarized gives no summary rather than a wrong one", async () => {
+    const { engine, summarizer, state } = await setup();
+    const gates: Array<() => void> = [];
+    for (let index = 0; index < 3; index++) {
+      summarizer.nextGates.push(
+        new Promise((resolve) => {
+          gates.push(resolve);
+        }),
+      );
+    }
+    const statuses = ["completed", "failed", "idle"];
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "race",
+      name: "summarize_thread",
+      arguments: { task: "tests Reviews" },
+    });
+    for (const [index, status] of statuses.entries()) {
+      await settle();
+      state.apply({
+        type: "thread.updated",
+        sequence: index + 2,
+        thread: { ...RUNNING, status },
+      });
+      gates[index]?.();
+    }
+    await settle();
+
+    const result = engine.last.toolResults[0]?.result as { status: string; summary: unknown };
+    assert.equal(result.status, "idle");
+    assert.equal(result.summary, null);
   });
 
   test("a long first request is sent whole when the conversation fits", async () => {

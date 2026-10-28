@@ -2,7 +2,7 @@
 // token exchange, the short-lived WebSocket ticket, and the whole projection of a thread.
 
 import { REQUIRED_T3_SCOPES, type T3Pairing } from "../../ports/t3Backend.ts";
-import type { EnvironmentDescriptor } from "./compatibility.ts";
+import { type EnvironmentDescriptor, SUPPORTED_ORCHESTRATION_PROTOCOL } from "./compatibility.ts";
 import type { WireJson } from "./wire.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -102,7 +102,7 @@ export async function issueWebSocketTicket(baseUrl: string, token: string): Prom
  * The whole projection of a thread. The WebSocket's `getThreadProjection` only gives a
  * window of its recent turns (about 10 user turns in T3 0.1.0 and 0.1.1).
  */
-export async function fetchThreadProjection(
+export async function fetchWholeThreadProjection(
   baseUrl: string,
   token: string,
   threadId: string,
@@ -112,7 +112,10 @@ export async function fetchThreadProjection(
     `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
     {
       method: "GET",
-      headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-t3-orchestration-protocol": String(SUPPORTED_ORCHESTRATION_PROTOCOL),
+      },
     },
   );
   return body?.projection;

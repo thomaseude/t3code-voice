@@ -31,15 +31,15 @@ export function awarenessOf(thread: Thread): Awareness | null {
   return state;
 }
 
-/** What a thread is doing, for the tools that read it. */
-export type ThreadStatus = Awareness | "queued" | "idle";
+/** What a thread is doing, for the tools that read it (T3's raw status is `Thread.status`). */
+export type ReadingStatus = Awareness | "queued" | "idle";
 
 /**
  * T3's state of the thread, also for a result the user dismissed in T3: a tool that reads a
  * thread tells what it is, an announcement only what is news. A run waiting in T3's queue is
  * "queued"; a thread with no run, or whose run was stopped, is "idle".
  */
-export function threadStatusOf(thread: Thread): ThreadStatus {
+export function readingStatusOf(thread: Thread): ReadingStatus {
   const state = stateOf(thread);
   if (state !== null) return state;
   return (thread.activeRunStatus ?? thread.status) === "queued" ? "queued" : "idle";

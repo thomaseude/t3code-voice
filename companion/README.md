@@ -115,7 +115,8 @@ During a session the companion answers the voice model's tools from T3's state:
   file name, a link keeps its words, and an excerpt stops at about 400 characters (`cut:
   true`). `older` is a cursor: passed back as `before`, it reads the messages just older.
   Tool calls and diffs are not messages;
-- both reading tools take a followed task's spoken name, else the title of any thread. They
+- both reading tools take a followed task's spoken name, else the title of any thread,
+  archived ones too when no active thread fits. They
   give T3's state even for a result the user dismissed in T3, `queued` for a run that waits
   its turn, and `idle` for a thread with no run. They read the whole thread over T3's HTTP
   route `GET /api/orchestration/threads/:id`: the WebSocket's projection is only a window

@@ -13,6 +13,9 @@ const MAX_SOURCE_CHARS = 4_000;
 
 const CODE_BLOCK = "(bloc de code)";
 
+/** A Markdown list item: "- un", "* un", "1. un", "2) deux". */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+
 /** The start of `text`, ready to be spoken; `cut` when the rest is left out. */
 export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
   const source = withoutCodeBlocks(text);
@@ -30,16 +33,20 @@ export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
 
 /**
  * `text` with each Markdown code block replaced by CODE_BLOCK: a block fenced with ``` or ~~~
- * (closed or not), and a block of lines indented by 4 spaces or a tab after an empty line.
- * An indented list item ("    - sous-point") is not code.
+ * (closed or not), and a block of lines indented by 4 spaces or a tab, at the start or after
+ * an empty line. What is indented inside a list (a sub-item, a second paragraph of an item)
+ * is not code.
  */
 function withoutCodeBlocks(text: string): string {
   const unfenced = text.replace(/(```|~~~)[\s\S]*?(?:\1|$)/g, `\n${CODE_BLOCK}\n`);
   const lines: string[] = [];
   let inBlock = false;
+  let inList = false;
   for (const line of unfenced.split("\n")) {
-    const indented = /^(?: {4}|\t)/.test(line) && !/^\s*(?:[-*+]|\d+[.)])\s/.test(line);
-    if (indented && (inBlock || lines.at(-1)?.trim() === "")) {
+    const indented = /^(?: {4}|\t)/.test(line);
+    if (line.trim() !== "" && !indented) inList = LIST_ITEM.test(line);
+    const afterBreak = lines.length === 0 || lines.at(-1)?.trim() === "";
+    if (indented && !inList && (inBlock || afterBreak)) {
       if (!inBlock) lines.push(CODE_BLOCK);
       inBlock = true;
       continue;
@@ -66,6 +73,8 @@ function spokenText(text: string): string {
         (path: string, name: string) =>
           /^[~./]/.test(path) || /\.[A-Za-z]\w*$/.test(name) ? name : path,
       )
+      // A Windows path keeps its file name too: "C:\Users\me\main.ts" gives "main.ts".
+      .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)*([^\\\s]+)/g, "$1")
       .replace(/`([^`]*)`/g, "$1")
       .split("\n")
       .map(spokenLine)
@@ -81,7 +90,7 @@ function spokenLine(line: string): string {
   const heading = /^\s*#+\s+/.test(line);
   const words = line
     .replace(/^\s*#+\s+/, "")
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
+    .replace(LIST_ITEM, "")
     .replace(/\*\*|__|(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)/g, "")
     .trim();
   return heading && words !== "" && !/[.!?:]$/.test(words) ? `${words}.` : words;

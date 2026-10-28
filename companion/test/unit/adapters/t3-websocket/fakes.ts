@@ -124,7 +124,7 @@ export class FakeTransport implements T3Transport {
   readonly threads = new Map<string, unknown>();
   readonly threadReads: string[] = [];
 
-  async fetchThreadProjection(threadId: string): Promise<unknown> {
+  async fetchWholeThreadProjection(threadId: string): Promise<unknown> {
     this.threadReads.push(threadId);
     return this.threads.get(threadId) ?? {};
   }
