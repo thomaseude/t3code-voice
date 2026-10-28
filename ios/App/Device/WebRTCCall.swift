@@ -115,7 +115,7 @@ final class WebRTCCall: VoiceCall {
     }
 
     /// iOS drops the speaker when a headset comes or goes. It never turns the speaker on by
-    /// itself: without `.defaultToSpeaker`, a headset lost goes to the earpiece.
+    /// itself: without `.defaultToSpeaker`, the voice goes to the earpiece when a headset goes away.
     private func watchRouteChanges(observer: CallObserver) {
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,

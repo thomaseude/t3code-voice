@@ -203,7 +203,7 @@ final class VoiceSessionController: ObservableObject {
     /// The Speaker button, in the app or on the Live Activity.
     func toggleSpeaker() {
         if state == .idle {
-            // As for End: the Live Activity of a killed app still shows the microphone.
+            // Like End: after the app was killed, its Live Activity still shows the microphone.
             feedback.show(.idle)
             return
         }
@@ -224,9 +224,8 @@ final class VoiceSessionController: ObservableObject {
         case .sessionClosed:
             await finish(.voice)
         case .routeChanged:
-            // iOS drops the speaker when a headset comes or goes. The event may come after a
-            // later tap turned it on again, so the route is read now. Only ever turns the
-            // speaker off (spec #15, "Audio").
+            // The event can arrive after a tap turned the speaker on again, so read the route
+            // now. A route change only ever turns the speaker off (spec #15, "Audio").
             if !call.outputIsSpeaker { showSpeaker(false) }
         case .lost:
             await finish(.error(.lost))
