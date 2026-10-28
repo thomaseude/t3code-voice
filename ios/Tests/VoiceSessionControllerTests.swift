@@ -333,6 +333,15 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(feedback.speakerShown, [])
     }
 
+    func testTheSpeakerButtonWithoutASessionClearsALeftoverLiveActivity() async {
+        // The app was killed during a session: its Speaker button starts a new app process
+        // with no session, like the End button.
+        controller.toggleSpeaker()
+
+        XCTAssertEqual(feedback.shown, [.idle])
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
     func testARouteChangeReportedBeforeATapDoesNotTurnTheSpeakerButtonOff() async {
         // The route change of AirPods connecting arrives after the user turned the speaker on:
         // the voice is on the speaker, so the button must say so.

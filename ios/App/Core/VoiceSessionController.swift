@@ -202,6 +202,11 @@ final class VoiceSessionController: ObservableObject {
 
     /// The Speaker button, in the app or on the Live Activity.
     func toggleSpeaker() {
+        if state == .idle {
+            // As for End: the Live Activity of a killed app still shows the microphone.
+            feedback.show(.idle)
+            return
+        }
         guard case .live = state, let call else { return }
         do {
             try call.setSpeaker(!speaker)

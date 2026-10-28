@@ -9,49 +9,47 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
-    /// Each update sends all three, so one never brings back what another replaced.
-    private var live = false
-    private var speaker = false
-    private var status = ""
+    /// What the Live Activity shows. Each event changes its own field and sends the whole
+    /// state, so one update never brings back what another replaced.
+    private var content = VoiceActivityAttributes.ContentState(live: false, speaker: false, status: "")
 
     func showSpeaker(_ on: Bool) {
-        speaker = on
-        update(status: status, live: live)
+        content.speaker = on
+        update()
     }
 
     func show(_ state: SessionState) {
+        content.status = state.label ?? ""
+        content.live = false
         switch state {
         case .idle:
             end()
         case .authenticating:
             break
         case .connecting:
-            start(status: state.label ?? "")
+            start()
         case .live:
             playStartSound()
-            update(status: state.label ?? "", live: true)
+            content.live = true
+            update()
         case .ending:
-            update(status: state.label ?? "", live: false)
+            update()
         }
     }
 
-    private func start(status: String) {
+    private func start() {
         end()
-        self.status = status
-        live = false
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(live: live, speaker: speaker, status: status), staleDate: nil),
+            content: ActivityContent(state: content, staleDate: nil),
             pushType: nil
         )
     }
 
-    private func update(status: String, live: Bool) {
-        self.status = status
-        self.live = live
+    private func update() {
         guard let activity else { return }
-        let state = VoiceActivityAttributes.ContentState(live: live, speaker: speaker, status: status)
-        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+        let content = self.content
+        Task { await activity.update(ActivityContent(state: content, staleDate: nil)) }
     }
 
     /// Ends every Live Activity of the app, also one left by a killed process: it would show

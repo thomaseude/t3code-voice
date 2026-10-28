@@ -18,7 +18,7 @@ final class WebRTCCall: VoiceCall {
     private var hungUp = false
     /// Only the call that activated the audio session deactivates it.
     private var audioActive = false
-    private var speakerObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
         guard await AVAudioApplication.requestRecordPermission() else { throw VoiceCallError.microphoneDenied }
@@ -29,7 +29,7 @@ final class WebRTCCall: VoiceCall {
             let observer = CallObserver(onEvent: onEvent)
             self.observer = observer
             let peer = try makePeer(observer: observer)
-            watchSpeaker(observer: observer)
+            watchRouteChanges(observer: observer)
             let offer = try await peer.makeOffer()
             try stopIfHungUp()
             try await peer.setLocal(offer)
@@ -83,8 +83,8 @@ final class WebRTCCall: VoiceCall {
         peer?.close()
         peer = nil
         observer = nil
-        if let speakerObserver { NotificationCenter.default.removeObserver(speakerObserver) }
-        speakerObserver = nil
+        if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
+        routeChangeObserver = nil
         guard audioActive else { return }
         audioActive = false
         let audio = RTCAudioSession.sharedInstance()
@@ -116,8 +116,8 @@ final class WebRTCCall: VoiceCall {
 
     /// iOS drops the speaker when a headset comes or goes. It never turns the speaker on by
     /// itself: without `.defaultToSpeaker`, a headset lost goes to the earpiece.
-    private func watchSpeaker(observer: CallObserver) {
-        speakerObserver = NotificationCenter.default.addObserver(
+    private func watchRouteChanges(observer: CallObserver) {
+        routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: nil
