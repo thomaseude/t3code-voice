@@ -9,13 +9,14 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
-    /// Each update sends both, so one never brings back what the other replaced.
+    /// Each update sends all three, so one never brings back what another replaced.
+    private var live = false
     private var speaker = false
     private var status = ""
 
     func showSpeaker(_ on: Bool) {
         speaker = on
-        update(status: status)
+        update(status: status, live: live)
     }
 
     func show(_ state: SessionState) {
@@ -28,26 +29,29 @@ final class LiveActivityFeedback: SessionFeedback {
             start(status: state.label ?? "")
         case .live:
             playStartSound()
-            update(status: state.label ?? "")
+            update(status: state.label ?? "", live: true)
         case .ending:
-            update(status: state.label ?? "")
+            update(status: state.label ?? "", live: false)
         }
     }
 
     private func start(status: String) {
         end()
         self.status = status
+        live = false
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil),
+            content: ActivityContent(state: .init(live: live, speaker: speaker, status: status), staleDate: nil),
             pushType: nil
         )
     }
 
-    private func update(status: String) {
+    private func update(status: String, live: Bool) {
         self.status = status
+        self.live = live
         guard let activity else { return }
-        Task { await activity.update(ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil)) }
+        let state = VoiceActivityAttributes.ContentState(live: live, speaker: speaker, status: status)
+        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
     }
 
     /// Ends every Live Activity of the app, also one left by a killed process: it would show

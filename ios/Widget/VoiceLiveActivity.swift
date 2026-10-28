@@ -18,7 +18,7 @@ struct VoiceLiveActivity: Widget {
                 Text(context.attributes.startedAt, style: .timer)
                     .monospacedDigit()
                     .frame(maxWidth: 60)
-                SpeakerButton(on: context.state.speaker)
+                if context.state.live { SpeakerButton(on: context.state.speaker) }
                 EndButton()
             }
             .padding()
@@ -32,7 +32,7 @@ struct VoiceLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     HStack {
-                        SpeakerButton(on: context.state.speaker)
+                        if context.state.live { SpeakerButton(on: context.state.speaker) }
                         EndButton()
                     }
                 }
