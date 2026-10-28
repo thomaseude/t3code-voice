@@ -314,7 +314,7 @@ final class VoiceSessionControllerTests: XCTestCase {
         await startLiveSession()
         controller.toggleSpeaker()
 
-        await call.emit(.speakerLost)
+        await call.leaveSpeaker()
 
         XCTAssertFalse(controller.speaker)
         XCTAssertEqual(feedback.speakerShown, [true, false])
@@ -326,11 +326,23 @@ final class VoiceSessionControllerTests: XCTestCase {
         // to the speaker, so an answer about the code never plays aloud by surprise.
         await startLiveSession()
 
-        await call.emit(.speakerLost)
+        await call.emit(.routeChanged)
 
         XCTAssertFalse(controller.speaker)
         XCTAssertFalse(call.speakerOn)
         XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testARouteChangeReportedBeforeATapDoesNotTurnTheSpeakerButtonOff() async {
+        // The route change of AirPods connecting arrives after the user turned the speaker on:
+        // the voice is on the speaker, so the button must say so.
+        await startLiveSession()
+        controller.toggleSpeaker()
+
+        await call.emit(.routeChanged)
+
+        XCTAssertTrue(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [true])
     }
 
     // MARK: Helpers

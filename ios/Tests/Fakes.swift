@@ -87,6 +87,14 @@ final class FakeVoiceCall: VoiceCall {
         if let speakerError { throw speakerError }
         speakerOn = on
     }
+
+    var outputIsSpeaker: Bool { speakerOn }
+
+    /// iOS moves the voice off the speaker, as when AirPods connect, and reports the new route.
+    func leaveSpeaker() async {
+        speakerOn = false
+        await emit(.routeChanged)
+    }
 }
 
 /// Records every state the user was shown (Live Activity, start sound, screen).

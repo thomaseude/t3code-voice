@@ -60,6 +60,10 @@ final class WebRTCCall: VoiceCall {
         try audio.overrideOutputAudioPort(on ? .speaker : .none)
     }
 
+    var outputIsSpeaker: Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+    }
+
     func hangUp() {
         hungUp = true
         release()
@@ -110,16 +114,15 @@ final class WebRTCCall: VoiceCall {
         audio.isAudioEnabled = true
     }
 
-    /// iOS drops the speaker when the route changes (a headset comes or goes). It never turns
-    /// the speaker on by itself: without `.defaultToSpeaker`, a headset lost goes to the earpiece.
+    /// iOS drops the speaker when a headset comes or goes. It never turns the speaker on by
+    /// itself: without `.defaultToSpeaker`, a headset lost goes to the earpiece.
     private func watchSpeaker(observer: CallObserver) {
         speakerObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: nil
         ) { [weak observer] _ in
-            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
-            if !outputs.contains(.builtInSpeaker) { observer?.report(.speakerLost) }
+            observer?.report(.routeChanged)
         }
     }
 

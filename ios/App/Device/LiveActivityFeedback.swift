@@ -9,14 +9,13 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
+    /// Each update sends both, so one never brings back what the other replaced.
     private var speaker = false
+    private var status = ""
 
     func showSpeaker(_ on: Bool) {
         speaker = on
-        guard let activity else { return }
-        var state = activity.content.state
-        state.speaker = on
-        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+        update(status: status)
     }
 
     func show(_ state: SessionState) {
@@ -37,6 +36,7 @@ final class LiveActivityFeedback: SessionFeedback {
 
     private func start(status: String) {
         end()
+        self.status = status
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
             content: ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil),
@@ -45,6 +45,7 @@ final class LiveActivityFeedback: SessionFeedback {
     }
 
     private func update(status: String) {
+        self.status = status
         guard let activity else { return }
         Task { await activity.update(ActivityContent(state: .init(speaker: speaker, status: status), staleDate: nil)) }
     }

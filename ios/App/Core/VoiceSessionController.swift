@@ -91,8 +91,8 @@ enum VoiceCallEvent {
     case sessionStarted
     /// `session.closed` on the data channel: the session ended on the voice engine's side.
     case sessionClosed
-    /// iOS moved the voice off the speaker, because a headset came or went.
-    case speakerLost
+    /// The audio route changed: a headset came or went, or the speaker was turned on or off.
+    case routeChanged
     /// The peer connection or the data channel failed.
     case lost
 }
@@ -106,6 +106,8 @@ protocol VoiceCall: AnyObject {
     /// Sends the voice to the iPhone speaker, or back to the earpiece or the headset. It
     /// changes only the output: the audio session stays active.
     func setSpeaker(_ on: Bool) throws
+    /// Whether the voice goes to the iPhone speaker now.
+    var outputIsSpeaker: Bool { get }
     /// Closes the connection and the microphone. Safe to call twice.
     func hangUp()
 }
@@ -216,9 +218,11 @@ final class VoiceSessionController: ObservableObject {
             if state == .connecting { show(.live) }
         case .sessionClosed:
             await finish(.voice)
-        case .speakerLost:
-            // Only ever turns the speaker off (spec #15, "Audio").
-            showSpeaker(false)
+        case .routeChanged:
+            // iOS drops the speaker when a headset comes or goes. The event may come after a
+            // later tap turned it on again, so the route is read now. Only ever turns the
+            // speaker off (spec #15, "Audio").
+            if !call.outputIsSpeaker { showSpeaker(false) }
         case .lost:
             await finish(.error(.lost))
         }
