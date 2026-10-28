@@ -201,8 +201,7 @@ describe("get_recent_messages", () => {
   test("numbers, links in brackets and every kind of code block are spoken right", async () => {
     const { call, backend } = await setup();
     const texts = [
-      "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s.",
-      "Voir la PR (https://github.com/thomaseude/joombo/pull/12).",
+      "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s. Voir la PR (https://github.com/thomaseude/joombo/pull/12).",
       "Avant :\n\n~~~ruby\nnotes.blank?\n~~~\n\nAprès.",
       "Lance :\n\n    bin/rails test\n    bin/rails db:migrate\n\nPuis vérifie.",
       "Étapes :\n\n- un\n    - sous-point",
@@ -210,6 +209,7 @@ describe("get_recent_messages", () => {
       "    npm test\n\nC'est tout.",
       "Voir C:\\Users\\Thomas\\joombo\\src\\main.ts et D:\\logs\\run.log.",
       "1. Lance :\n\n        npm install --save secret\n\nFini.",
+      "1. Installe :\n\n    ```bash\n    npm ci\n    ```\n\n    Puis vérifie.",
       "Ouvre C:/Users/me/src/main.ts, src\\core\\main.ts et C:\\\\Users\\\\me\\\\app.ts.",
     ];
     backend.messages.set(
@@ -229,8 +229,7 @@ describe("get_recent_messages", () => {
     assert.deepEqual(
       result.messages.map((message) => message.excerpt),
       [
-        "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s.",
-        "Voir la PR ((lien)).",
+        "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s. Voir la PR ((lien)).",
         "Avant : (bloc de code) Après.",
         "Lance : (bloc de code) Puis vérifie.",
         "Étapes : un sous-point",
@@ -238,6 +237,7 @@ describe("get_recent_messages", () => {
         "(bloc de code) C'est tout.",
         "Voir main.ts et run.log.",
         "Lance : (bloc de code) Fini.",
+        "Installe : (bloc de code) Puis vérifie.",
         "Ouvre main.ts, main.ts et app.ts.",
       ],
     );
@@ -267,6 +267,27 @@ describe("get_recent_messages", () => {
 
     const result = engine.last.toolResults[0]?.result as { status: string };
     assert.equal(result.status, "completed");
+  });
+
+  test("when T3 drops while the messages are read, it says T3 is unavailable", async () => {
+    const { engine, backend, disconnect } = await setup();
+    let release = () => {};
+    backend.readGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "drop",
+      name: "get_recent_messages",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    disconnect();
+    release();
+    await settle();
+
+    assert.deepEqual(engine.last.toolResults[0]?.result, { error: "t3_unavailable" });
   });
 
   test("an archived thread can be read, by its title", async () => {
@@ -305,6 +326,43 @@ describe("get_recent_messages", () => {
       ((await call("summarize_thread", { task: "Fix tests sur Totem" })) as { task: string }).task,
       "Fix tests",
     );
+  });
+
+  test("an archived choice offered by title and project is found when repeated", async () => {
+    const { call, state } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Fix tests", projectId: "p2", archived: true }),
+        thread("t3", { title: "Fix tests", projectId: "p3", archived: true }),
+      ],
+    });
+    state.apply({ type: "project.updated", sequence: 2, project: project("p2", "Totem") });
+    state.apply({ type: "project.updated", sequence: 3, project: project("p3", "Kairn") });
+
+    assert.deepEqual(await call("summarize_thread", { task: "fix tests" }), {
+      status: "ambiguous_task",
+      choices: ["Fix tests sur Totem", "Fix tests sur Kairn"],
+    });
+    assert.equal(
+      ((await call("summarize_thread", { task: "Fix tests sur Kairn" })) as { task: string }).task,
+      "Fix tests",
+    );
+  });
+
+  test("two archived threads with one title in one project are offered again, not lost", async () => {
+    const { call, state } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Fix tests", projectId: "p2", archived: true }),
+        thread("t3", { title: "Fix tests", projectId: "p2", archived: true }),
+      ],
+    });
+    state.apply({ type: "project.updated", sequence: 2, project: project("p2", "Totem") });
+
+    assert.deepEqual(await call("summarize_thread", { task: "Fix tests sur Totem" }), {
+      status: "ambiguous_task",
+      choices: ["Fix tests sur Totem", "Fix tests sur Totem"],
+    });
   });
 
   test("archived threads with one title are offered newest first", async () => {
@@ -597,9 +655,14 @@ describe("summarize_thread", () => {
     release();
     await settle();
 
-    const result = engine.last.toolResults[0]?.result as { status: string; summary: unknown };
+    const result = engine.last.toolResults[0]?.result as {
+      status: string;
+      summary: unknown;
+      too_long: boolean;
+    };
     assert.equal(result.status, "completed");
     assert.equal(result.summary, null);
+    assert.equal(result.too_long, false);
     assert.equal(summarizer.conversations.length, 1);
   });
 
@@ -654,6 +717,27 @@ describe("summarize_thread", () => {
 
     assert.equal(summarizer.conversations[0]?.messages[0]?.text, request);
     assert.equal(result.too_long, false);
+  });
+
+  test("when T3 drops while it summarizes, it says T3 is unavailable, not an old status", async () => {
+    const { engine, summarizer, disconnect } = await setup();
+    let release = () => {};
+    summarizer.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "drop",
+      name: "summarize_thread",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    disconnect();
+    release();
+    await settle();
+
+    assert.deepEqual(engine.last.toolResults[0]?.result, { error: "t3_unavailable" });
   });
 
   test("a thread with no message has no summary", async () => {

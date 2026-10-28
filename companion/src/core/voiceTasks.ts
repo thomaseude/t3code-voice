@@ -348,14 +348,16 @@ export class VoiceTasks {
     }
     // The run may have changed meanwhile: T3's new status goes without the summary, which
     // was made for the old one and could contradict it.
-    const current = this.options.shell()?.threads.get(thread.id) ?? thread;
+    const now = this.options.shell();
+    if (now === null) return { error: "t3_unavailable" };
+    const current = now.threads.get(thread.id) ?? thread;
     const moved = readingStatusOf(current) !== status;
     const details: ToolResult = {
       task: name,
-      project: shell.projects.get(current.projectId)?.title ?? null,
+      project: now.projects.get(current.projectId)?.title ?? null,
       status: readingStatusOf(current),
       summary: moved ? null : conversation.summary,
-      too_long: conversation.tooLong,
+      too_long: moved ? false : conversation.tooLong,
     };
     if (details.status === "failed") {
       details.failure = current.lastError?.failureClass ?? "unknown";
@@ -396,11 +398,12 @@ export class VoiceTasks {
       return this.failed("get_recent_messages", error);
     }
     // Read after the messages: a run that ended meanwhile is not told as running.
-    const now = this.options.shell()?.threads.get(thread.id) ?? thread;
+    const now = this.options.shell();
+    if (now === null) return { error: "t3_unavailable" };
     return {
       task: name,
-      project: shell.projects.get(thread.projectId)?.title ?? null,
-      status: readingStatusOf(now),
+      project: now.projects.get(thread.projectId)?.title ?? null,
+      status: readingStatusOf(now.threads.get(thread.id) ?? thread),
       messages: page.messages.map((message) => {
         const { excerpt, cut } = spokenExcerpt(message.text);
         return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };
@@ -525,7 +528,7 @@ export class VoiceTasks {
     if (followed.result.status === "ambiguous_task") return followed;
     let match = findThread(shell, reference, shell.topLevelThreads());
     if (match.kind === "none" && archived) {
-      match = findThread(shell, reference, shell.archivedThreads(), { onlyOneByProject: true });
+      match = findThread(shell, reference, shell.archivedThreads(), { skipBareProject: true });
     }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };
@@ -591,21 +594,22 @@ type ThreadMatch =
 /**
  * One of `threads` by its title; when no title fits, by its title and project together. Two
  * threads with one title are then offered as "Fix tests sur Joombo", which finds one when
- * repeated. With `onlyOneByProject`, title and project together must fit one thread: a bare
- * project name never offers its whole archive.
+ * repeated. With `skipBareProject`, a reference that names nothing but a project finds
+ * nothing: it never offers a project's whole archive.
  */
 function findThread(
   shell: ShellState,
   reference: string,
   threads: Thread[],
-  { onlyOneByProject = false } = {},
+  { skipBareProject = false } = {},
 ): ThreadMatch {
   const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
   const byTitle = findByName(reference, threads, (thread) => thread.title);
   const byProject = () =>
     findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`);
   let match = byTitle.kind === "none" ? byProject() : byTitle;
-  if (byTitle.kind === "none" && onlyOneByProject && match.kind === "ambiguous") {
+  const bareProject = () => findByName(reference, threads, projectOf).kind !== "none";
+  if (byTitle.kind === "none" && skipBareProject && match.kind === "ambiguous" && bareProject()) {
     match = { kind: "none" };
   }
   if (match.kind === "none") return { kind: "none" };

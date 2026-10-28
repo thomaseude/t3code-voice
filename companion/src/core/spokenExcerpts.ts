@@ -52,7 +52,8 @@ function withoutCodeBlocks(text: string): string {
       inBlock = true;
       continue;
     }
-    if (line.trim() !== "") {
+    // A named code block keeps the list it was in.
+    if (line.trim() !== "" && line.trim() !== CODE_BLOCK) {
       inBlock = false;
       const item = line.match(LIST_ITEM);
       if (item !== null) textColumn = item[0].replace(/\t/g, "    ").length;

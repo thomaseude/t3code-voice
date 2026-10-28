@@ -162,7 +162,9 @@ export const VOICE_TOOLS: VoiceTool[] = [
       "What a task is about and where it stands: its status, as T3 reports it, and a spoken " +
       "summary of its whole conversation so far, also while the agent runs. For a failure, " +
       "its cause and when the run can resume. too_long: the summary left part of the " +
-      "conversation out; suggest opening T3 for the rest.",
+      "conversation out; suggest opening T3 for the rest. summary null with a status: the " +
+      "status changed while the summary was made, or there is nothing to summarize; give " +
+      "the status and offer to ask again.",
     parameters: {
       type: "object",
       properties: {
