@@ -9,8 +9,9 @@
 // A token works once, for one action, in one voice session, for 60 s. Each session has one
 // question at most: a new question replaces the one before. While a question is open,
 // announcements wait, so a "oui" only ever answers the question the user heard (decided by
-// Thomas in #21). A question closes when it is judged, when the user's words can no longer
-// make a yes, when its 60 s run out, or when the session ends.
+// Thomas in #21). A question closes when its answer is judged (after the model sends the
+// token back), when the user's words can no longer make a yes, when its 60 s run out, or
+// when the session ends.
 
 import type { Clock } from "../ports/clock.ts";
 import { randomSecret } from "./secrets.ts";
@@ -95,7 +96,7 @@ interface Question {
   /** Whether the model sent the token back: it works once. */
   taken: boolean;
   /** Why the question ended, or null while it is still open. */
-  ended: "judged" | "expired" | "replaced" | "session_closed" | null;
+  ended: "judged" | "doubted" | "expired" | "replaced" | "session_closed" | null;
   /** Wakes the judging of the answer: the user spoke, or the question ended. */
   wake: () => void;
   stopTimer: () => void;
@@ -165,8 +166,8 @@ export class Confirmations {
     question.heard += text;
     question.lastSpeechAt = now;
     // "non", "attends"…: whatever comes next, the answer is no longer a yes.
-    if (hasDoubt(question.heard)) this.onQuestionOpen(false);
-    question.wake();
+    if (hasDoubt(question.heard)) this.end(question, "doubted");
+    else question.wake();
   }
 
   /** The session ended: no question stays open, and no action runs any more. */

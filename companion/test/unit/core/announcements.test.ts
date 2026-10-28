@@ -641,7 +641,7 @@ describe("speaking at the next gap", () => {
       arguments: { task: "tests Reviews" },
     });
     await settle();
-    const { confirmation } = session.toolResults[0]?.result as { confirmation: string };
+    const { confirmation } = (session.toolResults[0]?.result ?? {}) as { confirmation: string };
 
     update("t1", { status: "failed" });
     await wait(10_000);

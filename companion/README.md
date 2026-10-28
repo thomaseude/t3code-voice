@@ -129,15 +129,16 @@ A risky action needs a spoken "oui", checked by the companion, not by the voice 
    nothing yet, the companion waits 1.5 s for a late transcript. An answer still going at
    the end of the 60 s window, or cut by the end of the session, runs nothing.
 5. While a question is open, announcements wait: a "oui" only ever answers the question
-   the user heard. The question closes when the model sends the token back, when the
-   user's answer can no longer be a yes ("non", "attends"…), after 60 s, or when the
-   session ends.
+   the user heard. The question closes when its answer is judged (after the model sends
+   the token back), when the user's answer can no longer be a yes ("non", "attends"…),
+   after 60 s, or when the session ends.
 
 The answers when nothing runs:
 
 - `not_confirmed`: the answer was not a clear yes;
 - `confirmation_expired`: the answer came more than 60 s after the question;
-- `invalid_confirmation`: the token is unknown, already used, or from another tool or session.
+- `invalid_confirmation`: the token is unknown, already used, or from another tool or session;
+- `session_closed`: the voice session ended before the question was asked.
 
 A token works once. A voice session has one question at most: a new question replaces the
 one before.

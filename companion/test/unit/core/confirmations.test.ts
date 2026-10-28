@@ -22,4 +22,25 @@ describe("Confirmations", () => {
     assert.deepEqual(opened, []);
     assert.equal(clock.pendingTimers(), 0);
   });
+
+  test("a « non » closes the question: a later « oui » cannot turn it into a yes", async () => {
+    const clock = new FakeClock();
+    const opened: boolean[] = [];
+    const confirmations = new Confirmations(clock, (open) => opened.push(open));
+    const asked = confirmations.ask({
+      tool: "interrupt_task",
+      readBack: {},
+      run: async () => ({ result: {} }),
+    });
+    confirmations.assistantSpoke();
+
+    confirmations.heard("non");
+    clock.advance(2_000);
+    confirmations.heard("oui");
+
+    assert.deepEqual(opened, [true, false]);
+    assert.equal(clock.pendingTimers(), 0);
+    const taken = await confirmations.take("interrupt_task", asked.confirmation as string);
+    assert.deepEqual(taken, { kind: "refused", result: { error: "not_confirmed" } });
+  });
 });
