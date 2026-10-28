@@ -16,12 +16,14 @@ import type {
   T3Backend,
   T3Config,
   Thread,
+  ThreadPage,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
 import { awarenessOf, eventKeyOf } from "./awareness.ts";
 import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
+import { spokenExcerpt } from "./spokenExcerpts.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
 import type { TaskSummaries } from "./taskSummaries.ts";
 
@@ -58,6 +60,13 @@ const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-a
 
 /** T3 driver kinds and the name the user says for them. */
 const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "codex" };
+
+/** How many messages get_recent_messages reads when the model does not say, and at most. */
+const DEFAULT_MESSAGE_COUNT = 3;
+const MAX_MESSAGE_COUNT = 10;
+
+/** Who wrote a message, in the words the voice model gets. */
+const SPEAKERS = { user: "user", assistant: "agent", system: "t3" } as const;
 
 /** Longest first title sent to T3, which writes the real one from the prompt. */
 const TITLE_LENGTH = 80;
@@ -347,6 +356,49 @@ export class VoiceTasks {
       details.resumes_at = thread.lastError?.resumesAt ?? null;
     }
     return details;
+  }
+
+  /**
+   * get_recent_messages: the task's last messages, oldest first, as short spoken excerpts,
+   * and a cursor to read older ones. Read-only: any thread, followed or not.
+   */
+  async recentMessages(args: unknown): Promise<ToolResult> {
+    const input = args as Record<string, unknown> | null;
+    const reference = nonEmptyText(input?.task);
+    const count = input?.count ?? DEFAULT_MESSAGE_COUNT;
+    const before = input?.before;
+    if (
+      reference === null ||
+      !(Number.isInteger(count) && (count as number) >= 1) ||
+      !optionalText(before)
+    ) {
+      return { error: "invalid_arguments" };
+    }
+    const shell = this.options.shell();
+    if (shell === null) return { error: "t3_unavailable" };
+    const match = this.findTask(shell, reference);
+    if (match.kind !== "found") return match.result;
+    const { thread, name } = match;
+
+    let page: ThreadPage;
+    try {
+      page = await this.options.backend.readThread(thread.id, {
+        limit: Math.min(count as number, MAX_MESSAGE_COUNT),
+        before: nonEmptyText(before),
+      });
+    } catch (error) {
+      return this.failed("get_recent_messages", error);
+    }
+    return {
+      task: name,
+      project: shell.projects.get(thread.projectId)?.title ?? null,
+      status: awarenessOf(thread) ?? "idle",
+      messages: page.messages.map((message) => {
+        const { excerpt, cut } = spokenExcerpt(message.text);
+        return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };
+      }),
+      older: page.olderCursor,
+    };
   }
 
   unfollowThread(args: unknown): ToolResult {

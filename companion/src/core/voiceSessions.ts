@@ -274,6 +274,8 @@ export class VoiceSessionManager implements VoiceSessions {
         return tasks.unfollowThread(args);
       case "get_task_details":
         return tasks.taskDetails(args);
+      case "get_recent_messages":
+        return tasks.recentMessages(args);
       case "cancel_last_action": {
         const last = session.lastAction;
         if (last === undefined || this.options.clock.now() > last.until) {
