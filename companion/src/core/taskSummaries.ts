@@ -7,6 +7,7 @@ import type { Clock } from "../ports/clock.ts";
 import type { ConversationSummaryRequest, Summarizer, TaskSummary } from "../ports/summarizer.ts";
 import type { T3Backend, Thread, ThreadMessage } from "../ports/t3Backend.ts";
 import type { TaskRegistry } from "../ports/taskRegistry.ts";
+import type { ThreadStatus } from "./awareness.ts";
 import { errorKind } from "./secrets.ts";
 
 export interface TaskSummariesOptions {
@@ -69,8 +70,9 @@ export class TaskSummaries {
    * A summary of the thread's conversation so far, also while a run goes on. `status` is
    * T3's: the summary is made again when it changes, or when the last message does.
    */
-  async conversationSummaryOf(thread: Thread, status: string): Promise<ConversationSummary> {
-    if (this.options.summarizer === null) return { summary: null, tooLong: false };
+  async conversationSummaryOf(thread: Thread, status: ThreadStatus): Promise<ConversationSummary> {
+    const { summarizer } = this.options;
+    if (summarizer === null) return { summary: null, tooLong: false };
     const { messages } = await this.options.backend.readThread(thread.id);
     const last = messages.at(-1);
     if (last === undefined) return { summary: null, tooLong: false };
@@ -80,7 +82,12 @@ export class TaskSummaries {
     if (kept?.key === key) return kept.summary;
     const tooLong =
       messages.reduce((total, message) => total + message.text.length, 0) > MAX_CONVERSATION_CHARS;
-    const summary = this.makeConversation(thread, conversationRequest(messages, status), tooLong);
+    const summary = this.makeConversation(
+      summarizer,
+      thread,
+      conversationRequest(messages, status),
+      tooLong,
+    );
     this.conversations.set(thread.id, { key, summary });
     // A failure is not kept: asking again tries again.
     summary.then(({ summary: text }) => {
@@ -92,15 +99,14 @@ export class TaskSummaries {
   }
 
   private async makeConversation(
+    summarizer: Summarizer,
     thread: Thread,
     request: ConversationSummaryRequest,
     tooLong: boolean,
   ): Promise<ConversationSummary> {
     let summary: string | null;
     try {
-      summary = await this.withTimeout(
-        (this.options.summarizer as Summarizer).summarizeConversation(request),
-      );
+      summary = await this.withTimeout(summarizer.summarizeConversation(request));
     } catch (error) {
       this.options.log(
         `t3-voice: could not summarize the conversation of thread ${thread.id} (${errorKind(error)}).`,
@@ -195,7 +201,10 @@ function conversationRequest(
   messages: ThreadMessage[],
   status: string,
 ): ConversationSummaryRequest {
-  const [first, ...rest] = messages.map(({ role, text }) => ({ role, text }));
+  const all = messages.map(({ role, text }) => ({ role, text }));
+  const total = all.reduce((sum, message) => sum + message.text.length, 0);
+  if (total <= MAX_CONVERSATION_CHARS) return { status, messages: all, omitted: 0 };
+  const [first, ...rest] = all;
   if (first === undefined) return { status, messages: [], omitted: 0 };
   const head = { ...first, text: first.text.slice(0, MAX_CONVERSATION_CHARS / 4) };
   let room = MAX_CONVERSATION_CHARS - head.text.length;

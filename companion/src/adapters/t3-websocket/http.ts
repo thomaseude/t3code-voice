@@ -1,5 +1,5 @@
 // The few HTTP calls the companion makes to T3: the environment descriptor, the pairing
-// token exchange, and the short-lived WebSocket ticket.
+// token exchange, the short-lived WebSocket ticket, and the whole projection of a thread.
 
 import { REQUIRED_T3_SCOPES, type T3Pairing } from "../../ports/t3Backend.ts";
 import type { EnvironmentDescriptor } from "./compatibility.ts";
@@ -96,6 +96,26 @@ export async function issueWebSocketTicket(baseUrl: string, token: string): Prom
     throw new T3HttpError("T3 answered the WebSocket ticket request with an unexpected body.");
   }
   return body.ticket;
+}
+
+/**
+ * The whole projection of a thread. The WebSocket's `getThreadProjection` only gives a
+ * window of its recent turns (about 10 user turns in T3 0.1.0 and 0.1.1).
+ */
+export async function fetchThreadProjection(
+  baseUrl: string,
+  token: string,
+  threadId: string,
+): Promise<WireJson> {
+  const body = await request(
+    baseUrl,
+    `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
+    {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
+    },
+  );
+  return body?.projection;
 }
 
 async function request(baseUrl: string, path: string, init: RequestInit): Promise<WireJson> {

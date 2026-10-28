@@ -41,6 +41,7 @@ const CONVERSATION_INSTRUCTIONS = [
   ...SPOKEN_RULES,
   '"summary": at most 8 sentences: what the developer asked, what the agent did, what is left or blocked, and what the agent asks of the developer.',
   "The status comes from the server: never contradict it. When it is running, say that the agent is still running and has not finished.",
+  "When it is waiting_for_input or waiting_for_approval, say that the run is paused and waits for the developer's answer, not that it is finished. When it is queued, say that the next run waits its turn to start.",
 ].join("\n");
 
 const RUN_SCHEMA = {

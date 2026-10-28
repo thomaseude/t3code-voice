@@ -695,8 +695,8 @@ describe("commands", () => {
   });
 
   test("readThread reads the thread's messages, oldest first, with their run", async () => {
-    const { backend, connection } = await connected();
-    connection.answer = () => ({
+    const { backend, transport, connection } = await connected();
+    transport.threads.set("t1", {
       runs: [],
       messages: [
         {
@@ -721,9 +721,9 @@ describe("commands", () => {
 
     const page = await backend.readThread("t1");
 
-    assert.deepEqual(connection.requests, [
-      { tag: "orchestration.getThreadProjection", payload: { threadId: "t1" } },
-    ]);
+    // The WebSocket's projection is only a window of recent turns: the HTTP one is whole.
+    assert.deepEqual(transport.threadReads, ["t1"]);
+    assert.deepEqual(connection.requests, []);
     assert.deepEqual(page, {
       messages: [
         {
@@ -746,7 +746,7 @@ describe("commands", () => {
   });
 
   test("readThread pages back from the newest messages with a cursor", async () => {
-    const { backend, connection } = await connected();
+    const { backend, transport } = await connected();
     const message = (id: string, minute: number) => ({
       id,
       runId: null,
@@ -755,7 +755,7 @@ describe("commands", () => {
       streaming: false,
       createdAt: `2026-10-26T10:0${minute}:00.000Z`,
     });
-    connection.answer = () => ({
+    transport.threads.set("t1", {
       messages: [message("m1", 1), message("m2", 2), message("m3", 3), message("m4", 4)],
     });
 
@@ -775,8 +775,8 @@ describe("commands", () => {
   });
 
   test("readThread leaves out workflow scripts, which are code and not conversation", async () => {
-    const { backend, connection } = await connected();
-    connection.answer = () => ({
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
       messages: [
         {
           id: "m1",
@@ -802,9 +802,46 @@ describe("commands", () => {
     );
   });
 
+  test("readThread leaves out a user message that is a workflow script without T3's flag", async () => {
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          text: "// workflow\nexport const meta = { name: 'x' }",
+          createdAt: "2026-10-26T10:00:00.000Z",
+        },
+        {
+          id: "m2",
+          role: "user",
+          text: "export const meta = {}",
+          workflowScript: false,
+          createdAt: "2026-10-26T10:01:00.000Z",
+        },
+      ],
+    });
+
+    const page = await backend.readThread("t1");
+
+    assert.deepEqual(
+      page.messages.map((each) => each.id),
+      ["m2"],
+    );
+  });
+
+  test("readThread checks T3's version before it reads", async () => {
+    const transport = new FakeTransport();
+    transport.descriptor = { ...transport.descriptor, serverVersion: "9.9.9" };
+    const backend = makeBackend(transport);
+
+    await assert.rejects(backend.readThread("t1"), T3IncompatibleError);
+    assert.deepEqual(transport.threadReads, []);
+  });
+
   test("readThread with an unknown cursor reads nothing", async () => {
-    const { backend, connection } = await connected();
-    connection.answer = () => ({
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
       messages: [{ id: "m1", role: "user", text: "Bonjour", createdAt: "2026-10-26T10:00Z" }],
     });
 

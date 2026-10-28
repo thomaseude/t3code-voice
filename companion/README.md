@@ -115,7 +115,11 @@ During a session the companion answers the voice model's tools from T3's state:
   file name, a link keeps its words, and an excerpt stops at about 400 characters (`cut:
   true`). `older` is a cursor: passed back as `before`, it reads the messages just older.
   Tool calls and diffs are not messages;
-- both reading tools take a followed task's spoken name, else the title of any thread;
+- both reading tools take a followed task's spoken name, else the title of any thread. They
+  give T3's state even for a result the user dismissed in T3, `queued` for a run that waits
+  its turn, and `idle` for a thread with no run. They read the whole thread over T3's HTTP
+  route `GET /api/orchestration/threads/:id`: the WebSocket's projection is only a window
+  of the last turns;
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
 
 A reference that fits several projects or tasks acts on none: the answer lists the choices.
@@ -366,7 +370,7 @@ src/
     secrets.ts               masks credentials in anything the companion prints
   adapters/
     t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
-                             pairing/ticket HTTP calls, pinned version check
+                             pairing/ticket/thread HTTP calls, pinned version check
     config/                  ConfigStore on files in ~/.config/t3voice/
     device-auth/             DeviceAuth with the companion's own opaque tokens (stored
                              hashed), replaced on use every 30 days

@@ -19,7 +19,7 @@ import type {
   ThreadPage,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
-import { awarenessOf, eventKeyOf } from "./awareness.ts";
+import { awarenessOf, eventKeyOf, threadStatusOf } from "./awareness.ts";
 import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
@@ -339,10 +339,16 @@ export class VoiceTasks {
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
-    const status = awarenessOf(thread) ?? "idle";
+    let status = threadStatusOf(thread);
     let conversation: ConversationSummary;
     try {
       conversation = await this.options.summaries.conversationSummaryOf(thread, status);
+      // The run may have changed while it was summarized: the summary must not contradict T3.
+      const now = this.options.shell()?.threads.get(thread.id);
+      if (now !== undefined && threadStatusOf(now) !== status) {
+        status = threadStatusOf(now);
+        conversation = await this.options.summaries.conversationSummaryOf(now, status);
+      }
     } catch (error) {
       return this.failed("summarize_thread", error);
     }
@@ -394,7 +400,7 @@ export class VoiceTasks {
     return {
       task: name,
       project: shell.projects.get(thread.projectId)?.title ?? null,
-      status: awarenessOf(thread) ?? "idle",
+      status: threadStatusOf(thread),
       messages: page.messages.map((message) => {
         const { excerpt, cut } = spokenExcerpt(message.text);
         return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };

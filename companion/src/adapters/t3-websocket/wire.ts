@@ -238,6 +238,12 @@ export function runOfMessage(
 const MESSAGE_ROLES = new Set(["user", "assistant", "system"]);
 
 /**
+ * T3's own test for a workflow script with no `workflowScript` field: a user message that
+ * starts with `export const meta`, maybe after comments.
+ */
+const WORKFLOW_SCRIPT = /^\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*export\s+const\s+meta\b/;
+
+/**
  * The messages of a thread projection, oldest first. Malformed ones are left out, and so are
  * workflow scripts: T3 shows them as code, not as conversation.
  */
@@ -249,7 +255,7 @@ export function toThreadMessages(projection: WireJson): ThreadMessage[] {
         MESSAGE_ROLES.has(message?.role) &&
         typeof message.text === "string" &&
         typeof message.id === "string" &&
-        message.workflowScript !== true,
+        !isWorkflowScript(message),
     )
     .map((message) => ({
       id: message.id,
@@ -259,4 +265,9 @@ export function toThreadMessages(projection: WireJson): ThreadMessage[] {
       createdAt: String(message.createdAt ?? ""),
     }))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function isWorkflowScript(message: WireJson): boolean {
+  if (typeof message.workflowScript === "boolean") return message.workflowScript;
+  return message.role === "user" && WORKFLOW_SCRIPT.test(message.text);
 }

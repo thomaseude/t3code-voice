@@ -5,10 +5,22 @@
 /** The longest excerpt, in characters: about 20 seconds of speech. */
 const MAX_EXCERPT_CHARS = 400;
 
+/**
+ * How much of a message, once its code blocks are named, the excerpt is made from. Enough
+ * for 400 spoken characters, and small enough that the regexes below stay quick.
+ */
+const MAX_SOURCE_CHARS = 4_000;
+
+const CODE_BLOCK = "(bloc de code)";
+
 /** The start of `text`, ready to be spoken; `cut` when the rest is left out. */
 export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
-  const spoken = spokenText(text);
-  if (spoken.length <= MAX_EXCERPT_CHARS) return { excerpt: spoken, cut: false };
+  const source = withoutCodeBlocks(text);
+  const spoken = spokenText(source.slice(0, MAX_SOURCE_CHARS));
+  if (spoken.length <= MAX_EXCERPT_CHARS) {
+    if (source.length <= MAX_SOURCE_CHARS) return { excerpt: spoken, cut: false };
+    return { excerpt: `${spoken}…`, cut: true };
+  }
   const start = spoken.slice(0, MAX_EXCERPT_CHARS);
   // Cut between two words, unless that loses too much.
   const lastSpace = start.lastIndexOf(" ");
@@ -16,20 +28,43 @@ export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
   return { excerpt: `${kept}…`, cut: true };
 }
 
-/** `text` with its Markdown, code, links and paths turned into words, on one line. */
+/**
+ * `text` with each Markdown code block replaced by CODE_BLOCK: a block fenced with ``` or ~~~
+ * (closed or not), and a block of lines indented by 4 spaces or a tab after an empty line.
+ * An indented list item ("    - sous-point") is not code.
+ */
+function withoutCodeBlocks(text: string): string {
+  const unfenced = text.replace(/(```|~~~)[\s\S]*?(?:\1|$)/g, `\n${CODE_BLOCK}\n`);
+  const lines: string[] = [];
+  let inBlock = false;
+  for (const line of unfenced.split("\n")) {
+    const indented = /^(?: {4}|\t)/.test(line) && !/^\s*(?:[-*+]|\d+[.)])\s/.test(line);
+    if (indented && (inBlock || lines.at(-1)?.trim() === "")) {
+      if (!inBlock) lines.push(CODE_BLOCK);
+      inBlock = true;
+      continue;
+    }
+    inBlock = false;
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+/** `text` with its Markdown, links and paths turned into words, on one line. */
 function spokenText(text: string): string {
   return (
     text
-      // A code block, closed or not, is named.
-      .replace(/```[\s\S]*?(```|$)/g, "\n(bloc de code)\n")
       // A Markdown link keeps its words.
       .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/\bhttps?:\/\/\S+/g, "(lien)")
-      // A path keeps its file name: "/home/me/app/models/review.rb" gives "review.rb". A word
-      // like "and/or" stays: a path starts with "/", "~" or ".", or ends with an extension.
+      // A bare link is named; a bracket or a full stop after it is not part of it.
+      .replace(/\bhttps?:\/\/[^\s)\]>]*[^\s)\]>.,;:!?]/g, "(lien)")
+      // A path keeps its file name: "/home/me/app/models/review.rb" gives "review.rb". Words
+      // like "and/or" or numbers like "1.5/2.0" stay: a path starts with "/", "~" or ".", or
+      // ends with an extension that starts with a letter.
       .replace(
-        /(?:[~.]*\/)?(?:[\w.@-]+\/)+([\w@-]+\.\w+|[\w.@-]+)/g,
-        (path: string, name: string) => (/^[~./]/.test(path) || /\.\w+$/.test(name) ? name : path),
+        /(?:[~.]*\/)?(?:[\w.@-]+\/)+([\w@-]+\.[A-Za-z]\w*|[\w.@-]+)/g,
+        (path: string, name: string) =>
+          /^[~./]/.test(path) || /\.[A-Za-z]\w*$/.test(name) ? name : path,
       )
       .replace(/`([^`]*)`/g, "$1")
       .split("\n")

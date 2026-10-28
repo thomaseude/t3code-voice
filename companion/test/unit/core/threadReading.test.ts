@@ -198,6 +198,56 @@ describe("get_recent_messages", () => {
     assert.ok(long?.excerpt.startsWith("Les tests passent. Encore un détail."));
   });
 
+  test("numbers, links in brackets and every kind of code block are spoken right", async () => {
+    const { call, backend } = await setup();
+    const texts = [
+      "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s.",
+      "Voir la PR (https://github.com/thomaseude/joombo/pull/12).",
+      "Avant :\n\n~~~ruby\nnotes.blank?\n~~~\n\nAprès.",
+      "Lance :\n\n    bin/rails test\n    bin/rails db:migrate\n\nPuis vérifie.",
+      "Étapes :\n\n- un\n    - sous-point",
+    ];
+    backend.messages.set(
+      "t1",
+      texts.map((text) => ({
+        role: "assistant",
+        text,
+        runId: null,
+        createdAt: "2026-10-26T10:00Z",
+      })),
+    );
+
+    const result = (await call("get_recent_messages", { task: "tests Reviews", count: 5 })) as {
+      messages: Array<{ excerpt: string }>;
+    };
+
+    assert.deepEqual(
+      result.messages.map((message) => message.excerpt),
+      [
+        "Le ratio passe de 1.5/2.0 à 3/4, en 1.5s/2.3s.",
+        "Voir la PR ((lien)).",
+        "Avant : (bloc de code) Après.",
+        "Lance : (bloc de code) Puis vérifie.",
+        "Étapes : un sous-point",
+      ],
+    );
+  });
+
+  test("a huge message with no space is cut quickly", async () => {
+    const { call, backend } = await setup();
+    backend.messages.set("t1", [
+      { role: "assistant", text: "x".repeat(200_000), runId: null, createdAt: "2026-10-26T10:00Z" },
+    ]);
+
+    const started = performance.now();
+    const result = (await call("get_recent_messages", { task: "tests Reviews" })) as {
+      messages: Array<{ cut: boolean }>;
+    };
+
+    assert.equal(result.messages[0]?.cut, true);
+    assert.ok(performance.now() - started < 500, "the event loop is never blocked for long");
+  });
+
   test("works for a thread nobody follows, found by its title", async () => {
     const { call, backend } = await setup({
       threads: [RUNNING, thread("t2", { title: "Refonte page offre", status: "completed" })],
@@ -374,6 +424,93 @@ describe("summarize_thread", () => {
     const length = request?.messages.reduce((total, message) => total + message.text.length, 0);
     assert.ok(length !== undefined && length <= 16_000, `${length}`);
     assert.equal(result.too_long, true);
+  });
+
+  test("a finished thread the user dismissed in T3 still gives its status and cause", async () => {
+    const { call } = await setup({
+      threads: [
+        thread("t1", {
+          status: "failed",
+          settled: true,
+          latestRunId: "run-2",
+          lastError: {
+            message: "Provider error",
+            failureClass: "provider_error",
+            resumesAt: null,
+            autoResume: false,
+          },
+        }),
+      ],
+    });
+
+    const summary = (await call("summarize_thread", { task: "tests Reviews" })) as Record<
+      string,
+      unknown
+    >;
+    const messages = (await call("get_recent_messages", { task: "tests Reviews" })) as Record<
+      string,
+      unknown
+    >;
+
+    assert.equal(summary.status, "failed");
+    assert.equal(summary.failure, "provider_error");
+    assert.equal(messages.status, "failed");
+  });
+
+  test("a run waiting in T3's queue is told as queued, not idle", async () => {
+    const { call, summarizer } = await setup({
+      threads: [thread("t1", { status: "queued", latestRunId: "run-2" })],
+    });
+
+    const result = (await call("summarize_thread", { task: "tests Reviews" })) as {
+      status: string;
+    };
+
+    assert.equal(result.status, "queued");
+    assert.equal(summarizer.conversations[0]?.status, "queued");
+  });
+
+  test("a run that ends while it is summarized gives T3's new status and a new summary", async () => {
+    const { engine, summarizer, state } = await setup();
+    let release = () => {};
+    summarizer.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "race",
+      name: "summarize_thread",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    state.apply({
+      type: "thread.updated",
+      sequence: 2,
+      thread: { ...RUNNING, status: "completed" },
+    });
+    release();
+    await settle();
+
+    const result = engine.last.toolResults[0]?.result as { status: string; summary: string };
+    assert.equal(result.status, "completed");
+    assert.equal(result.summary, "Résumé (completed) de 4 messages, dont : J'écris le test.");
+  });
+
+  test("a long first request is sent whole when the conversation fits", async () => {
+    const { call, summarizer, backend } = await setup();
+    const request = "Demande. ".repeat(600);
+    backend.messages.set("t1", [
+      { role: "user", text: request, runId: null, createdAt: "2026-10-26T09:00Z" },
+      { role: "assistant", text: "C'est fait.", runId: null, createdAt: "2026-10-26T09:10Z" },
+    ]);
+
+    const result = (await call("summarize_thread", { task: "tests Reviews" })) as {
+      too_long: boolean;
+    };
+
+    assert.equal(summarizer.conversations[0]?.messages[0]?.text, request);
+    assert.equal(result.too_long, false);
   });
 
   test("a thread with no message has no summary", async () => {

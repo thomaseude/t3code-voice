@@ -129,6 +129,8 @@ describe("OpenAiSummarizer.summarizeConversation", () => {
     assert.equal(body.store, false);
     assert.match(body.instructions, /French/);
     assert.match(body.instructions, /still running/);
+    assert.match(body.instructions, /waiting_for_input/);
+    assert.match(body.instructions, /queued/);
     assert.match(body.input, /Status: running/);
     assert.match(body.input, /User: Corrige les tests des Reviews/);
     assert.match(body.input, /Agent: Je lance `bin\/rails test`./);

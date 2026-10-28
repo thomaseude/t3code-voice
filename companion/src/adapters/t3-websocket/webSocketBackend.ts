@@ -23,7 +23,12 @@ import {
   type T3Pin,
   toServerInfo,
 } from "./compatibility.ts";
-import { fetchDescriptor, issueWebSocketTicket, T3HttpError } from "./http.ts";
+import {
+  fetchDescriptor,
+  fetchThreadProjection,
+  issueWebSocketTicket,
+  T3HttpError,
+} from "./http.ts";
 import {
   ConnectionClosedError,
   openRpcConnection,
@@ -60,6 +65,8 @@ const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 export interface T3Transport {
   fetchDescriptor(): Promise<EnvironmentDescriptor>;
   openConnection(): Promise<RpcConnection>;
+  /** The whole projection of a thread, over HTTP. */
+  fetchThreadProjection(threadId: string): Promise<WireJson>;
 }
 
 export interface WebSocketBackendOptions {
@@ -74,6 +81,7 @@ export interface WebSocketBackendOptions {
 export function makeHttpTransport(baseUrl: string, token: string): T3Transport {
   return {
     fetchDescriptor: () => fetchDescriptor(baseUrl),
+    fetchThreadProjection: (threadId) => fetchThreadProjection(baseUrl, token, threadId),
     openConnection: async () => {
       const ticket = await issueWebSocketTicket(baseUrl, token);
       const url = new URL("/ws", baseUrl);
@@ -147,9 +155,11 @@ export class WebSocketT3Backend implements T3Backend {
   }
 
   async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<ThreadPage> {
-    // The projection holds every message: the pages are cut here. The cursor is the id of
-    // the oldest message of the page.
-    const all = toThreadMessages(await this.projection(threadId));
+    // Only a checked connection proves the server is a tested version.
+    await this.connection();
+    // The pages are cut here, from every message. The cursor is the id of the oldest
+    // message of the page.
+    const all = toThreadMessages(await this.options.transport.fetchThreadProjection(threadId));
     const end =
       options.before == null ? all.length : all.findIndex((each) => each.id === options.before);
     if (end === -1) return { messages: [], olderCursor: null };
