@@ -8,8 +8,6 @@ export interface SummaryRequest {
   request: string | null;
   /** What the agent answered at the end of its run. It may hold code and file paths. */
   output: string;
-  /** How T3 says the run ended. */
-  outcome: "completed" | "failed";
 }
 
 export interface TaskSummary {

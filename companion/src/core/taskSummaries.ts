@@ -125,7 +125,6 @@ export class TaskSummaries {
         summarizer.summarize({
           request,
           output: output.slice(-MAX_OUTPUT_CHARS),
-          outcome: eventKey.startsWith("failed:") ? "failed" : "completed",
         }),
       );
     } catch (error) {

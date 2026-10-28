@@ -33,7 +33,6 @@ const RUN_INSTRUCTIONS = [
   "You summarize what a coding agent did, for a developer who listens on earphones and cannot see a screen.",
   ...SPOKEN_RULES,
   '"short": 2 or 3 sentences: what was done, and what the agent asks of the user, if anything.',
-  "The outcome comes from the server: never contradict it. When it is failed, say in plain words what went wrong.",
 ].join("\n");
 
 const CONVERSATION_INSTRUCTIONS = [
@@ -71,7 +70,6 @@ export class OpenAiSummarizer implements Summarizer {
     const short = await this.ask(
       RUN_INSTRUCTIONS,
       [
-        `Outcome: ${request.outcome}`,
         `User's request: ${request.request ?? "unknown"}`,
         "Agent's last messages:",
         request.output,

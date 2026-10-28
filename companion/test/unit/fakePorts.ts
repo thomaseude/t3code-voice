@@ -396,8 +396,6 @@ export class FakeSummarizer implements Summarizer {
 
   async summarizeConversation(request: ConversationSummaryRequest) {
     this.conversations.push(request);
-    const own = this.nextGates.shift();
-    if (own !== undefined) await own;
     if (this.gate !== null) await this.gate;
     if (this.failNext) {
       this.failNext = false;

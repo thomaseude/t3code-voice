@@ -136,7 +136,7 @@ describe("a followed task that completes", () => {
 
     assert.deepEqual(session.spoken, [FINISHED]);
     assert.deepEqual(summarizer.requests, [
-      { request: "Corrige les tests", output: "J'ai corrigé les tests.", outcome: "completed" },
+      { request: "Corrige les tests", output: "J'ai corrigé les tests." },
     ]);
   });
 

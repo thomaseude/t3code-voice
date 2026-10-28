@@ -43,7 +43,6 @@ function setup() {
 const REQUEST = {
   request: "Corrige les tests des Reviews",
   output: "J'ai corrigé `reviews_test.rb`.",
-  outcome: "completed" as const,
 };
 
 describe("OpenAiSummarizer", () => {
@@ -56,7 +55,6 @@ describe("OpenAiSummarizer", () => {
     assert.equal(body.model, "gpt-5.4-mini");
     assert.equal(body.store, false);
     assert.match(body.instructions, /French/);
-    assert.match(body.input, /Outcome: completed/);
     assert.match(body.input, /Corrige les tests des Reviews/);
     assert.match(body.input, /J'ai corrigé `reviews_test.rb`./);
     assert.equal(body.text.format.type, "json_schema");
