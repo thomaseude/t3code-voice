@@ -107,7 +107,8 @@ During a session the companion answers the voice model's tools from T3's state:
   a task by its spoken name. Two threads with one title are offered as "<title> sur
   <project>";
 - `summarize_thread` gives a task's status from T3 and a spoken summary of its whole
-  conversation, also while the agent runs, with the cause and `resumes_at` of a failure.
+  conversation, also while the agent runs. When T3's status changes while the summary is
+  made, the new status comes with no summary, with the cause and `resumes_at` of a failure.
   `too_long: true` means part of the conversation was left out: the assistant suggests
   opening T3;
 - `get_recent_messages` gives a task's last messages (3 by default, at most 10), oldest
@@ -116,7 +117,8 @@ During a session the companion answers the voice model's tools from T3's state:
   true`). `older` is a cursor: passed back as `before`, it reads the messages just older.
   Tool calls and diffs are not messages;
 - both reading tools take a followed task's spoken name, else the title of any thread,
-  archived ones too when no active thread fits. They
+  archived ones too when no active thread fits (by title; by title and project only when
+  that fits one thread). They
   give T3's state even for a result the user dismissed in T3, `queued` for a run that waits
   its turn, and `idle` for a thread with no run. They read the whole thread over T3's HTTP
   route `GET /api/orchestration/threads/:id`: the WebSocket's projection is only a window

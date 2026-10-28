@@ -13,8 +13,8 @@ const MAX_SOURCE_CHARS = 4_000;
 
 const CODE_BLOCK = "(bloc de code)";
 
-/** A Markdown list item: "- un", "* un", "1. un", "2) deux". */
-const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+/** A Markdown list item's marker and the spaces after it: "- un", "* un", "1. un", "2) deux". */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
 /** The start of `text`, ready to be spoken; `cut` when the rest is left out. */
 export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
@@ -33,25 +33,31 @@ export function spokenExcerpt(text: string): { excerpt: string; cut: boolean } {
 
 /**
  * `text` with each Markdown code block replaced by CODE_BLOCK: a block fenced with ``` or ~~~
- * (closed or not), and a block of lines indented by 4 spaces or a tab, at the start or after
- * an empty line. What is indented inside a list (a sub-item, a second paragraph of an item)
- * is not code.
+ * (closed or not), and a block of lines indented by 4 spaces more than the text they belong
+ * to, at the start or after an empty line. Inside a list, that text starts after the item's
+ * marker: "1. Lance :" then 4 spaces is a second paragraph of the item, 7 spaces is code.
  */
 function withoutCodeBlocks(text: string): string {
   const unfenced = text.replace(/(```|~~~)[\s\S]*?(?:\1|$)/g, `\n${CODE_BLOCK}\n`);
   const lines: string[] = [];
   let inBlock = false;
-  let inList = false;
+  // Where the text of the current list item starts, or 0 outside a list.
+  let textColumn = 0;
   for (const line of unfenced.split("\n")) {
-    const indented = /^(?: {4}|\t)/.test(line);
-    if (line.trim() !== "" && !indented) inList = LIST_ITEM.test(line);
+    const indent = (line.match(/^[ \t]*/)?.[0] ?? "").replace(/\t/g, "    ").length;
     const afterBreak = lines.length === 0 || lines.at(-1)?.trim() === "";
-    if (indented && !inList && (inBlock || afterBreak)) {
+    const code = indent >= textColumn + 4 && (inBlock || afterBreak);
+    if (code && line.trim() !== "") {
       if (!inBlock) lines.push(CODE_BLOCK);
       inBlock = true;
       continue;
     }
-    inBlock = false;
+    if (line.trim() !== "") {
+      inBlock = false;
+      const item = line.match(LIST_ITEM);
+      if (item !== null) textColumn = item[0].replace(/\t/g, "    ").length;
+      else if (indent === 0) textColumn = 0;
+    }
     lines.push(line);
   }
   return lines.join("\n");
@@ -65,16 +71,15 @@ function spokenText(text: string): string {
       .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
       // A bare link is named; a bracket or a full stop after it is not part of it.
       .replace(/\bhttps?:\/\/[^\s)\]>]*[^\s)\]>.,;:!?]/g, "(lien)")
-      // A path keeps its file name: "/home/me/app/models/review.rb" gives "review.rb". Words
-      // like "and/or" or numbers like "1.5/2.0" stay: a path starts with "/", "~" or ".", or
-      // ends with an extension that starts with a letter.
+      // A path keeps its file name: "/home/me/app/models/review.rb", "C:\Users\me\main.ts"
+      // or "src\core\main.ts" give their last part. Words like "and/or" or numbers like
+      // "1.5/2.0" stay: a path starts with a drive, "/", "\", "~" or ".", or ends with an
+      // extension that starts with a letter.
       .replace(
-        /(?:[~.]*\/)?(?:[\w.@-]+\/)+([\w@-]+\.[A-Za-z]\w*|[\w.@-]+)/g,
+        /(?:\b[A-Za-z]:)?(?:[~.]*[\\/]+)?(?:[\w.@-]+(?:\\\\|[\\/]))+([\w@-]+\.[A-Za-z]\w*|[\w.@-]+)/g,
         (path: string, name: string) =>
-          /^[~./]/.test(path) || /\.[A-Za-z]\w*$/.test(name) ? name : path,
+          /^(?:[A-Za-z]:|[~./\\])/.test(path) || /\.[A-Za-z]\w*$/.test(name) ? name : path,
       )
-      // A Windows path keeps its file name too: "C:\Users\me\main.ts" gives "main.ts".
-      .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)*([^\\\s]+)/g, "$1")
       .replace(/`([^`]*)`/g, "$1")
       .split("\n")
       .map(spokenLine)

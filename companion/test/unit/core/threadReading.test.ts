@@ -209,6 +209,8 @@ describe("get_recent_messages", () => {
       "1. Étape\n\n    suite de l'étape un\n\n2. Étape deux",
       "    npm test\n\nC'est tout.",
       "Voir C:\\Users\\Thomas\\joombo\\src\\main.ts et D:\\logs\\run.log.",
+      "1. Lance :\n\n        npm install --save secret\n\nFini.",
+      "Ouvre C:/Users/me/src/main.ts, src\\core\\main.ts et C:\\\\Users\\\\me\\\\app.ts.",
     ];
     backend.messages.set(
       "t1",
@@ -220,7 +222,7 @@ describe("get_recent_messages", () => {
       })),
     );
 
-    const result = (await call("get_recent_messages", { task: "tests Reviews", count: 8 })) as {
+    const result = (await call("get_recent_messages", { task: "tests Reviews", count: 10 })) as {
       messages: Array<{ excerpt: string }>;
     };
 
@@ -235,6 +237,8 @@ describe("get_recent_messages", () => {
         "Étape suite de l'étape un Étape deux",
         "(bloc de code) C'est tout.",
         "Voir main.ts et run.log.",
+        "Lance : (bloc de code) Fini.",
+        "Ouvre main.ts, main.ts et app.ts.",
       ],
     );
   });
@@ -281,6 +285,41 @@ describe("get_recent_messages", () => {
     };
 
     assert.equal(result.task, "Refonte page offre");
+  });
+
+  test("a bare project name never lists the project's whole archive", async () => {
+    const { call, state } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Refonte page offre", projectId: "p2", archived: true }),
+        thread("t3", { title: "Fix tests", projectId: "p2", archived: true }),
+      ],
+    });
+    state.apply({ type: "project.updated", sequence: 2, project: project("p2", "Totem") });
+
+    assert.deepEqual(await call("summarize_thread", { task: "Totem" }), {
+      error: "unknown_task",
+      followed: ["tests Reviews"],
+    });
+    assert.equal(
+      ((await call("summarize_thread", { task: "Fix tests sur Totem" })) as { task: string }).task,
+      "Fix tests",
+    );
+  });
+
+  test("archived threads with one title are offered newest first", async () => {
+    const { call } = await setup({
+      threads: [
+        RUNNING,
+        thread("t2", { title: "Page offre v1", archived: true, updatedAt: "2026-10-20T10:00Z" }),
+        thread("t3", { title: "Page offre v2", archived: true, updatedAt: "2026-10-25T10:00Z" }),
+      ],
+    });
+
+    assert.deepEqual(await call("summarize_thread", { task: "page offre" }), {
+      status: "ambiguous_task",
+      choices: ["Page offre v2", "Page offre v1"],
+    });
   });
 
   test("an active thread is found before an archived one with the same title", async () => {
@@ -536,7 +575,7 @@ describe("summarize_thread", () => {
     assert.equal(summarizer.conversations[0]?.status, "queued");
   });
 
-  test("a run that ends while it is summarized gives T3's new status and a new summary", async () => {
+  test("a run that ends while it is summarized gives T3's new status and no stale summary", async () => {
     const { engine, summarizer, state } = await setup();
     let release = () => {};
     summarizer.gate = new Promise((resolve) => {
@@ -558,9 +597,10 @@ describe("summarize_thread", () => {
     release();
     await settle();
 
-    const result = engine.last.toolResults[0]?.result as { status: string; summary: string };
+    const result = engine.last.toolResults[0]?.result as { status: string; summary: unknown };
     assert.equal(result.status, "completed");
-    assert.equal(result.summary, "Résumé (completed) de 4 messages, dont : J'écris le test.");
+    assert.equal(result.summary, null);
+    assert.equal(summarizer.conversations.length, 1);
   });
 
   test("a run that fails while it is summarized gives the failure's cause", async () => {
@@ -598,40 +638,6 @@ describe("summarize_thread", () => {
     assert.equal(result.status, "failed");
     assert.equal(result.failure, "usage_limit");
     assert.equal(result.resumes_at, "2026-10-26T15:00:00.000Z");
-  });
-
-  test("a status that keeps changing while it is summarized gives no summary rather than a wrong one", async () => {
-    const { engine, summarizer, state } = await setup();
-    const gates: Array<() => void> = [];
-    for (let index = 0; index < 3; index++) {
-      summarizer.nextGates.push(
-        new Promise((resolve) => {
-          gates.push(resolve);
-        }),
-      );
-    }
-    const statuses = ["completed", "failed", "idle"];
-
-    engine.last.emit({
-      type: "tool_call",
-      callId: "race",
-      name: "summarize_thread",
-      arguments: { task: "tests Reviews" },
-    });
-    for (const [index, status] of statuses.entries()) {
-      await settle();
-      state.apply({
-        type: "thread.updated",
-        sequence: index + 2,
-        thread: { ...RUNNING, status },
-      });
-      gates[index]?.();
-    }
-    await settle();
-
-    const result = engine.last.toolResults[0]?.result as { status: string; summary: unknown };
-    assert.equal(result.status, "idle");
-    assert.equal(result.summary, null);
   });
 
   test("a long first request is sent whole when the conversation fits", async () => {

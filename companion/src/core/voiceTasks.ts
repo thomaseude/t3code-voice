@@ -65,9 +65,6 @@ const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "co
 const DEFAULT_MESSAGE_COUNT = 3;
 const MAX_MESSAGE_COUNT = 10;
 
-/** How many times summarize_thread makes the summary while T3's status keeps changing. */
-const SUMMARY_ATTEMPTS = 3;
-
 /** Who wrote a message, in the words the voice model gets. */
 const SPEAKERS = { user: "user", assistant: "agent", system: "t3" } as const;
 
@@ -342,31 +339,25 @@ export class VoiceTasks {
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
-    // The run may change while it is summarized: the summary is made again for T3's new
-    // status, so that it never contradicts the status the tool gives.
-    let current = thread;
-    let conversation: ConversationSummary = { summary: null, tooLong: false };
-    let settled = false;
+    const status = readingStatusOf(thread);
+    let conversation: ConversationSummary;
     try {
-      for (let attempt = 0; attempt < SUMMARY_ATTEMPTS && !settled; attempt++) {
-        const status = readingStatusOf(current);
-        conversation = await this.options.summaries.conversationSummaryOf(current, status);
-        const now = this.options.shell()?.threads.get(thread.id) ?? current;
-        settled = readingStatusOf(now) === status;
-        current = now;
-      }
+      conversation = await this.options.summaries.conversationSummaryOf(thread, status);
     } catch (error) {
       return this.failed("summarize_thread", error);
     }
-    const status = readingStatusOf(current);
+    // The run may have changed meanwhile: T3's new status goes without the summary, which
+    // was made for the old one and could contradict it.
+    const current = this.options.shell()?.threads.get(thread.id) ?? thread;
+    const moved = readingStatusOf(current) !== status;
     const details: ToolResult = {
       task: name,
       project: shell.projects.get(current.projectId)?.title ?? null,
-      status,
-      summary: settled ? conversation.summary : null,
+      status: readingStatusOf(current),
+      summary: moved ? null : conversation.summary,
       too_long: conversation.tooLong,
     };
-    if (status === "failed") {
+    if (details.status === "failed") {
       details.failure = current.lastError?.failureClass ?? "unknown";
       details.resumes_at = current.lastError?.resumesAt ?? null;
     }
@@ -534,10 +525,7 @@ export class VoiceTasks {
     if (followed.result.status === "ambiguous_task") return followed;
     let match = findThread(shell, reference, shell.topLevelThreads());
     if (match.kind === "none" && archived) {
-      const archivedThreads = [...shell.threads.values()].filter(
-        (thread) => thread.archived && !thread.isSubagent,
-      );
-      match = findThread(shell, reference, archivedThreads);
+      match = findThread(shell, reference, shell.archivedThreads(), { onlyOneByProject: true });
     }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };
@@ -601,16 +589,25 @@ type ThreadMatch =
   | { kind: "none" };
 
 /**
- * One of `threads` by its title; when no title fits, by its title and project together. Two threads
- * with one title are then offered as "Fix tests sur Joombo", which finds one when repeated.
+ * One of `threads` by its title; when no title fits, by its title and project together. Two
+ * threads with one title are then offered as "Fix tests sur Joombo", which finds one when
+ * repeated. With `onlyOneByProject`, title and project together must fit one thread: a bare
+ * project name never offers its whole archive.
  */
-function findThread(shell: ShellState, reference: string, threads: Thread[]): ThreadMatch {
+function findThread(
+  shell: ShellState,
+  reference: string,
+  threads: Thread[],
+  { onlyOneByProject = false } = {},
+): ThreadMatch {
   const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
   const byTitle = findByName(reference, threads, (thread) => thread.title);
-  const match =
-    byTitle.kind === "none"
-      ? findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`)
-      : byTitle;
+  const byProject = () =>
+    findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`);
+  let match = byTitle.kind === "none" ? byProject() : byTitle;
+  if (byTitle.kind === "none" && onlyOneByProject && match.kind === "ambiguous") {
+    match = { kind: "none" };
+  }
   if (match.kind === "none") return { kind: "none" };
   if (match.kind === "found") return { kind: "found", thread: match.item };
   const choices = match.items.map((thread) => {

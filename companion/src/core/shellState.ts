@@ -39,8 +39,17 @@ export class ShellState {
 
   /** Threads the user sees in T3's list (not archived, not subagents), the latest first. */
   topLevelThreads(): Thread[] {
+    return this.latestFirst((thread) => !thread.archived && !thread.isSubagent);
+  }
+
+  /** Threads the user archived in T3 (not subagents), the latest first. */
+  archivedThreads(): Thread[] {
+    return this.latestFirst((thread) => thread.archived && !thread.isSubagent);
+  }
+
+  private latestFirst(keep: (thread: Thread) => boolean): Thread[] {
     return [...this.threads.values()]
-      .filter((thread) => !thread.archived && !thread.isSubagent)
+      .filter(keep)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
