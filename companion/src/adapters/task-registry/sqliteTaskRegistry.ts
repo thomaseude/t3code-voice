@@ -32,6 +32,8 @@ const MIGRATIONS = [
      long TEXT NOT NULL,
      PRIMARY KEY (thread_id, event_key)
    )`,
+  // summarize_thread replaced get_task_details, the only reader of the long summary (#39).
+  "ALTER TABLE task_summaries DROP COLUMN long",
 ];
 
 interface Row {
@@ -117,18 +119,18 @@ export class SqliteTaskRegistry implements TaskRegistry {
   saveSummary(threadId: string, eventKey: string, summary: TaskSummary): void {
     this.db
       .prepare(
-        `INSERT INTO task_summaries (thread_id, event_key, short, long) VALUES (?, ?, ?, ?)
+        `INSERT INTO task_summaries (thread_id, event_key, short) VALUES (?, ?, ?)
          ON CONFLICT (thread_id, event_key) DO UPDATE
-         SET short = excluded.short, long = excluded.long`,
+         SET short = excluded.short`,
       )
-      .run(threadId, eventKey, summary.short, summary.long);
+      .run(threadId, eventKey, summary.short);
   }
 
   summaryOf(threadId: string, eventKey: string): TaskSummary | null {
     const row = this.db
-      .prepare("SELECT short, long FROM task_summaries WHERE thread_id = ? AND event_key = ?")
-      .get(threadId, eventKey) as { short: string; long: string } | undefined;
-    return row === undefined ? null : { short: row.short, long: row.long };
+      .prepare("SELECT short FROM task_summaries WHERE thread_id = ? AND event_key = ?")
+      .get(threadId, eventKey) as { short: string } | undefined;
+    return row === undefined ? null : { short: row.short };
   }
 
   close(): void {

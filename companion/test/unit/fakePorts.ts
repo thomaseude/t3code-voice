@@ -7,7 +7,12 @@ import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
 import type { PushNotification, PushSender } from "../../src/ports/pushSender.ts";
-import type { Summarizer, SummaryRequest, TaskSummary } from "../../src/ports/summarizer.ts";
+import type {
+  ConversationSummaryRequest,
+  Summarizer,
+  SummaryRequest,
+  TaskSummary,
+} from "../../src/ports/summarizer.ts";
 import {
   type LaunchThreadRequest,
   type Project,
@@ -381,7 +386,20 @@ export class FakeSummarizer implements Summarizer {
       this.failNext = false;
       throw new Error("OpenAI did not answer.");
     }
-    return { short: `Résumé de : ${request.output}`, long: `Résumé long de : ${request.output}` };
+    return { short: `Résumé de : ${request.output}` };
+  }
+
+  readonly conversations: ConversationSummaryRequest[] = [];
+
+  async summarizeConversation(request: ConversationSummaryRequest) {
+    this.conversations.push(request);
+    if (this.gate !== null) await this.gate;
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error("OpenAI did not answer.");
+    }
+    const last = request.messages.at(-1)?.text ?? "";
+    return `Résumé (${request.status}) de ${request.messages.length} messages, dont : ${last}`;
   }
 }
 

@@ -1,6 +1,6 @@
 // Starting and steering T3 tasks by voice: the tools start_task, send_message,
-// interrupt_task, follow_thread, unfollow_thread, get_task_details, and the undo behind
-// cancel_last_action.
+// interrupt_task, follow_thread, unfollow_thread, the undo behind cancel_last_action, and
+// the reading tools get_recent_messages and summarize_thread.
 //
 // Every tool checks its arguments, finds the project or task the user named, and acts on
 // T3 only when exactly one fits. Several fits return the choices; nothing is guessed. A
@@ -25,14 +25,14 @@ import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { spokenExcerpt } from "./spokenExcerpts.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
-import type { TaskSummaries } from "./taskSummaries.ts";
+import type { ConversationSummary, TaskSummaries } from "./taskSummaries.ts";
 
 export interface VoiceTasksOptions {
   backend: T3Backend;
   registry: TaskRegistry;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
-  /** The summaries get_task_details reads. */
+  /** The summaries summarize_thread reads. */
   summaries: TaskSummaries;
   clock: Clock;
   /** A new unique id, for T3 command and message ids. */
@@ -326,10 +326,11 @@ export class VoiceTasks {
   }
 
   /**
-   * get_task_details: the task's status from T3, and the long summary of its finished run.
-   * A followed task by its spoken name, else any thread by its title (decided by Thomas in #22).
+   * summarize_thread: the task's status from T3, and a summary of its conversation so far,
+   * also while a run goes on. A followed task by its spoken name, else any thread by its
+   * title (decided by Thomas in #22).
    */
-  async taskDetails(args: unknown): Promise<ToolResult> {
+  async summarizeThread(args: unknown): Promise<ToolResult> {
     const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
     if (reference === null) return { error: "invalid_arguments" };
     const shell = this.options.shell();
@@ -338,20 +339,21 @@ export class VoiceTasks {
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
-    const state = awarenessOf(thread);
-    const eventKey = eventKeyOf(thread);
-    const finished = state === "completed" || state === "failed";
-    const summary =
-      finished && eventKey !== null
-        ? await this.options.summaries.summaryOf(thread, eventKey)
-        : null;
+    const status = awarenessOf(thread) ?? "idle";
+    let conversation: ConversationSummary;
+    try {
+      conversation = await this.options.summaries.conversationSummaryOf(thread, status);
+    } catch (error) {
+      return this.failed("summarize_thread", error);
+    }
     const details: ToolResult = {
       task: name,
       project: shell.projects.get(thread.projectId)?.title ?? null,
-      status: state ?? "idle",
-      summary: summary?.long ?? null,
+      status,
+      summary: conversation.summary,
+      too_long: conversation.tooLong,
     };
-    if (state === "failed") {
+    if (status === "failed") {
       details.failure = thread.lastError?.failureClass ?? "unknown";
       details.resumes_at = thread.lastError?.resumesAt ?? null;
     }

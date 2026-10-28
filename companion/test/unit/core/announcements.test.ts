@@ -306,57 +306,14 @@ describe("a followed task that fails or needs the user", () => {
     ]);
   });
 
-  test("a failure's summary is made right after it is told, for get_task_details", async () => {
-    const { open, update, wait, summarizer, registry } = setup();
+  test("a failure is told by its cause: no summary is made", async () => {
+    const { open, update, wait, summarizer } = setup();
     await open();
 
     update("t1", { status: "failed" });
     await wait(0);
 
-    assert.deepEqual(summarizer.requests, [
-      { request: "Corrige les tests", output: "J'ai corrigé les tests.", outcome: "failed" },
-    ]);
-    assert.notEqual(registry.summaryOf("t1", "failed:run-1"), null);
-  });
-
-  test("a failure's late summary does not replace the summary of the run after it", async () => {
-    const { open, update, wait, summarizer, registry, backend, engine } = setup();
-    await open();
-    let release = () => {};
-    summarizer.nextGates.push(
-      new Promise((resolve) => {
-        release = resolve;
-      }),
-    );
-
-    update("t1", { status: "failed" });
-    await wait(0);
-    backend.messages.set("t1", [
-      { role: "assistant", text: "Tout est fait.", runId: "run-2", createdAt: "2026-10-26T11:00Z" },
-    ]);
-    update("t1", { status: "running", latestRunId: "run-2" });
-    update("t1", { status: "completed" });
-    await wait(5_000);
-    release();
-    await wait(0);
-
-    assert.deepEqual(registry.summaryOf("t1", "completed:run-2"), {
-      short: "Résumé de : Tout est fait.",
-      long: "Résumé long de : Tout est fait.",
-    });
-    const session = engine.last;
-    session.emit({
-      type: "tool_call",
-      callId: "c1",
-      name: "get_task_details",
-      arguments: { task: "tests Reviews" },
-    });
-    await settle();
-    assert.equal(
-      (session.toolResults[0]?.result as { summary?: string } | undefined)?.summary,
-      "Résumé long de : Tout est fait.",
-    );
-    assert.equal(summarizer.requests.length, 2);
+    assert.deepEqual(summarizer.requests, []);
   });
 
   test("a summary that lands while T3 is away is kept all the same", async () => {
@@ -369,13 +326,15 @@ describe("a followed task that fails or needs the user", () => {
       }),
     );
 
-    update("t1", { status: "failed" });
-    await wait(0);
+    update("t1", { status: "completed" });
+    await wait(5_000);
     disconnect();
     release();
     await wait(0);
 
-    assert.notEqual(registry.summaryOf("t1", "failed:run-1"), null);
+    assert.deepEqual(registry.summaryOf("t1", "completed:run-1"), {
+      short: "Résumé de : J'ai corrigé les tests.",
+    });
   });
 
   test("a run T3 resumes by itself, on another day, says so", async () => {
@@ -613,7 +572,7 @@ describe("speaking at the next gap", () => {
     session.emit({
       type: "tool_call",
       callId: "c1",
-      name: "get_task_details",
+      name: "summarize_thread",
       arguments: { task: "tests Reviews" },
     });
     await settle();
@@ -787,159 +746,5 @@ describe("when no voice session can speak", () => {
 
     assert.ok(logs.some((line) => /could not push/.test(line)));
     assert.ok(logs.every((line) => !line.includes("tests Reviews")));
-  });
-});
-
-describe("get_task_details", () => {
-  async function details(
-    context: Awaited<ReturnType<typeof setup>>,
-    args: unknown = { task: "tests Reviews" },
-  ) {
-    const session = await context.open();
-    session.emit({ type: "tool_call", callId: "c1", name: "get_task_details", arguments: args });
-    await settle();
-    return session.toolResults.at(-1)?.result;
-  }
-
-  test("a finished task gives T3's status and the long summary already made", async () => {
-    const context = setup();
-    context.update("t1", { status: "completed" });
-    await context.wait(5_000);
-
-    const result = await details(context);
-
-    assert.deepEqual(result, {
-      task: "tests Reviews",
-      project: "Joombo",
-      status: "completed",
-      summary: "Résumé long de : J'ai corrigé les tests.",
-    });
-    assert.equal(context.summarizer.requests.length, 1);
-  });
-
-  test("a finished task with no summary yet is summarized now", async () => {
-    const context = setup({
-      threads: [thread("t1", { status: "completed", latestRunId: "run-1" })],
-    });
-
-    const result = await details(context);
-
-    assert.equal(
-      (result as { summary: string }).summary,
-      "Résumé long de : J'ai corrigé les tests.",
-    );
-  });
-
-  test("a failed task also gives its cause and when it can resume", async () => {
-    const context = setup({
-      threads: [
-        thread("t1", {
-          status: "failed",
-          latestRunId: "run-1",
-          lastError: {
-            message: "Usage limit reached",
-            failureClass: "usage_limit",
-            resumesAt: "2026-10-26T15:00:00.000Z",
-            autoResume: false,
-          },
-        }),
-      ],
-    });
-
-    const result = await details(context);
-
-    assert.deepEqual(result, {
-      task: "tests Reviews",
-      project: "Joombo",
-      status: "failed",
-      summary: "Résumé long de : J'ai corrigé les tests.",
-      failure: "usage_limit",
-      resumes_at: "2026-10-26T15:00:00.000Z",
-    });
-  });
-
-  test("a running task gives its status and no summary", async () => {
-    const result = await details(setup());
-
-    assert.deepEqual(result, {
-      task: "tests Reviews",
-      project: "Joombo",
-      status: "running",
-      summary: null,
-    });
-  });
-
-  test("a thread nobody follows is found by its title, and summarized without being kept", async () => {
-    const offer = thread("t2", {
-      title: "Refonte page offre",
-      status: "completed",
-      latestRunId: "run-9",
-    });
-    const context = setup({ threads: [RUNNING, offer] });
-    context.backend.messages.set("t2", [
-      { role: "assistant", text: "Page refaite.", runId: "run-9", createdAt: "2026-10-26T09:00Z" },
-    ]);
-
-    const result = await details(context, { task: "refonte page offre" });
-
-    assert.deepEqual(result, {
-      task: "Refonte page offre",
-      project: "Joombo",
-      status: "completed",
-      summary: "Résumé long de : Page refaite.",
-    });
-    assert.equal(context.registry.summaryOf("t2", "completed:run-9"), null);
-  });
-
-  test("several threads with that title: the user picks one", async () => {
-    const context = setup({
-      threads: [
-        RUNNING,
-        thread("t2", { title: "Page offre Joombo" }),
-        thread("t3", { title: "Page offre Totem" }),
-      ],
-    });
-
-    const result = await details(context, { task: "page offre" });
-
-    assert.deepEqual(result, {
-      status: "ambiguous_task",
-      choices: ["Page offre Joombo", "Page offre Totem"],
-    });
-  });
-
-  test("two threads with the same title are told apart by their project", async () => {
-    const context = setup({
-      threads: [
-        RUNNING,
-        thread("t2", { title: "Fix tests", projectId: "p1" }),
-        thread("t3", { title: "Fix tests", projectId: "p2" }),
-      ],
-    });
-    context.state.apply({ type: "project.updated", sequence: 50, project: project("p2", "Totem") });
-
-    assert.deepEqual(await details(context, { task: "fix tests" }), {
-      status: "ambiguous_task",
-      choices: ["Fix tests sur Joombo", "Fix tests sur Totem"],
-    });
-    assert.deepEqual(await details(context, { task: "Fix tests sur Totem" }), {
-      task: "Fix tests",
-      project: "Totem",
-      status: "idle",
-      summary: null,
-    });
-  });
-
-  test("an unknown task lists the followed ones", async () => {
-    const result = await details(setup(), { task: "migration base" });
-
-    assert.deepEqual(result, { error: "unknown_task", followed: ["tests Reviews"] });
-  });
-
-  test("while T3 is away, it says so instead of a stale status", async () => {
-    const context = setup();
-    context.disconnect();
-
-    assert.deepEqual(await details(context), { error: "t3_unavailable" });
   });
 });
