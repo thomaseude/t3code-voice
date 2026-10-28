@@ -1,16 +1,21 @@
 // Voice sessions: opens one per device with the voice engine and answers the tools the voice
-// model calls, from the companion's view of T3.
+// model calls, from the companion's view of T3. A session stops by itself after a silence or
+// once the day's sessions cost the daily budget, and records what it cost.
 
 import type {
   ActivityItem,
   OpenSessionRequest,
   OpenSessionResult,
+  SessionEvent,
   VoiceSessions,
 } from "../ports/apiServer.ts";
 import type { Clock } from "../ports/clock.ts";
+import type { SessionLimits } from "../ports/configStore.ts";
+import type { TaskRegistry, UsageRecord } from "../ports/taskRegistry.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
 import type { AnnouncementQueue } from "./announcementQueue.ts";
+import { awarenessOf } from "./awareness.ts";
 import { Confirmations } from "./confirmations.ts";
 import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
@@ -26,6 +31,11 @@ export interface VoiceSessionManagerOptions {
   tasks: VoiceTasks;
   /** Speaks the news of followed tasks in the open sessions. */
   announcements: AnnouncementQueue;
+  /** The followed tasks, which make a silence last longer, and the usage records. */
+  registry: TaskRegistry;
+  limits: SessionLimits;
+  /** IANA time zone whose calendar day the daily budget counts; the server's by default. */
+  budgetTimeZone?: string;
   /**
    * Whether the device was revoked (`t3-voice devices revoke` runs in another process).
    * A device that is not paired counts as revoked. A failure counts as revoked too.
@@ -39,11 +49,26 @@ export interface VoiceSessionManagerOptions {
 interface ActiveSession {
   id: string;
   deviceId: string;
+  engine: VoiceEngine;
   engineSession: VoiceSession;
   /** IANA time zone of the device. */
   timeZone: string;
   /** Clock time when the engine answered. */
   openedAt: number;
+  /** The budget's calendar day the session opened on: its whole cost counts on that day. */
+  day: string;
+  /** Clock time the usage was last saved. */
+  usageSavedAt: number;
+  /** Clock time of the last activity: user speech, a tool call, an announcement or unmuting. */
+  lastActivityAt: number;
+  /** Whether the app says its microphone is off: the silence warning then says how to go on. */
+  muted: boolean;
+  /** Clock time of the "je coupe dans 30 secondes" warning, or null since the last activity. */
+  idleWarnedAt: number | null;
+  /** Whether the session already heard the 80 % warning. */
+  budgetWarned: boolean;
+  /** Set once the session said it stops: it closes after the goodbye. */
+  stopping: boolean;
   /** Cancels the close that end_session scheduled, if any. */
   cancelEnd?: () => void;
   /** How to take back the session's last start or message, and until when (clock time). */
@@ -64,6 +89,27 @@ const GOODBYE_MS = 5_000;
 /** How long "non, arrête" can still cancel a start or a message after its read-back. */
 const CANCEL_WINDOW_MS = 60_000;
 
+const MINUTE_MS = 60_000;
+
+/** How often open sessions are checked for a silence and for the budget. */
+const LIMIT_CHECK_MS = 5_000;
+
+/** How often an open session saves its usage, so a crash loses little of it. */
+const USAGE_SAVE_MS = 60_000;
+
+/** The warning comes this long before a silence stops the session (decided by Thomas in #24). */
+const IDLE_WARNING_MS = 30_000;
+
+/** Share of the daily budget at which the assistant warns once per session. */
+const BUDGET_WARNING_SHARE = 0.8;
+
+const IDLE_WARNING = "Je n'entends plus rien : je coupe dans 30 secondes si tu ne dis rien.";
+const MUTED_IDLE_WARNING =
+  "Tu es en sourdine depuis un moment : je coupe dans 30 secondes. Réactive le micro pour continuer.";
+const IDLE_STOP = "Je coupe la conversation. Relance-moi quand tu veux.";
+const BUDGET_WARNING = "Attention : tu as utilisé 80 % du budget voix du jour.";
+const BUDGET_STOP = "Le budget voix du jour est atteint : je coupe la conversation.";
+
 export class VoiceSessionManager implements VoiceSessions {
   private readonly options: VoiceSessionManagerOptions;
   /** The open session of each device, by device id. */
@@ -73,6 +119,9 @@ export class VoiceSessionManager implements VoiceSessions {
   /** Set by closeAll: the companion is stopping, so no session opens any more. */
   private stopping = false;
   private cancelRevocationCheck: (() => void) | null = null;
+  private cancelLimitCheck: (() => void) | null = null;
+  /** Whether a followed task ran when T3 was last reachable: kept while T3 is away. */
+  private taskRanWhenLastSeen = false;
 
   constructor(options: VoiceSessionManagerOptions) {
     this.options = options;
@@ -91,11 +140,21 @@ export class VoiceSessionManager implements VoiceSessions {
     });
   }
 
+  handleEvent(deviceId: string, sessionId: string, event: SessionEvent): boolean {
+    const session = this.byDevice.get(deviceId);
+    if (session === undefined || session.id !== sessionId) return false;
+    session.muted = event === "mute";
+    if (event === "unmute") this.markActivity(session);
+    return true;
+  }
+
   /** Ends every session, those still opening included: `serve` calls it before it stops. */
   async closeAll(): Promise<void> {
     this.stopping = true;
     this.cancelRevocationCheck?.();
     this.cancelRevocationCheck = null;
+    this.cancelLimitCheck?.();
+    this.cancelLimitCheck = null;
     await Promise.all([...this.queues.values()]);
     await Promise.all(
       [...this.byDevice.values()].map((session) =>
@@ -111,6 +170,10 @@ export class VoiceSessionManager implements VoiceSessions {
     // which would otherwise keep costing until it ends on its own.
     const previous = this.byDevice.get(deviceId);
     if (previous !== undefined) await this.end(previous);
+    if (this.spentToday() >= this.options.limits.dailyBudgetUsd) {
+      this.options.log(`t3-voice: the daily voice budget is reached; no session for ${deviceId}.`);
+      return { status: "budget_reached" };
+    }
 
     const timeZone =
       request.timeZone !== null && isTimeZone(request.timeZone)
@@ -138,24 +201,40 @@ export class VoiceSessionManager implements VoiceSessions {
       return { status: "failed" };
     }
     const id = randomSecret(16);
-    session = {
+    const openedAt = this.options.clock.now();
+    const opened: ActiveSession = {
       id,
       deviceId,
+      engine,
       engineSession,
       timeZone,
-      openedAt: this.options.clock.now(),
+      openedAt,
       confirmations: new Confirmations(this.options.clock, (open) =>
         this.options.announcements.questionOpen(id, open),
       ),
+      day: this.dayOf(openedAt),
+      usageSavedAt: openedAt,
+      lastActivityAt: openedAt,
+      muted: false,
+      idleWarnedAt: null,
+      budgetWarned: false,
+      stopping: false,
     };
-    this.byDevice.set(deviceId, session);
-    this.options.announcements.openSession(session.id, {
-      speak: (text) => engineSession.speak(text),
+    session = opened;
+    this.byDevice.set(deviceId, opened);
+    this.options.announcements.openSession(opened.id, {
+      // An announcement counts as activity: the silence starts again after it.
+      speak: (text) => {
+        engineSession.speak(text);
+        this.markActivity(opened);
+      },
       timeZone,
     });
+    this.saveUsage(opened);
     this.options.log(`t3-voice: voice session opened for device ${deviceId}.`);
     this.watchRevocations();
-    return { status: "opened", sessionId: session.id, sdpAnswer: engineSession.sdpAnswer };
+    this.watchLimits();
+    return { status: "opened", sessionId: opened.id, sdpAnswer: engineSession.sdpAnswer };
   }
 
   private async end(session: ActiveSession) {
@@ -199,6 +278,133 @@ export class VoiceSessionManager implements VoiceSessions {
     await this.close(session.deviceId, session.id).catch(() => {});
   }
 
+  /** While a session is open, checks every 5 s for a silence and for the daily budget. */
+  private watchLimits() {
+    if (this.cancelLimitCheck !== null || this.stopping || this.byDevice.size === 0) return;
+    this.cancelLimitCheck = this.options.clock.schedule(LIMIT_CHECK_MS, () => {
+      this.cancelLimitCheck = null;
+      this.checkLimits();
+      this.watchLimits();
+    });
+  }
+
+  private checkLimits() {
+    const now = this.options.clock.now();
+    const sessions = [...this.byDevice.values()].filter((session) => !session.stopping);
+    for (const session of sessions) {
+      if (now - session.usageSavedAt >= USAGE_SAVE_MS) this.saveUsage(session);
+    }
+    const budget = this.options.limits.dailyBudgetUsd;
+    const today = this.dayOf(now);
+    const silenceLimitMs = this.silenceLimitMs();
+    for (const session of sessions) {
+      // A session still open after midnight also counts against the day it started on.
+      const spent = Math.max(this.spentOn(today), this.spentOn(session.day));
+      if (spent >= budget) {
+        this.stop(session, BUDGET_STOP, "the daily budget is reached");
+        continue;
+      }
+      if (
+        spent >= budget * BUDGET_WARNING_SHARE &&
+        !session.budgetWarned &&
+        this.options.announcements.isQuiet(session.id)
+      ) {
+        session.budgetWarned = true;
+        this.say(session, BUDGET_WARNING);
+      }
+      this.checkSilence(session, silenceLimitMs);
+    }
+  }
+
+  /** Warns 30 s before the limit, and stops only 30 s after the warning. */
+  private checkSilence(session: ActiveSession, limitMs: number) {
+    const now = this.options.clock.now();
+    const silentFor = now - session.lastActivityAt;
+    if (silentFor < limitMs - IDLE_WARNING_MS) {
+      session.idleWarnedAt = null;
+      return;
+    }
+    if (session.idleWarnedAt === null) {
+      session.idleWarnedAt = now;
+      this.say(session, session.muted ? MUTED_IDLE_WARNING : IDLE_WARNING);
+      return;
+    }
+    if (silentFor >= limitMs && now - session.idleWarnedAt >= IDLE_WARNING_MS) {
+      this.stop(session, IDLE_STOP, "silence");
+    }
+  }
+
+  /**
+   * The longer limit while a followed task runs. While T3 is away, the last known answer
+   * holds (decided by Thomas in #24): a short restart of T3 does not cut a wait.
+   */
+  private silenceLimitMs(): number {
+    const { idleMinutes, idleMinutesWhileTasksRun } = this.options.limits;
+    const shell = this.options.shell();
+    if (shell !== null) {
+      this.taskRanWhenLastSeen = this.options.registry.followedTasks().some((task) => {
+        const thread = shell.threads.get(task.threadId);
+        return thread !== undefined && awarenessOf(thread) === "running";
+      });
+    }
+    return (this.taskRanWhenLastSeen ? idleMinutesWhileTasksRun : idleMinutes) * MINUTE_MS;
+  }
+
+  /** Says why the session stops, then closes it after a short goodbye. */
+  private stop(session: ActiveSession, text: string, reason: string) {
+    session.stopping = true;
+    this.say(session, text);
+    this.options.log(`t3-voice: voice session of device ${session.deviceId} stops: ${reason}.`);
+    this.closeAfterGoodbye(session);
+  }
+
+  private closeAfterGoodbye(session: ActiveSession) {
+    session.cancelEnd?.();
+    session.cancelEnd = this.options.clock.schedule(GOODBYE_MS, () => {
+      this.close(session.deviceId, session.id).catch(() => {});
+    });
+  }
+
+  private say(session: ActiveSession, text: string) {
+    session.engineSession.speak(text);
+    this.options.announcements.heardSpeech(session.id);
+  }
+
+  /** The user is there, or just heard news: the silence starts again. */
+  private markActivity(session: ActiveSession) {
+    session.lastActivityAt = this.options.clock.now();
+    session.idleWarnedAt = null;
+  }
+
+  private saveUsage(session: ActiveSession) {
+    const now = this.options.clock.now();
+    session.usageSavedAt = now;
+    this.options.registry.saveUsage(usageOf(session, now));
+  }
+
+  private spentToday(): number {
+    return this.spentOn(this.dayOf(this.options.clock.now()));
+  }
+
+  /** What the sessions of a day cost: the saved ones, and the open ones until now. */
+  private spentOn(day: string): number {
+    const now = this.options.clock.now();
+    const open = [...this.byDevice.values()];
+    const openIds = new Set(open.map((session) => session.id));
+    let spent = 0;
+    for (const record of this.options.registry.usageOn(day)) {
+      if (!openIds.has(record.sessionId)) spent += record.estimatedCostUsd;
+    }
+    for (const session of open) {
+      if (session.day === day) spent += usageOf(session, now).estimatedCostUsd;
+    }
+    return roundUsd(spent);
+  }
+
+  private dayOf(time: number): string {
+    return dayIn(this.options.budgetTimeZone ?? serverTimeZone(), new Date(time));
+  }
+
   private inTurn<T>(deviceId: string, step: () => Promise<T>): Promise<T> {
     const run = (this.queues.get(deviceId) ?? Promise.resolve()).then(step);
     const settled = run.catch(() => {});
@@ -213,19 +419,28 @@ export class VoiceSessionManager implements VoiceSessions {
   private onEvent(session: ActiveSession, event: VoiceEvent) {
     if (event.type === "closed") {
       this.forget(session);
-      const minutes = (this.options.clock.now() - session.openedAt) / 60_000;
+      this.saveUsage(session);
+      const { minutes, estimatedCostUsd } = usageOf(session, this.options.clock.now());
+      const budget = this.options.limits.dailyBudgetUsd;
       this.options.log(
-        `t3-voice: voice session of device ${session.deviceId} ${event.reason === "failed" ? "failed" : "ended"} after ${minutes.toFixed(1)} min.`,
+        `t3-voice: voice session of device ${session.deviceId} ${event.reason === "failed" ? "failed" : "ended"} after ${minutes.toFixed(1)} min (~$${estimatedCostUsd.toFixed(2)}; today ~$${this.spentToday().toFixed(2)} of the $${budget.toFixed(2)} budget).`,
       );
       return;
     }
     if (event.type === "speech") {
-      if (event.speaker === "user") session.confirmations.heard(event.text);
-      else session.confirmations.assistantSpoke();
+      // The assistant speaking alone, its own warnings included, does not show the user is
+      // there. A muted phone sends no audio, so a user transcript means the user speaks.
+      if (event.speaker === "user") {
+        session.confirmations.heard(event.text);
+        this.markActivity(session);
+      } else {
+        session.confirmations.assistantSpoke();
+      }
       this.options.announcements.heardSpeech(session.id);
       return;
     }
     if (event.type === "tool_call") {
+      this.markActivity(session);
       const { announcements } = this.options;
       // The model speaks the result next: announcements wait until it is done.
       announcements.toolCallStarted(session.id);
@@ -294,10 +509,7 @@ export class VoiceSessionManager implements VoiceSessions {
         if (name === "list_projects") return { projects: projectNamesOf(shell) };
         return this.activity(session, shell, args);
       case "end_session":
-        session.cancelEnd?.();
-        session.cancelEnd = this.options.clock.schedule(GOODBYE_MS, () => {
-          this.close(session.deviceId, session.id).catch(() => {});
-        });
+        this.closeAfterGoodbye(session);
         return { status: "ending" };
       default:
         return { error: "unknown_tool" };
@@ -364,6 +576,23 @@ export class VoiceSessionManager implements VoiceSessions {
     const shell = this.options.shell();
     return shell === null ? [] : projectNamesOf(shell);
   }
+}
+
+function usageOf(session: ActiveSession, now: number): UsageRecord {
+  const minutes = (now - session.openedAt) / MINUTE_MS;
+  return {
+    sessionId: session.id,
+    engine: session.engine.model,
+    day: session.day,
+    startedAt: new Date(session.openedAt).toISOString(),
+    minutes,
+    estimatedCostUsd: roundUsd(minutes * session.engine.usdPerMinute),
+  };
+}
+
+/** To a millionth of a dollar: sums of floating-point prices must reach the budget exactly. */
+function roundUsd(amount: number): number {
+  return Math.round(amount * 1_000_000) / 1_000_000;
 }
 
 function projectNamesOf(shell: ShellState): string[] {

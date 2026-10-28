@@ -18,6 +18,22 @@ export const DEFAULT_VOICE = {
   summaryModel: "gpt-5.4-mini",
 };
 
+/** When a voice session stops by itself, and what voice may cost per day. */
+export interface SessionLimits {
+  /** Silence after which the session stops, when no followed task runs. */
+  idleMinutes: number;
+  /** Silence after which the session stops while a followed task runs. */
+  idleMinutesWhileTasksRun: number;
+  /** Estimated cost after which the session stops and no new one opens, until the next day. */
+  dailyBudgetUsd: number;
+}
+
+export const DEFAULT_SESSION_LIMITS: SessionLimits = {
+  idleMinutes: 3,
+  idleMinutesWhileTasksRun: 20,
+  dailyBudgetUsd: 10,
+};
+
 export interface CompanionConfig {
   t3: {
     baseUrl: string;
@@ -34,7 +50,10 @@ export interface CompanionConfig {
     /** HTTPS address the iPhone reaches the companion at, e.g. "https://voice.example.com". */
     publicUrl?: string;
   };
-  /** GPT-Live and summary settings; each one missing takes its DEFAULT_VOICE value. */
+  /**
+   * GPT-Live, summary and session settings; each one missing takes its DEFAULT_VOICE or
+   * DEFAULT_SESSION_LIMITS value.
+   */
   voice?: {
     model?: string;
     voice?: string;
@@ -42,6 +61,9 @@ export interface CompanionConfig {
     delegationModel?: string;
     /** The text model that summarizes what an agent did, for announcements. */
     summaryModel?: string;
+    idleMinutes?: number;
+    idleMinutesWhileTasksRun?: number;
+    dailyBudgetUsd?: number;
   };
 }
 

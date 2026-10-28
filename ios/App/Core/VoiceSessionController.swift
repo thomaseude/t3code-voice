@@ -8,7 +8,8 @@ enum SessionState: Equatable {
     case authenticating
     /// The microphone is open and the companion opens the session with the voice engine.
     case connecting
-    case live
+    /// Muted: the microphone sends nothing, and the assistant still speaks.
+    case live(muted: Bool)
     case ending(EndReason)
 
     /// What the screen and the Live Activity say about the session. Nil when no session runs.
@@ -16,9 +17,15 @@ enum SessionState: Equatable {
         switch self {
         case .idle, .authenticating: nil
         case .connecting: "Connexion…"
-        case .live: "À l'écoute"
+        case .live(muted: false): "À l'écoute"
+        case .live(muted: true): "En sourdine"
         case .ending: "Fin…"
         }
+    }
+
+    var isLive: Bool {
+        if case .live = self { return true }
+        return false
     }
 }
 
@@ -26,9 +33,9 @@ enum EndReason: Equatable {
     /// The End button, in the app or on the Live Activity.
     case user
     /// `session.closed` arrived: the companion closed it. Most often the voice model ended it
-    /// ("fin", "c'est bon, merci"), but the companion also closes it when the device is
-    /// revoked, when `serve` stops, or when a newer session replaces it. The phone cannot
-    /// tell these apart.
+    /// ("fin", "c'est bon, merci"), but the companion also closes it after a silence, at the
+    /// daily budget, when the device is revoked, when `serve` stops, or when a newer session
+    /// replaces it. The phone cannot tell these apart: the assistant says why first.
     case voice
     case error(SessionFailure)
 }
@@ -39,6 +46,8 @@ enum SessionFailure: Equatable {
     case limited
     case voiceUnavailable
     case voiceEngineFailed
+    /// Today's sessions cost the companion's daily budget.
+    case budgetReached
     case companionUnreachable
     /// The companion answered with a status the app does not expect.
     case companionRefused(status: Int)
@@ -54,6 +63,7 @@ enum SessionFailure: Equatable {
         case .limited: "Trop de requêtes. Réessaie dans un instant."
         case .voiceUnavailable: "La voix est désactivée sur le companion : il n'a pas de clé OpenAI."
         case .voiceEngineFailed: "OpenAI n'a pas ouvert la session. Réessaie dans un instant."
+        case .budgetReached: "Le budget voix du jour est atteint. Réessaie demain."
         case .companionUnreachable: "Le companion ne répond pas."
         case let .companionRefused(status): "Le companion a répondu une erreur (\(status))."
         case .callFailed: "La connexion audio n'a pas pu s'établir."
@@ -69,6 +79,7 @@ enum SessionFailure: Equatable {
         case CompanionError.limited: self = .limited
         case CompanionError.voiceUnavailable: self = .voiceUnavailable
         case CompanionError.voiceEngineFailed: self = .voiceEngineFailed
+        case CompanionError.budgetReached: self = .budgetReached
         case let CompanionError.unexpected(status): self = .companionRefused(status: status)
         default: self = .companionUnreachable
         }
@@ -85,14 +96,20 @@ enum VoiceCallError: Error {
     case failed
 }
 
-/// What the voice engine reports on the call.
-enum VoiceCallEvent {
+/// What the voice engine and the audio route report on the call.
+enum VoiceCallEvent: Equatable {
     /// `session.started` on the data channel: the phone may talk.
     case sessionStarted
     /// `session.closed` on the data channel: the session ended on the voice engine's side.
     case sessionClosed
+    /// The audio route changed: a headset came or went, or the speaker was turned on or off.
+    case routeChanged
     /// The peer connection or the data channel failed.
     case lost
+    /// The AirPods (or another headset) went away: iOS would go on with the phone's own mic.
+    case headsetLost
+    /// The user pressed the AirPods stem: iOS asks to mute or unmute.
+    case headsetMuteChanged(muted: Bool)
 }
 
 /// One WebRTC call to the voice engine, with the audio session. A new one for each session.
@@ -101,14 +118,24 @@ protocol VoiceCall: AnyObject {
     /// Opens the microphone and returns the SDP offer, without waiting for full ICE gathering.
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String
     func accept(answer: String) async throws
+    /// Sends the voice to the iPhone speaker, or back to the earpiece or the headset. It
+    /// changes only the output: the audio session stays active.
+    func setSpeaker(_ on: Bool) throws
+    /// Whether the voice goes to the iPhone speaker now.
+    var outputIsSpeaker: Bool { get }
     /// Closes the connection and the microphone. Safe to call twice.
     func hangUp()
+    /// Sends silence instead of the microphone, or the microphone again.
+    func setMuted(_ muted: Bool)
 }
 
 /// What the user sees and hears of the session: the Live Activity and the start sound.
 @MainActor
 protocol SessionFeedback {
+    func showSpeaker(_ on: Bool)
     func show(_ state: SessionState)
+    /// Once per session, when the user can talk.
+    func playStartSound()
 }
 
 /// Runs a voice conversation from "Parler" to its end: Face ID, the WebRTC call, and the
@@ -118,6 +145,9 @@ final class VoiceSessionController: ObservableObject {
     @Published private(set) var state: SessionState = .idle
     /// Why the last session failed, until the next start.
     @Published private(set) var lastFailure: SessionFailure?
+    /// The voice goes to the iPhone speaker. Off at the start of each session: an answer about
+    /// the code must not play aloud in a room by surprise (decided by Thomas in #19).
+    @Published private(set) var speaker = false
 
     private let client: CompanionClient
     private let authenticator: Authenticator
@@ -129,6 +159,8 @@ final class VoiceSessionController: ObservableObject {
     /// The call of the current session, and the session on the companion once it answered.
     private var call: VoiceCall?
     private var session: OpenedSession?
+    /// The AirPods went away or were muted while connecting: the session goes live muted.
+    private var muteWhenLive = false
 
     init(
         client: CompanionClient,
@@ -155,6 +187,7 @@ final class VoiceSessionController: ObservableObject {
             return
         }
         show(.connecting)
+        muteWhenLive = false
         let call = makeCall()
         self.call = call
         do {
@@ -178,6 +211,12 @@ final class VoiceSessionController: ObservableObject {
         }
     }
 
+    /// The Mute/Unmute button, in the app or on the Live Activity.
+    func toggleMute() async {
+        guard case let .live(muted) = state else { return }
+        await setMuted(!muted)
+    }
+
     /// The End button, in the app or on the Live Activity.
     func end() async {
         guard state != .idle else {
@@ -189,26 +228,69 @@ final class VoiceSessionController: ObservableObject {
         await finish(.user)
     }
 
+    /// The Speaker button, in the app or on the Live Activity.
+    func toggleSpeaker() {
+        if state == .idle {
+            // Like End: after the app was killed, its Live Activity still shows the microphone.
+            feedback.show(.idle)
+            return
+        }
+        guard case .live = state, let call else { return }
+        do {
+            try call.setSpeaker(!speaker)
+        } catch {
+            return
+        }
+        showSpeaker(!speaker)
+    }
+
     private func handle(_ event: VoiceCallEvent, from call: VoiceCall) async {
         guard call === self.call else { return }
         switch event {
         case .sessionStarted:
-            if state == .connecting { show(.live) }
+            guard state == .connecting else { return }
+            show(.live(muted: false))
+            feedback.playStartSound()
+            if muteWhenLive { await setMuted(true) }
         case .sessionClosed:
             await finish(.voice)
+        case .routeChanged:
+            // The event can arrive after a tap turned the speaker on again, so read the route
+            // now. A route change only ever turns the speaker off (spec #15, "Audio").
+            if !call.outputIsSpeaker { showSpeaker(false) }
         case .lost:
             await finish(.error(.lost))
+        case .headsetLost:
+            // Muted rather than going on with the phone's own microphone (spec #15, "Audio").
+            await setMuted(true)
+        case let .headsetMuteChanged(muted):
+            await setMuted(muted)
         }
+    }
+
+    /// Mutes or unmutes the microphone at once. The companion is told so it counts muted
+    /// time as silence; a failed request leaves the microphone as the user asked.
+    private func setMuted(_ muted: Bool) async {
+        if state == .connecting {
+            muteWhenLive = muted
+            return
+        }
+        guard case let .live(current) = state, current != muted, let call else { return }
+        call.setMuted(muted)
+        show(.live(muted: muted))
+        guard let session else { return }
+        try? await client.send(muted ? .mute : .unmute, in: session)
     }
 
     /// Closes the microphone at once, then the session on the companion if it has one.
     /// While the companion is still opening it, `start()` closes it when its answer arrives.
     private func finish(_ reason: EndReason) async {
-        guard state == .connecting || state == .live else { return }
+        guard state == .connecting || state.isLive else { return }
         if case let .error(failure) = reason { lastFailure = failure }
         show(.ending(reason))
         call?.hangUp()
         call = nil
+        showSpeaker(false)
         let session = self.session
         self.session = nil
         // After `session.closed` the companion has nothing left to close.
@@ -218,6 +300,12 @@ final class VoiceSessionController: ObservableObject {
 
     private func isCurrent(_ call: VoiceCall) -> Bool {
         call === self.call && state == .connecting
+    }
+
+    private func showSpeaker(_ on: Bool) {
+        guard speaker != on else { return }
+        speaker = on
+        feedback.showSpeaker(on)
     }
 
     private func show(_ state: SessionState) {

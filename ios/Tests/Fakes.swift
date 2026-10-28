@@ -57,8 +57,11 @@ final class FakeVoiceCall: VoiceCall {
     var offer = "v=0 offer"
     var startError: Error?
     var acceptError: Error?
+    var speakerError: Error?
+    private(set) var speakerOn = false
     private(set) var acceptedAnswer: String?
     private(set) var hungUp = false
+    private(set) var muted = false
     private var onEvent: (@MainActor (VoiceCallEvent) async -> Void)?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
@@ -76,18 +79,46 @@ final class FakeVoiceCall: VoiceCall {
         hungUp = true
     }
 
+    func setMuted(_ muted: Bool) {
+        self.muted = muted
+    }
+
     /// What the data channel or the peer connection reports.
     func emit(_ event: VoiceCallEvent) async {
         await onEvent?(event)
+    }
+
+    func setSpeaker(_ on: Bool) throws {
+        if let speakerError { throw speakerError }
+        speakerOn = on
+    }
+
+    var outputIsSpeaker: Bool { speakerOn }
+
+    /// iOS moves the voice off the speaker, as when AirPods connect, and reports the new route.
+    func leaveSpeaker() async {
+        speakerOn = false
+        await emit(.routeChanged)
     }
 }
 
 /// Records every state the user was shown (Live Activity, start sound, screen).
 @MainActor
 final class FakeFeedback: SessionFeedback {
+    /// Each time the speaker was shown on or off.
+    private(set) var speakerShown: [Bool] = []
     private(set) var shown: [SessionState] = []
+    private(set) var startSounds = 0
 
     func show(_ state: SessionState) {
         shown.append(state)
+    }
+
+    func showSpeaker(_ on: Bool) {
+        speakerShown.append(on)
+    }
+
+    func playStartSound() {
+        startSounds += 1
     }
 }

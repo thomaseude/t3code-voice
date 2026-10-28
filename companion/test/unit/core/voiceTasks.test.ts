@@ -7,6 +7,7 @@ import { ANSWER_QUIET_MS, TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmat
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
+import { DEFAULT_SESSION_LIMITS } from "../../../src/ports/configStore.ts";
 import type { Project, Thread } from "../../../src/ports/t3Backend.ts";
 import { followedTask, project, provider, thread } from "../builders.ts";
 import {
@@ -66,6 +67,8 @@ async function setup({
     tasks,
     announcements: unusedAnnouncements(),
     isRevoked: async () => false,
+    registry: registry,
+    limits: DEFAULT_SESSION_LIMITS,
     clock,
     log: (line) => logs.push(line),
   });

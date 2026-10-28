@@ -3,7 +3,8 @@ import WebRTC
 
 /// One WebRTC call to the voice engine: the microphone, the audio session, and the
 /// `oai-events` data channel. The audio session is activated at start, in the foreground,
-/// and only deactivated by `hangUp`.
+/// and only deactivated by `hangUp`. Mute is done in software: the microphone track sends
+/// silence, and the audio session stays as it is.
 @MainActor
 final class WebRTCCall: VoiceCall {
     private static let factory: RTCPeerConnectionFactory = {
@@ -13,11 +14,15 @@ final class WebRTCCall: VoiceCall {
 
     private var peer: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var microphone: RTCAudioTrack?
+    private var routeObserver: NSObjectProtocol?
+    private var muteObserver: NSObjectProtocol?
     /// WebRTC keeps only a weak reference to its delegate.
     private var observer: CallObserver?
     private var hungUp = false
     /// Only the call that activated the audio session deactivates it.
     private var audioActive = false
+    private var routeChangeObserver: NSObjectProtocol?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
         guard await AVAudioApplication.requestRecordPermission() else { throw VoiceCallError.microphoneDenied }
@@ -27,7 +32,9 @@ final class WebRTCCall: VoiceCall {
             try activateAudioSession()
             let observer = CallObserver(onEvent: onEvent)
             self.observer = observer
+            watchHeadset(observer: observer)
             let peer = try makePeer(observer: observer)
+            watchRouteChanges(observer: observer)
             let offer = try await peer.makeOffer()
             try stopIfHungUp()
             try await peer.setLocal(offer)
@@ -51,9 +58,52 @@ final class WebRTCCall: VoiceCall {
         }
     }
 
+    func setSpeaker(_ on: Bool) throws {
+        let audio = RTCAudioSession.sharedInstance()
+        audio.lockForConfiguration()
+        defer { audio.unlockForConfiguration() }
+        try audio.overrideOutputAudioPort(on ? .speaker : .none)
+    }
+
+    var outputIsSpeaker: Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+    }
+
     func hangUp() {
         hungUp = true
         release()
+    }
+
+    func setMuted(_ muted: Bool) {
+        microphone?.isEnabled = !muted
+        // Keeps the AirPods' own mute state, and the system's mute sound, in step.
+        try? AVAudioApplication.shared.setInputMuted(muted)
+    }
+
+    /// Reports the AirPods taken out, and the stem pressed when iOS passes it to the app.
+    private func watchHeadset(observer: CallObserver) {
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] notification in
+            let info = notification.userInfo ?? [:]
+            let reason = (info[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            let previous = info[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            let outputs = previous?.outputs.map(\.portType) ?? []
+            if AudioRoute.headsetLost(reason: reason, previousOutputs: outputs) { observer?.report(.headsetLost) }
+        }
+        // On iOS the system mutes the input itself on a stem press, then posts this. Best
+        // effort: whether it reaches this app is unverified (T8 of the prototype).
+        muteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioApplication.inputMuteStateChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] notification in
+            guard let muted = notification.userInfo?[AVAudioApplication.muteStateKey] as? Bool else { return }
+            observer?.report(.headsetMuteChanged(muted: muted))
+        }
     }
 
     private func stopIfHungUp() throws {
@@ -64,12 +114,21 @@ final class WebRTCCall: VoiceCall {
 
     /// Closes the connection and the microphone, and deactivates the audio session.
     private func release() {
+        for token in [routeObserver, muteObserver].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(token)
+        }
+        routeObserver = nil
+        muteObserver = nil
+        try? AVAudioApplication.shared.setInputMuted(false)
+        microphone = nil
         dataChannel?.delegate = nil
         dataChannel?.close()
         dataChannel = nil
         peer?.close()
         peer = nil
         observer = nil
+        if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
+        routeChangeObserver = nil
         guard audioActive else { return }
         audioActive = false
         let audio = RTCAudioSession.sharedInstance()
@@ -94,7 +153,21 @@ final class WebRTCCall: VoiceCall {
         defer { audio.unlockForConfiguration() }
         try audio.setConfiguration(config, active: true)
         audioActive = true
+        // Each session starts on the earpiece or the headset, even if the last one used the speaker.
+        try? audio.overrideOutputAudioPort(.none)
         audio.isAudioEnabled = true
+    }
+
+    /// iOS drops the speaker when a headset comes or goes. It never turns the speaker on by
+    /// itself: without `.defaultToSpeaker`, the voice goes to the earpiece when a headset goes away.
+    private func watchRouteChanges(observer: CallObserver) {
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] _ in
+            observer?.report(.routeChanged)
+        }
     }
 
     private func makePeer(observer: CallObserver) throws -> RTCPeerConnection {
@@ -107,6 +180,7 @@ final class WebRTCCall: VoiceCall {
         }
         let microphone = Self.factory.audioTrack(with: Self.factory.audioSource(with: constraints), trackId: "mic")
         peer.add(microphone, streamIds: ["t3voice"])
+        self.microphone = microphone
         let channel = peer.dataChannel(forLabel: "oai-events", configuration: RTCDataChannelConfiguration())
         channel?.delegate = observer
         self.peer = peer
@@ -115,10 +189,10 @@ final class WebRTCCall: VoiceCall {
     }
 }
 
-/// WebRTC calls its delegates on its own threads: this passes the events that matter to the
-/// main actor, in the order they came, and only the first one that ends the call (the data
-/// channel closes right after `session.closed`). It reads only the type of each data channel
-/// message, never its content.
+/// WebRTC and the audio session call back on their own threads: this passes the events that
+/// matter to the main actor, in the order they came, and only the first one that ends the
+/// call (the data channel closes right after `session.closed`). It reads only the type of
+/// each data channel message, never its content.
 private final class CallObserver: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate {
     private let events: AsyncStream<VoiceCallEvent>.Continuation
     private let lock = NSLock()
@@ -137,11 +211,11 @@ private final class CallObserver: NSObject, RTCPeerConnectionDelegate, RTCDataCh
         events.finish()
     }
 
-    private func report(_ event: VoiceCallEvent) {
+    func report(_ event: VoiceCallEvent) {
         lock.lock()
         defer { lock.unlock() }
         guard !ended else { return }
-        if event != .sessionStarted { ended = true }
+        if event == .sessionClosed || event == .lost { ended = true }
         events.yield(event)
     }
 

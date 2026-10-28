@@ -89,7 +89,7 @@ describe("SQLite task registry", () => {
   test("a database written before the long summary was dropped keeps its short summaries", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
     SqliteTaskRegistry.open(path).close();
-    // The schema as it was then: version 2, with a "long" column.
+    // The schema as it was then: version 3, with a "long" column.
     const db = new DatabaseSync(path);
     db.exec(`DROP TABLE task_summaries;
       CREATE TABLE task_summaries (
@@ -100,7 +100,7 @@ describe("SQLite task registry", () => {
         PRIMARY KEY (thread_id, event_key)
       );
       INSERT INTO task_summaries VALUES ('t1', 'completed:run-1', 'Court.', 'Long.');
-      PRAGMA user_version = 2;`);
+      PRAGMA user_version = 3;`);
     db.close();
 
     const registry = SqliteTaskRegistry.open(path);
@@ -132,5 +132,49 @@ describe("SQLite task registry", () => {
     await chmod(dir, 0o755);
 
     assert.throws(() => SqliteTaskRegistry.open(join(dir, "tasks.sqlite")), ConfigError);
+  });
+
+  test("usage records are kept per day, and saving a session again replaces its record", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const first = SqliteTaskRegistry.open(path);
+    const record = {
+      sessionId: "s1",
+      engine: "gpt-live-1",
+      day: "2026-10-26",
+      startedAt: "2026-10-26T10:00:00.000Z",
+      minutes: 1,
+      estimatedCostUsd: 0.05,
+    };
+    first.saveUsage(record);
+    first.saveUsage({ ...record, minutes: 2.5, estimatedCostUsd: 0.125 });
+    first.saveUsage({ ...record, sessionId: "s0", day: "2026-10-25" });
+    first.close();
+
+    const second = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(second.usageOn("2026-10-26"), [
+      { ...record, minutes: 2.5, estimatedCostUsd: 0.125 },
+    ]);
+    assert.equal(second.usageOn("2026-10-25").length, 1);
+    second.close();
+  });
+
+  test("a registry made before usage records gets their table, and keeps its tasks", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const old = SqliteTaskRegistry.open(path);
+    old.follow(followedTask("t1"));
+    old.close();
+    // As the registry of #22 left it: two migrations, and summaries with a "long" column.
+    const db = new DatabaseSync(path);
+    db.exec(`DROP TABLE usage_records;
+      ALTER TABLE task_summaries ADD COLUMN long TEXT NOT NULL DEFAULT '';
+      PRAGMA user_version = 2;`);
+    db.close();
+
+    const registry = SqliteTaskRegistry.open(path);
+
+    assert.deepEqual(registry.usageOn("2026-10-26"), []);
+    assert.equal(registry.followedTasks().length, 1);
+    registry.close();
   });
 });

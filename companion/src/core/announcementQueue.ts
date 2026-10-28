@@ -105,6 +105,20 @@ export class AnnouncementQueue {
     this.flush(session);
   }
 
+  /**
+   * Whether the session is at a gap: nobody spoke for 2 s, no tool result is awaited and no
+   * confirmation question is open.
+   */
+  isQuiet(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (session === undefined) return false;
+    return (
+      session.pendingToolCalls === 0 &&
+      !session.questionOpen &&
+      this.options.clock.now() - session.lastSpeechAt >= QUIET_MS
+    );
+  }
+
   /** Whether the announcement already waits in a session or is being pushed. */
   isPending(threadId: string, eventKey: string): boolean {
     return (

@@ -8,6 +8,7 @@ import { ShellState } from "../../../src/core/shellState.ts";
 import { TaskSummaries } from "../../../src/core/taskSummaries.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
+import { DEFAULT_SESSION_LIMITS } from "../../../src/ports/configStore.ts";
 import type { Thread } from "../../../src/ports/t3Backend.ts";
 import { followedTask, project, thread } from "../builders.ts";
 import {
@@ -77,6 +78,8 @@ async function setup({ threads = [RUNNING] as Thread[] } = {}) {
     tasks,
     announcements: unusedAnnouncements(clock),
     isRevoked: async () => false,
+    registry,
+    limits: DEFAULT_SESSION_LIMITS,
     clock,
     log,
   });

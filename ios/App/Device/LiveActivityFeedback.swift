@@ -9,35 +9,48 @@ final class LiveActivityFeedback: SessionFeedback {
     // ActivityKit.Activity: the app has its own `Activity` (what T3 runs).
     private var activity: ActivityKit.Activity<VoiceActivityAttributes>?
     private var player: AVAudioPlayer?
+    /// What the Live Activity shows. Each event changes its own field and sends the whole
+    /// state, so one update never brings back what another replaced.
+    private var content = VoiceActivityAttributes.ContentState(live: false, speaker: false, status: "", muted: false)
+
+    func showSpeaker(_ on: Bool) {
+        content.speaker = on
+        update()
+    }
 
     func show(_ state: SessionState) {
+        content.status = state.label ?? ""
+        content.live = false
+        content.muted = false
         switch state {
         case .idle:
             end()
         case .authenticating:
             break
         case .connecting:
-            start(status: state.label ?? "")
-        case .live:
-            playStartSound()
-            update(status: state.label ?? "")
+            start()
+        case let .live(muted):
+            content.live = true
+            content.muted = muted
+            update()
         case .ending:
-            update(status: state.label ?? "")
+            update()
         }
     }
 
-    private func start(status: String) {
+    private func start() {
         end()
         activity = try? ActivityKit.Activity.request(
             attributes: VoiceActivityAttributes(startedAt: Date()),
-            content: ActivityContent(state: .init(status: status), staleDate: nil),
+            content: ActivityContent(state: content, staleDate: nil),
             pushType: nil
         )
     }
 
-    private func update(status: String) {
+    private func update() {
         guard let activity else { return }
-        Task { await activity.update(ActivityContent(state: .init(status: status), staleDate: nil)) }
+        let content = self.content
+        Task { await activity.update(ActivityContent(state: content, staleDate: nil)) }
     }
 
     /// Ends every Live Activity of the app, also one left by a killed process: it would show
@@ -49,7 +62,7 @@ final class LiveActivityFeedback: SessionFeedback {
         }
     }
 
-    private func playStartSound() {
+    func playStartSound() {
         player = try? AVAudioPlayer(data: Self.startSound)
         player?.play()
     }

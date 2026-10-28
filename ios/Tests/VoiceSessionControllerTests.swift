@@ -53,8 +53,8 @@ final class VoiceSessionControllerTests: XCTestCase {
 
         await call.emit(.sessionStarted)
 
-        XCTAssertEqual(controller.state, .live)
-        XCTAssertEqual(feedback.shown, [.authenticating, .connecting, .live])
+        XCTAssertEqual(controller.state, .live(muted: false))
+        XCTAssertEqual(feedback.shown, [.authenticating, .connecting, .live(muted: false)])
     }
 
     func testWithoutFaceIDNothingStarts() async {
@@ -97,7 +97,7 @@ final class VoiceSessionControllerTests: XCTestCase {
 
         XCTAssertEqual(authenticator.askCount, 1)
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(controller.state, .live)
+        XCTAssertEqual(controller.state, .live(muted: false))
     }
 
     func testARefusedMicrophoneSendsNothingAndSaysWhy() async {
@@ -145,6 +145,17 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertEqual(delete.url, URL(string: "https://voice.example.com/sessions/s1"))
     }
 
+    func testOverTheDailyBudgetTheStartSaysWhy() async {
+        transport.responses = [response(403, json: #"{"error":"budget_reached"}"#)]
+
+        await controller.start()
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.lastFailure, .budgetReached)
+        XCTAssertEqual(controller.lastFailure?.message, "Le budget voix du jour est atteint. Réessaie demain.")
+        XCTAssertTrue(call.hungUp)
+    }
+
     func testANewStartForgetsThePreviousFailure() async {
         transport.responses = [response(503, json: #"{"error":"voice_unavailable"}"#)]
         await controller.start()
@@ -153,6 +164,128 @@ final class VoiceSessionControllerTests: XCTestCase {
         await controller.start()
 
         XCTAssertNil(controller.lastFailure)
+    }
+
+    // MARK: Mute
+
+    func testMuteClosesTheMicrophoneAndTellsTheCompanion() async throws {
+        await startLiveSession()
+        transport.responses = [response(204)]
+
+        await controller.toggleMute()
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+        let request = try XCTUnwrap(transport.requests.last)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url, URL(string: "https://voice.example.com/sessions/s1/events"))
+        XCTAssertEqual(transport.jsonBody(of: request), ["type": "mute"])
+        XCTAssertEqual(feedback.shown.last, .live(muted: true))
+    }
+
+    func testUnmuteOpensTheMicrophoneAgain() async {
+        await startLiveSession()
+        transport.responses = [response(204), response(204)]
+
+        await controller.toggleMute()
+        await controller.toggleMute()
+
+        XCTAssertEqual(controller.state, .live(muted: false))
+        XCTAssertFalse(call.muted)
+        XCTAssertEqual(transport.requests.suffix(2).map { transport.jsonBody(of: $0) }, [["type": "mute"], ["type": "unmute"]])
+    }
+
+    func testMuteWorksEvenWhenTheCompanionDoesNotAnswer() async {
+        // The microphone is what matters: the companion only counts the muted time as silence.
+        await startLiveSession()
+        transport.responses = []
+
+        await controller.toggleMute()
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+    }
+
+    func testRemovingTheAirPodsMutesInsteadOfSwitchingToThePhone() async throws {
+        await startLiveSession()
+        transport.responses = [response(204)]
+
+        await call.emit(.headsetLost)
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+        XCTAssertEqual(transport.jsonBody(of: try XCTUnwrap(transport.requests.last)), ["type": "mute"])
+    }
+
+    func testRemovingTheAirPodsWhileMutedChangesNothing() async {
+        await startLiveSession()
+        transport.responses = [response(204)]
+        await controller.toggleMute()
+        let sent = transport.requests.count
+
+        await call.emit(.headsetLost)
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertEqual(transport.requests.count, sent)
+    }
+
+    func testTheAirPodsStemMutesAndUnmutes() async {
+        await startLiveSession()
+        transport.responses = [response(204), response(204)]
+
+        await call.emit(.headsetMuteChanged(muted: true))
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+
+        await call.emit(.headsetMuteChanged(muted: false))
+        XCTAssertEqual(controller.state, .live(muted: false))
+        XCTAssertFalse(call.muted)
+    }
+
+    func testTheStartSoundPlaysOnceWhenTheSessionGoesLive() async {
+        await startLiveSession()
+        transport.responses = [response(204), response(204)]
+
+        await controller.toggleMute()
+        await controller.toggleMute()
+
+        XCTAssertEqual(feedback.startSounds, 1)
+    }
+
+    func testAirPodsTakenOutWhileConnectingMuteTheSessionOnceLive() async throws {
+        transport.responses = [opened, response(204)]
+        await controller.start()
+
+        await call.emit(.headsetLost)
+        XCTAssertEqual(controller.state, .connecting)
+        await call.emit(.sessionStarted)
+
+        XCTAssertEqual(controller.state, .live(muted: true))
+        XCTAssertTrue(call.muted)
+        XCTAssertEqual(transport.jsonBody(of: try XCTUnwrap(transport.requests.last)), ["type": "mute"])
+    }
+
+    func testMuteBeforeTheSessionIsLiveDoesNothing() async {
+        transport.responses = [opened]
+        await controller.start()
+
+        await controller.toggleMute()
+
+        XCTAssertEqual(controller.state, .connecting)
+        XCTAssertFalse(call.muted)
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST"])
+    }
+
+    func testTheEndButtonWorksWhileMuted() async throws {
+        await startLiveSession()
+        transport.responses = [response(204), response(204)]
+        await controller.toggleMute()
+
+        await controller.end()
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertTrue(call.hungUp)
+        XCTAssertEqual(try XCTUnwrap(transport.requests.last).httpMethod, "DELETE")
     }
 
     // MARK: Ending
@@ -211,7 +344,7 @@ final class VoiceSessionControllerTests: XCTestCase {
         XCTAssertNil(call.acceptedAnswer)
         XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "DELETE"])
         XCTAssertEqual(transport.requests.last?.url, URL(string: "https://voice.example.com/sessions/s1"))
-        XCTAssertFalse(feedback.shown.contains(.live))
+        XCTAssertFalse(feedback.shown.contains(.live(muted: false)))
     }
 
     func testEndWithoutASessionClearsALeftoverLiveActivity() async {
@@ -252,6 +385,106 @@ final class VoiceSessionControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.state, .connecting)
         XCTAssertFalse(calls[1].hungUp)
+    }
+
+    // MARK: Speaker
+
+    func testTheSpeakerButtonSendsTheVoiceToTheSpeakerAndBack() async {
+        await startLiveSession()
+
+        controller.toggleSpeaker()
+
+        XCTAssertTrue(controller.speaker)
+        XCTAssertTrue(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [true])
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [true, false])
+        // Only the output changes: the call and the session go on.
+        XCTAssertFalse(call.hungUp)
+    }
+
+    func testEachNewSessionStartsWithTheSpeakerOff() async {
+        await startLiveSession()
+        controller.toggleSpeaker()
+        await controller.end()
+
+        transport.responses = [opened]
+        await controller.start()
+        await calls[1].emit(.sessionStarted)
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(calls[1].speakerOn)
+        XCTAssertEqual(feedback.speakerShown.last, false)
+    }
+
+    func testTheSpeakerButtonDoesNothingBeforeTheSessionIsLive() async {
+        transport.responses = [opened]
+        await controller.start()
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testASpeakerTheCallCannotSetStaysOff() async {
+        await startLiveSession()
+        call.speakerError = VoiceCallError.failed
+
+        controller.toggleSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testWhenIOSMovesTheVoiceOffTheSpeakerTheButtonShowsItOff() async {
+        // Plugging in the AirPods while the speaker is on: iOS sends the voice to them.
+        await startLiveSession()
+        controller.toggleSpeaker()
+
+        await call.leaveSpeaker()
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [true, false])
+        XCTAssertFalse(call.hungUp)
+    }
+
+    func testARouteChangeNeverTurnsTheSpeakerOn() async {
+        // Taking out the AirPods with the speaker off: the voice goes to the earpiece, not
+        // to the speaker, so an answer about the code never plays aloud by surprise.
+        await startLiveSession()
+
+        await call.emit(.routeChanged)
+
+        XCTAssertFalse(controller.speaker)
+        XCTAssertFalse(call.speakerOn)
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testTheSpeakerButtonWithoutASessionClearsALeftoverLiveActivity() async {
+        // The app was killed during a session: its Speaker button starts a new app process
+        // with no session, like the End button.
+        controller.toggleSpeaker()
+
+        XCTAssertEqual(feedback.shown, [.idle])
+        XCTAssertEqual(feedback.speakerShown, [])
+    }
+
+    func testARouteChangeReportedBeforeATapDoesNotTurnTheSpeakerButtonOff() async {
+        // The route change of AirPods connecting arrives after the user turned the speaker on:
+        // the voice is on the speaker, so the button must say so.
+        await startLiveSession()
+        controller.toggleSpeaker()
+
+        await call.emit(.routeChanged)
+
+        XCTAssertTrue(controller.speaker)
+        XCTAssertEqual(feedback.speakerShown, [true])
     }
 
     // MARK: Helpers

@@ -9,7 +9,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ConfigError } from "../../ports/configStore.ts";
 import type { TaskSummary } from "../../ports/summarizer.ts";
-import type { FollowedTask, TaskRegistry } from "../../ports/taskRegistry.ts";
+import type { FollowedTask, TaskRegistry, UsageRecord } from "../../ports/taskRegistry.ts";
 
 export const TASK_REGISTRY_FILE = "tasks.sqlite";
 
@@ -32,6 +32,15 @@ const MIGRATIONS = [
      long TEXT NOT NULL,
      PRIMARY KEY (thread_id, event_key)
    )`,
+  `CREATE TABLE usage_records (
+     session_id TEXT PRIMARY KEY,
+     engine TEXT NOT NULL,
+     day TEXT NOT NULL,
+     started_at TEXT NOT NULL,
+     minutes REAL NOT NULL,
+     estimated_cost_usd REAL NOT NULL
+   );
+   CREATE INDEX usage_records_by_day ON usage_records (day)`,
   // Nothing reads the long summary since summarize_thread replaced get_task_details (#39).
   "ALTER TABLE task_summaries DROP COLUMN long",
 ];
@@ -45,6 +54,15 @@ interface Row {
   last_event_key: string | null;
   cursor: number | null;
   followed_at: string;
+}
+
+interface UsageRow {
+  session_id: string;
+  engine: string;
+  day: string;
+  started_at: string;
+  minutes: number;
+  estimated_cost_usd: number;
 }
 
 export class SqliteTaskRegistry implements TaskRegistry {
@@ -131,6 +149,38 @@ export class SqliteTaskRegistry implements TaskRegistry {
       .prepare("SELECT short FROM task_summaries WHERE thread_id = ? AND event_key = ?")
       .get(threadId, eventKey) as { short: string } | undefined;
     return row === undefined ? null : { short: row.short };
+  }
+
+  saveUsage(record: UsageRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO usage_records (session_id, engine, day, started_at, minutes, estimated_cost_usd)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session_id) DO UPDATE
+         SET minutes = excluded.minutes, estimated_cost_usd = excluded.estimated_cost_usd`,
+      )
+      .run(
+        record.sessionId,
+        record.engine,
+        record.day,
+        record.startedAt,
+        record.minutes,
+        record.estimatedCostUsd,
+      );
+  }
+
+  usageOn(day: string): UsageRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM usage_records WHERE day = ? ORDER BY started_at, rowid")
+      .all(day) as unknown as UsageRow[];
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      engine: row.engine,
+      day: row.day,
+      startedAt: row.started_at,
+      minutes: row.minutes,
+      estimatedCostUsd: row.estimated_cost_usd,
+    }));
   }
 
   close(): void {
