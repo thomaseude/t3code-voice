@@ -100,6 +100,8 @@ interface Question {
   /** Wakes the judging of the answer: the user spoke, or the question ended. */
   wake: () => void;
   stopTimer: () => void;
+  /** Cancels the check that closes the question once the answer's words are complete. */
+  stopQuietCheck: () => void;
 }
 
 /** The question of one voice session. */
@@ -134,6 +136,7 @@ export class Confirmations {
       ended: null,
       wake: () => {},
       stopTimer: () => {},
+      stopQuietCheck: () => {},
     };
     question.stopTimer = this.clock.schedule(CONFIRM_WINDOW_MS, () =>
       this.end(question, "expired"),
@@ -165,9 +168,13 @@ export class Confirmations {
     if (this.userTurnStartedAt < question.readAt) return;
     question.heard += text;
     question.lastSpeechAt = now;
-    // "non", "attends"…: whatever comes next, the answer is no longer a yes.
-    if (hasDoubt(question.heard)) this.end(question, "doubted");
-    else question.wake();
+    // "non", "attends"…: the answer can no longer be a yes. Checked once the user was quiet,
+    // because a transcript piece can end inside a word ("n" of "nickel").
+    question.stopQuietCheck();
+    question.stopQuietCheck = this.clock.schedule(ANSWER_QUIET_MS, () => {
+      if (hasDoubt(question.heard)) this.end(question, "doubted");
+    });
+    question.wake();
   }
 
   /** The session ended: no question stays open, and no action runs any more. */
@@ -226,12 +233,16 @@ export class Confirmations {
     if (question.ended !== null) return;
     question.ended = reason;
     question.stopTimer();
+    question.stopQuietCheck();
     question.wake();
     if (this.question === question) this.onQuestionOpen(false);
   }
 }
 
-/** A yes word, with no doubt word. */
+/**
+ * A yes word, with no doubt word. The judging can end before the quiet check that closes a
+ * doubted question: both come 1 s after the last word.
+ */
 function isClearYes(heard: string): boolean {
   return !hasDoubt(heard) && wordsOf(heard).some((word) => YES_WORDS.has(word));
 }

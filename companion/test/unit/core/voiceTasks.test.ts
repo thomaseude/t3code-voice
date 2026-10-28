@@ -1091,6 +1091,18 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     assert.equal(backend.commands.length, 1);
   });
 
+  test("a transcript piece that ends inside a word is not a doubt: « oui, n » + « ickel »", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say(" oui,");
+    await say(" n");
+    await say("ickel");
+
+    await confirm("interrupt_task", question);
+
+    assert.equal(backend.commands.length, 1);
+  });
+
   test("a confirmation works once", async () => {
     const { backend, call, say, confirm } = await withRunningTask();
     const question = await call("interrupt_task", { task: "tests reviews" });
