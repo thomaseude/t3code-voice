@@ -3,6 +3,13 @@
 
 import type { VoiceTool } from "../ports/voiceEngine.ts";
 
+/** The token a tool gave with needs_confirmation, sent back once the user said yes. */
+const CONFIRMATION_PARAMETER = {
+  type: "string",
+  description:
+    "Only after a needs_confirmation answer and the user's spoken yes: the token it gave.",
+};
+
 export const VOICE_TOOLS: VoiceTool[] = [
   {
     name: "list_projects",
@@ -31,7 +38,9 @@ export const VOICE_TOOLS: VoiceTool[] = [
       "project uses worktrees. Read back what it answers: agent, model, project, request, " +
       "and the task's spoken name. The task is followed: its news will be announced. " +
       "status ambiguous_project: ask which folder the user means, then call again with folder. " +
-      "status ambiguous_model: ask which model, then call again with its agent and model.",
+      "status ambiguous_model: ask which model, then call again with its agent and model. " +
+      "needs_confirmation: another agent works in the folder; read read_back, ask the user to " +
+      "say oui, and call again with confirmation only if they do.",
     parameters: {
       type: "object",
       properties: {
@@ -52,8 +61,10 @@ export const VOICE_TOOLS: VoiceTool[] = [
         },
         workspace: {
           type: "string",
-          enum: ["new_worktree"],
-          description: "Only when the user asks for a new worktree.",
+          enum: ["new_worktree", "shared"],
+          description:
+            "new_worktree: only when the user asks for a new worktree. shared: only when the " +
+            "user asks to work in the project's folder, even if another agent works there.",
         },
         folder: {
           type: "string",
@@ -64,6 +75,7 @@ export const VOICE_TOOLS: VoiceTool[] = [
           description:
             'A short French name for the task, 2 to 4 words from the request, e.g. "tests Reviews".',
         },
+        confirmation: CONFIRMATION_PARAMETER,
       },
       required: ["project", "prompt"],
       additionalProperties: false,
@@ -94,6 +106,27 @@ export const VOICE_TOOLS: VoiceTool[] = [
       '"annule" right after its read-back (within a minute). A started task is stopped and ' +
       "archived; a waiting message is taken back.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "interrupt_task",
+    description:
+      "Stop the agent working on a task, only when the user asks to interrupt a task and " +
+      'names it. Never for a bare "stop", "tais-toi" or "attends". The first call does ' +
+      "nothing: it answers needs_confirmation with read_back. Read it, ask the user to say " +
+      "oui, and call again with confirmation only if they do. The task stays followed.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description:
+            "A followed task's spoken name, or the title of any thread, as the user said it.",
+        },
+        confirmation: CONFIRMATION_PARAMETER,
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
   },
   {
     name: "follow_thread",
@@ -162,7 +195,10 @@ export function voiceInstructions(projectNames: string[]): string {
     "Les termes techniques (branch, commit, merge, worktree, pull request, noms de fichiers et de commandes) restent en anglais, prononcés à l'anglaise.",
     projects,
     "N'invente jamais un statut : ce qui tourne, ce qui est terminé ou a échoué vient uniquement des outils. Si un outil ne répond pas ou dit que T3 est indisponible, dis-le simplement.",
-    'Un simple "stop", "tais-toi" ou "attends" veut seulement dire : arrête de parler.',
+    'Un simple "stop", "tais-toi" ou "attends" veut seulement dire : arrête de parler. N\'appelle alors aucun outil : ni interrupt_task, ni cancel_last_action.',
+    "Interromps une tâche seulement si l'utilisateur demande de l'interrompre et la nomme.",
+    "Quand un outil répond needs_confirmation, lis read_back et demande à l'utilisateur de dire oui. Rappelle l'outil avec confirmation seulement s'il dit oui ; s'il hésite ou dit non, n'agis pas. N'invente jamais une confirmation.",
+    "Si l'outil répond not_confirmed, confirmation_expired ou invalid_confirmation, rien n'a été fait : dis-le, et repose la question en rappelant l'outil sans confirmation si l'utilisateur le veut toujours.",
     "Après start_task ou send_message, relis toujours ce qui a été fait : pour un lancement, l'agent, le modèle, le projet, la demande et le nom de la tâche ; pour un message, la tâche et le message.",
     'Si l\'utilisateur dit "non, arrête" ou "annule" juste après cette relecture, appelle cancel_last_action.',
     "Le compagnon t'envoie les nouvelles des tâches suivies (terminée, échouée, attend une réponse ou une autorisation) : dis-les telles quelles, sans en changer le statut. Si l'utilisateur veut en savoir plus, appelle get_task_details.",

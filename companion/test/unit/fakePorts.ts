@@ -408,6 +408,11 @@ export class FakeClock implements Clock {
     };
   }
 
+  /** How many callbacks are still scheduled: a timer left behind keeps a real process alive. */
+  pendingTimers(): number {
+    return this.timers.length;
+  }
+
   /** Moves time forward and runs, in order, the callbacks that fall due. */
   advance(ms: number): void {
     const end = this.time + ms;

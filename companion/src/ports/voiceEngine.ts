@@ -25,9 +25,11 @@ export type VoiceEvent =
   | { type: "tool_call"; callId: string; name: string; arguments: unknown }
   /**
    * Someone is speaking now. The engine has no "done speaking" event: a silence is the
-   * absence of these events for a while. It never carries what was said.
+   * absence of these events for a while. For the user, `text` is the next piece of the
+   * transcript: the core checks a spoken "oui" with it. It stays in memory, never in a log.
    */
-  | { type: "speech"; speaker: "user" | "assistant" }
+  | { type: "speech"; speaker: "user"; text: string }
+  | { type: "speech"; speaker: "assistant" }
   /** The session ended, by the companion, the phone or the engine. Sent once. */
   | { type: "closed"; reason: "closed" | "failed" };
 

@@ -3,6 +3,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { ANSWER_QUIET_MS, TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmations.ts";
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
@@ -70,10 +71,42 @@ async function setup({
   });
   await sessions.open("d1", { sdpOffer: "v=0", timeZone: null });
   let calls = 0;
-  /** Calls a tool as the voice model would, and returns what the core answered. */
+  /**
+   * Calls a tool as the voice model would, and returns what the core answered. A question
+   * is read to the user, as the voice model does.
+   */
   async function call(name: string, args: unknown = {}) {
     const callId = `c${++calls}`;
     engine.last.emit({ type: "tool_call", callId, name, arguments: args });
+    await settle();
+    const result = engine.last.toolResults.find((each) => each.callId === callId)?.result;
+    if ((result as { needs_confirmation?: boolean } | undefined)?.needs_confirmation) {
+      engine.last.emit({ type: "speech", speaker: "assistant" });
+    }
+    return result;
+  }
+  /** The user says `text`, as the engine's transcript of it. */
+  async function say(text: string) {
+    engine.last.emit({ type: "speech", speaker: "user", text });
+    await settle();
+  }
+  /**
+   * Calls the tool again with the confirmation the core gave, as the voice model does after
+   * the user's answer, and waits as long as the core waits for the end of the answer.
+   */
+  async function confirm(name: string, question: unknown, args: unknown = {}) {
+    const callId = `c${++calls}`;
+    const { confirmation } = question as { confirmation: string };
+    engine.last.emit({
+      type: "tool_call",
+      callId,
+      name,
+      arguments: { ...(args as object), confirmation },
+    });
+    await settle();
+    clock.advance(TRANSCRIPT_WAIT_MS);
+    await settle();
+    clock.advance(ANSWER_QUIET_MS);
     await settle();
     return engine.last.toolResults.find((result) => result.callId === callId)?.result;
   }
@@ -85,10 +118,20 @@ async function setup({
     clock,
     logs,
     call,
+    say,
+    confirm,
+    sessions,
     disconnectT3: () => {
       connected = false;
     },
   };
+}
+
+/** A question's answer without its token, which is random. */
+function withoutToken(question: unknown) {
+  const { confirmation, ...rest } = question as { confirmation: unknown };
+  assert.equal(typeof confirmation, "string");
+  return rest;
 }
 
 const startArgs = {
@@ -513,11 +556,24 @@ describe("start_task: where the agent works", () => {
     assert.deepEqual(backend.commands, []);
   });
 
-  test("a busy project that is not a git repository: nothing starts, and the assistant says why", async () => {
+  test("a busy project that is not a git repository: the assistant asks before sharing its folder", async () => {
     const { backend, call } = await setup({ threads: [busyRoot] });
     backend.repositories.set("/home/me/joombo", { isGitRepository: false, defaultBranch: null });
 
-    assert.deepEqual(await call("start_task", startArgs), { error: "project_busy_not_git" });
+    const question = await call("start_task", startArgs);
+
+    assert.deepEqual(withoutToken(question), {
+      needs_confirmation: true,
+      read_back: {
+        action: "start_task",
+        reason: "folder_busy_not_git",
+        agent: "Claude",
+        model: "Claude Opus 5.5",
+        project: "joombo",
+        workspace: "shared_folder",
+        request: "Corriger les tests des Reviews",
+      },
+    });
     assert.deepEqual(backend.commands, []);
   });
 
@@ -812,5 +868,503 @@ describe("cancel_last_action: « non, arrête » right after a read-back", () =>
     await call("cancel_last_action");
 
     assert.deepEqual(await call("cancel_last_action"), { error: "nothing_to_cancel" });
+  });
+});
+
+describe("interrupt_task: only after the task is named and a clear « oui »", () => {
+  async function withRunningTask() {
+    const context = await setup({
+      threads: [thread("t1", { projectId: "p1", status: "running", title: "Fix Reviews specs" })],
+    });
+    context.registry.follow(followedTask("t1", { spokenName: "tests Reviews" }));
+    return context;
+  }
+
+  test("asks first, with the task's name and project, and sends nothing to T3", async () => {
+    const { backend, call } = await withRunningTask();
+
+    const question = await call("interrupt_task", { task: "la tâche tests reviews" });
+
+    assert.deepEqual(withoutToken(question), {
+      needs_confirmation: true,
+      read_back: { action: "interrupt_task", task: "tests Reviews", project: "joombo" },
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("after a clear « oui », the agent is stopped and the task stays followed", async () => {
+    const { backend, registry, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+
+    await say("Oui.");
+    const result = await confirm("interrupt_task", question, { task: "tests reviews" });
+
+    assert.deepEqual(result, { status: "interrupted", task: "tests Reviews" });
+    assert.deepEqual(backend.commands, [{ type: "stop", commandId: "id-1", threadId: "t1" }]);
+    assert.equal(registry.followedTasks().length, 1);
+  });
+
+  test("other clear answers count as yes", async () => {
+    for (const answer of ["ouais vas-y", "Oui, confirme.", "d'accord", "OK"]) {
+      const { backend, call, say, confirm } = await withRunningTask();
+      const question = await call("interrupt_task", { task: "tests reviews" });
+      await say(answer);
+
+      await confirm("interrupt_task", question);
+
+      assert.equal(backend.commands.length, 1, answer);
+    }
+  });
+
+  test("anything unclear is not a yes, and nothing reaches T3", async () => {
+    for (const answer of [
+      "euh… attends, non laisse",
+      "oui mais attends",
+      "non",
+      "hmm",
+      "pas celle-là",
+    ]) {
+      const { backend, call, say, confirm } = await withRunningTask();
+      const question = await call("interrupt_task", { task: "tests reviews" });
+      await say(answer);
+
+      assert.deepEqual(
+        await confirm("interrupt_task", question),
+        { error: "not_confirmed" },
+        answer,
+      );
+      assert.deepEqual(backend.commands, [], answer);
+    }
+  });
+
+  test("with no answer at all, nothing reaches T3", async () => {
+    const { backend, call, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+
+    assert.deepEqual(await confirm("interrupt_task", question), { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a « oui » said before the question does not count", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    await say("oui");
+    const question = await call("interrupt_task", { task: "tests reviews" });
+
+    assert.deepEqual(await confirm("interrupt_task", question), { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a « oui » whose transcript arrives just after the call still counts", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "late",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    clock.advance(500);
+    await say("oui");
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "late")?.result;
+    assert.deepEqual(result, { status: "interrupted", task: "tests Reviews" });
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("the answer is judged whole, after the user paused: « oui… mais attends » is not a yes", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    await say("Oui");
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "early",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    clock.advance(ANSWER_QUIET_MS - 200);
+    await say(" mais attends");
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "early")?.result;
+    assert.deepEqual(result, { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a yes word in the request, transcribed after the question, is not the answer", async () => {
+    const { backend, engine, clock, say } = await withRunningTask();
+    await say("Interromps tests reviews");
+    clock.advance(300);
+    engine.last.emit({
+      type: "tool_call",
+      callId: "ask",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews" },
+    });
+    await settle();
+    const question = engine.last.toolResults.find((each) => each.callId === "ask")?.result as {
+      confirmation: string;
+    };
+    engine.last.emit({ type: "speech", speaker: "assistant" });
+    clock.advance(200);
+    await say(", OK ?");
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "confirm",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    clock.advance(TRANSCRIPT_WAIT_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "confirm")?.result;
+    assert.deepEqual(result, { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an answer still going at the end of the 60 s window is too late", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    clock.advance(59_000);
+    await say("oui");
+    engine.last.emit({
+      type: "tool_call",
+      callId: "long",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    for (let second = 0; second < 5; second++) {
+      clock.advance(500);
+      await say(" et après tu regarderas les logs");
+    }
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "long")?.result;
+    assert.deepEqual(result, { error: "confirmation_expired" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an answer cut by the end of the session runs nothing", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    await say("oui");
+    engine.last.emit({
+      type: "tool_call",
+      callId: "cut",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    engine.last.emit({ type: "closed", reason: "closed" });
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("transcript pieces join as they come: « ou » + « ais » is « ouais »", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("Ou");
+    await say("ais");
+
+    await confirm("interrupt_task", question);
+
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("a transcript piece that ends inside a word is not a doubt: « oui, n » + « ickel »", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say(" oui,");
+    await say(" n");
+    await say("ickel");
+
+    await confirm("interrupt_task", question);
+
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("a confirmation works once", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("oui");
+    await confirm("interrupt_task", question);
+
+    assert.deepEqual(await confirm("interrupt_task", question), {
+      error: "invalid_confirmation",
+    });
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("an answer refused uses the confirmation up: the assistant must ask again", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("hmm");
+    await confirm("interrupt_task", question);
+    await say("oui");
+
+    assert.deepEqual(await confirm("interrupt_task", question), {
+      error: "invalid_confirmation",
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an answer more than 60 seconds after the question is too late", async () => {
+    const { backend, clock, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    clock.advance(60_001);
+    await say("oui");
+
+    assert.deepEqual(await confirm("interrupt_task", question), {
+      error: "confirmation_expired",
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a confirmation given to another tool does nothing", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("oui");
+
+    assert.deepEqual(await confirm("start_task", question, startArgs), {
+      error: "invalid_confirmation",
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a confirmation from another device's session does nothing", async () => {
+    const { backend, call, say, confirm, sessions } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await sessions.open("d2", { sdpOffer: "v=0", timeZone: null });
+    await say("oui");
+
+    assert.deepEqual(await confirm("interrupt_task", question), {
+      error: "invalid_confirmation",
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a new question replaces the one before: its « oui » is for the new one only", async () => {
+    const { backend, call, say, confirm } = await setup({
+      threads: [
+        thread("t1", { status: "running", title: "Fix Reviews specs" }),
+        thread("t2", { status: "running", title: "Refonte accueil" }),
+      ],
+    });
+    const first = await call("interrupt_task", { task: "Fix Reviews specs" });
+    await call("interrupt_task", { task: "Refonte accueil" });
+    await say("oui");
+
+    assert.deepEqual(await confirm("interrupt_task", first), { error: "invalid_confirmation" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a thread nobody follows is found by its title", async () => {
+    const { backend, call, say, confirm } = await setup({
+      threads: [thread("t9", { status: "running", title: "Fix flaky Reviews specs" })],
+    });
+
+    const question = await call("interrupt_task", { task: "fix flaky reviews" });
+    await say("oui");
+    const result = await confirm("interrupt_task", question);
+
+    assert.deepEqual(withoutToken(question), {
+      needs_confirmation: true,
+      read_back: { action: "interrupt_task", task: "Fix flaky Reviews specs", project: "joombo" },
+    });
+    assert.deepEqual(result, { status: "interrupted", task: "Fix flaky Reviews specs" });
+    assert.deepEqual(backend.commands, [{ type: "stop", commandId: "id-1", threadId: "t9" }]);
+  });
+
+  test("a reference that fits several tasks lists them, and asks nothing", async () => {
+    const { backend, registry, call } = await setup({
+      threads: [thread("t1", { status: "running" }), thread("t2", { status: "running" })],
+    });
+    registry.follow(followedTask("t1", { spokenName: "tests Reviews" }));
+    registry.follow(followedTask("t2", { spokenName: "tests Reviews admin" }));
+
+    assert.deepEqual(await call("interrupt_task", { task: "tests" }), {
+      status: "ambiguous_task",
+      choices: ["tests Reviews", "tests Reviews admin"],
+    });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an unknown task, or one with no agent at work, asks nothing", async () => {
+    const { backend, registry, call } = await setup({
+      threads: [thread("t1", { status: "completed" })],
+    });
+    registry.follow(followedTask("t1", { spokenName: "tests Reviews" }));
+
+    assert.deepEqual(await call("interrupt_task", { task: "tests reviews" }), {
+      status: "not_running",
+      task: "tests Reviews",
+    });
+    assert.equal(
+      ((await call("interrupt_task", { task: "refonte accueil" })) as { error: string }).error,
+      "unknown_task",
+    );
+    assert.deepEqual(await call("interrupt_task", {}), { error: "invalid_arguments" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("after an interruption, « non, arrête » cancels nothing", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    await call("start_task", startArgs);
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("oui");
+    await confirm("interrupt_task", question);
+
+    assert.deepEqual(await call("cancel_last_action"), { error: "nothing_to_cancel" });
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ["launch", "stop"],
+    );
+  });
+
+  test("while T3 is away, nothing is asked", async () => {
+    const { call, disconnectT3 } = await withRunningTask();
+    disconnectT3();
+
+    assert.deepEqual(await call("interrupt_task", { task: "tests reviews" }), {
+      error: "t3_unavailable",
+    });
+  });
+});
+
+describe("start_task in a folder another agent works in: only after a clear « oui »", () => {
+  const busyRoot = thread("t1", { projectId: "p1", status: "running", worktreePath: null });
+
+  test("a busy project that is not a git repository starts in its folder after « oui »", async () => {
+    const { backend, registry, call, say, confirm } = await setup({ threads: [busyRoot] });
+    backend.repositories.set("/home/me/joombo", { isGitRepository: false, defaultBranch: null });
+    const question = await call("start_task", startArgs);
+
+    await say("oui, lance-le");
+    const result = await confirm("start_task", question, startArgs);
+
+    assert.deepEqual(backend.commands[0]?.type === "launch" && backend.commands[0].workspace, {
+      type: "project_folder",
+    });
+    assert.deepEqual(result, {
+      status: "started",
+      task: "tests Reviews",
+      agent: "Claude",
+      model: "Claude Opus 5.5",
+      project: "joombo",
+      workspace: "project_folder",
+      request: "Corriger les tests des Reviews",
+    });
+    assert.equal(registry.followedTasks().length, 1);
+  });
+
+  test("a shared start that fails leaves the folder busy for a start still launching", async () => {
+    const { backend, engine, call, say, confirm } = await setup();
+    let releaseFirst = () => {};
+    backend.launchGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    engine.last.emit({ type: "tool_call", callId: "a", name: "start_task", arguments: startArgs });
+    await settle();
+    const sharedArgs = { ...startArgs, workspace: "shared", spoken_name: "autre tâche" };
+    const question = await call("start_task", sharedArgs);
+    backend.launchGate = null;
+    backend.failNextCommand = "launch";
+    await say("oui");
+    await confirm("start_task", question, sharedArgs);
+
+    await call("start_task", { ...startArgs, spoken_name: "troisième tâche" });
+    releaseFirst();
+    await settle();
+
+    assert.deepEqual(
+      backend.commands.map((command) => (command.type === "launch" ? command.workspace.type : "")),
+      ["new_worktree", "project_folder"],
+    );
+  });
+
+  test("a shared folder asked for on a busy project needs a « oui » too", async () => {
+    const { backend, call, say, confirm } = await setup({ threads: [busyRoot] });
+    const args = { ...startArgs, workspace: "shared" };
+
+    const question = await call("start_task", args);
+    assert.equal(
+      (withoutToken(question) as { read_back: { reason: string } }).read_back.reason,
+      "folder_busy",
+    );
+    assert.deepEqual(backend.commands, []);
+
+    await say("non");
+    assert.deepEqual(await confirm("start_task", question, args), { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a shared folder asked for on a free project starts at once, even in a worktree project", async () => {
+    const { backend, call } = await setup({
+      projects: [project("p1", "joombo", { newThreadWorkspace: "new_worktree" })],
+    });
+
+    const result = await call("start_task", { ...startArgs, workspace: "shared" });
+
+    assert.equal((result as { status: string }).status, "started");
+    assert.deepEqual(backend.commands[0]?.type === "launch" && backend.commands[0].workspace, {
+      type: "project_folder",
+    });
+  });
+
+  test("what starts is what was read back, whatever the second call says", async () => {
+    const { backend, call, say, confirm } = await setup({ threads: [busyRoot] });
+    const args = { ...startArgs, workspace: "shared" };
+    const question = await call("start_task", args);
+    await say("oui");
+
+    await confirm("start_task", question, { ...args, prompt: "Supprimer la base" });
+
+    assert.equal(
+      backend.commands[0]?.type === "launch" && backend.commands[0].prompt,
+      "Corriger les tests des Reviews",
+    );
+  });
+
+  test("a start confirmed by « oui » can still be cancelled by « non, arrête »", async () => {
+    const { backend, call, say, confirm } = await setup({ threads: [busyRoot] });
+    const args = { ...startArgs, workspace: "shared" };
+    const question = await call("start_task", args);
+    await say("oui");
+    await confirm("start_task", question, args);
+
+    assert.equal(((await call("cancel_last_action")) as { status: string }).status, "cancelled");
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ["launch", "stop", "archive"],
+    );
+  });
+
+  test("a question ends the window of the start before it", async () => {
+    const { backend, call } = await setup({ threads: [busyRoot] });
+    await call("start_task", startArgs);
+    await call("start_task", { ...startArgs, workspace: "shared" });
+
+    assert.deepEqual(await call("cancel_last_action"), { error: "nothing_to_cancel" });
+    assert.equal(backend.commands.length, 1);
   });
 });

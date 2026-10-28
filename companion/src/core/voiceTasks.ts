@@ -1,8 +1,10 @@
 // Starting and steering T3 tasks by voice: the tools start_task, send_message,
-// follow_thread, unfollow_thread, get_task_details, and the undo behind cancel_last_action.
+// interrupt_task, follow_thread, unfollow_thread, get_task_details, and the undo behind
+// cancel_last_action.
 //
 // Every tool checks its arguments, finds the project or task the user named, and acts on
-// T3 only when exactly one fits. Several fits return the choices; nothing is guessed.
+// T3 only when exactly one fits. Several fits return the choices; nothing is guessed. A
+// risky action answers a question instead of acting: it runs after the user's "oui".
 
 import type { Clock } from "../ports/clock.ts";
 import type {
@@ -17,7 +19,7 @@ import type {
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
 import { awarenessOf, eventKeyOf } from "./awareness.ts";
-import { FolderClaims } from "./folderClaims.ts";
+import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
@@ -43,11 +45,14 @@ export type ToolResult = Record<string, unknown>;
 /** How to take back the action a tool just did, while "non, arrête" can still undo it. */
 export type Undo = () => Promise<ToolResult>;
 
-export interface ToolOutcome {
-  result: ToolResult;
-  /** Set when the action can be cancelled right after its read-back. */
-  undo?: Undo;
-}
+export type ToolOutcome =
+  | {
+      result: ToolResult;
+      /** Set when the action can be cancelled right after its read-back. */
+      undo?: Undo;
+    }
+  /** Nothing was done: the action needs the user's "oui" first (see confirmations.ts). */
+  | { confirm: { readBack: ToolResult; run: () => Promise<ToolOutcome> } };
 
 const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-access"];
 
@@ -80,7 +85,7 @@ export class VoiceTasks {
       !optionalText(input?.folder) ||
       !optionalText(input?.spoken_name) ||
       !(runtimeMode === undefined || RUNTIME_MODES.includes(runtimeMode as string)) ||
-      !(workspace === undefined || workspace === "new_worktree")
+      !(workspace === undefined || workspace === "new_worktree" || workspace === "shared")
     ) {
       return { result: { error: "invalid_arguments" } };
     }
@@ -105,29 +110,71 @@ export class VoiceTasks {
     );
     if (selection.kind !== "found") return { result: selection.result };
 
-    const place = await this.chooseWorkspace(shell, project, workspace === "new_worktree");
+    const launch: Launch = {
+      shell,
+      project,
+      prompt,
+      provider: selection.provider,
+      model: selection.model,
+      runtimeMode: (runtimeMode as string | undefined) ?? config.defaultRuntimeMode,
+      proposedName: nonEmptyText(input?.spoken_name),
+    };
+    const place = await this.chooseWorkspace(
+      shell,
+      project,
+      workspace === "new_worktree" || workspace === "shared" ? workspace : null,
+    );
     if (place.kind === "error") return { result: place.result };
+    if (place.kind === "confirm") {
+      // The read-back is what runs after the "oui", whatever the next call says.
+      return {
+        confirm: {
+          readBack: {
+            action: "start_task",
+            reason: place.reason,
+            agent: selection.provider.displayName,
+            model: modelName(selection.provider, selection.model.model),
+            project: spokenProject(shell, project),
+            workspace: "shared_folder",
+            request: prompt,
+          },
+          run: () =>
+            this.launch(launch, { type: "project_folder" }, this.folderClaims.claim(project.id)),
+        },
+      };
+    }
+    return this.launch(launch, place.workspace, place.claim);
+  }
 
-    const inFolder = place.workspace.type === "project_folder";
+  /**
+   * Starts the thread in `workspace`, follows it, and reads back what started. `claim` holds
+   * the project folder while T3 starts the thread in it.
+   */
+  private async launch(
+    launch: Launch,
+    workspace: LaunchWorkspace,
+    claim: FolderClaim | null,
+  ): Promise<ToolOutcome> {
+    const { shell, project, prompt, provider } = launch;
     let threadId: string;
     try {
       ({ threadId } = await this.options.backend.launchThread({
         commandId: this.options.newId(),
         projectId: project.id,
         title: prompt.slice(0, TITLE_LENGTH),
-        model: selection.model,
-        runtimeMode: (runtimeMode as string | undefined) ?? config.defaultRuntimeMode,
+        model: launch.model,
+        runtimeMode: launch.runtimeMode,
         prompt,
-        workspace: place.workspace,
+        workspace,
       }));
     } catch (error) {
-      if (inFolder) this.folderClaims.release(project.id);
+      if (claim !== null) this.folderClaims.release(claim);
       return { result: this.failed("start_task", error) };
     }
-    if (inFolder) this.folderClaims.launched(project.id, threadId);
+    if (claim !== null) this.folderClaims.launched(claim, threadId);
     // Chosen right before it is stored, with no await between, so two starts never take the same name.
     const spokenName = chooseSpokenName({
-      proposed: nonEmptyText(input?.spoken_name),
+      proposed: launch.proposedName,
       source: prompt,
       project: project.title,
       taken: this.takenNames(),
@@ -148,10 +195,10 @@ export class VoiceTasks {
       result: {
         status: "started",
         task: spokenName,
-        agent: selection.provider.displayName,
-        model: modelName(selection.provider, selection.model.model),
+        agent: provider.displayName,
+        model: modelName(provider, launch.model.model),
         project: spokenProject(shell, project),
-        workspace: place.workspace.type,
+        workspace: workspace.type,
         request: prompt,
       },
       undo: () => this.cancelStart(threadId, spokenName),
@@ -191,6 +238,39 @@ export class VoiceTasks {
     return {
       result: { status: "sent", task: task.spokenName, mode, message },
       undo: () => this.cancelMessage(task, messageId, mode, wasRunning),
+    };
+  }
+
+  /**
+   * interrupt_task: stops the agent of the task the user named, after their "oui". A
+   * followed task by its spoken name, else any thread by its title (decided by Thomas in #21).
+   * The task stays followed; T3 announces nothing for an interrupted run.
+   */
+  interruptTask(args: unknown): ToolOutcome {
+    const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
+    if (reference === null) return { result: { error: "invalid_arguments" } };
+    const shell = this.options.shell();
+    if (shell === null) return { result: { error: "t3_unavailable" } };
+    const match = this.findTask(shell, reference);
+    if (match.kind !== "found") return { result: match.result };
+    const { thread, name } = match;
+    if (!hasQueuedOrLiveRun(thread)) return { result: { status: "not_running", task: name } };
+    return {
+      confirm: {
+        readBack: {
+          action: "interrupt_task",
+          task: name,
+          project: shell.projects.get(thread.projectId)?.title ?? null,
+        },
+        run: async () => {
+          try {
+            await this.options.backend.stopThread(this.options.newId(), thread.id);
+          } catch (error) {
+            return { result: this.failed("interrupt_task", error) };
+          }
+          return { result: { status: "interrupted", task: name } };
+        },
+      },
     };
   }
 
@@ -245,22 +325,9 @@ export class VoiceTasks {
     if (reference === null) return { error: "invalid_arguments" };
     const shell = this.options.shell();
     if (shell === null) return { error: "t3_unavailable" };
-    let thread: Thread | undefined;
-    let name: string;
-    const followed = this.findFollowed(reference);
-    if (followed.kind === "found") {
-      thread = shell.threads.get(followed.task.threadId);
-      name = followed.task.spokenName;
-    } else {
-      // Several followed tasks fit: the user picks among them before any other thread.
-      if (followed.result.status === "ambiguous_task") return followed.result;
-      const match = findThread(shell, reference);
-      if (match.kind === "none") return followed.result;
-      if (match.kind === "ambiguous") return match.result;
-      thread = match.thread;
-      name = match.thread.title;
-    }
-    if (thread === undefined) return { error: "unknown_task" };
+    const match = this.findTask(shell, reference);
+    if (match.kind !== "found") return match.result;
+    const { thread, name } = match;
 
     const state = awarenessOf(thread);
     const eventKey = eventKeyOf(thread);
@@ -333,12 +400,16 @@ export class VoiceTasks {
     return { status: "cancelled", action: "send_message", task: task.spokenName };
   }
 
-  /** Where the new thread works: the project folder, or a new worktree when it must or was asked. */
+  /**
+   * Where the new thread works: the project folder, or a new worktree when it must or was
+   * asked. Sharing a folder another agent works in needs the user's "oui".
+   */
   private async chooseWorkspace(
     shell: ShellState,
     project: Project,
-    worktreeAsked: boolean,
+    asked: "new_worktree" | "shared" | null,
   ): Promise<WorkspaceChoice> {
+    const worktreeAsked = asked === "new_worktree";
     // Checked again after each wait for T3: another start may claim the folder meanwhile.
     const folderBusy = () =>
       this.folderClaims.isClaimed(project.id, shell) ||
@@ -348,10 +419,14 @@ export class VoiceTasks {
           (thread) =>
             thread.projectId === project.id && thread.worktreePath === null && isRunning(thread),
         );
-    const projectFolder = (): WorkspaceChoice => {
-      this.folderClaims.claim(project.id);
-      return { kind: "ok", workspace: { type: "project_folder" } };
-    };
+    const projectFolder = (): WorkspaceChoice => ({
+      kind: "ok",
+      workspace: { type: "project_folder" },
+      claim: this.folderClaims.claim(project.id),
+    });
+    if (asked === "shared") {
+      return folderBusy() ? { kind: "confirm", reason: "folder_busy" } : projectFolder();
+    }
     if (!(worktreeAsked || project.newThreadWorkspace === "new_worktree" || folderBusy())) {
       return projectFolder();
     }
@@ -363,12 +438,31 @@ export class VoiceTasks {
       return { kind: "error", result: this.failed("start_task", error) };
     }
     if (baseBranch !== null) {
-      return { kind: "ok", workspace: { type: "new_worktree", baseBranch } };
+      return { kind: "ok", workspace: { type: "new_worktree", baseBranch }, claim: null };
     }
     if (worktreeAsked) return { kind: "error", result: { error: "worktree_unavailable" } };
-    // No worktree without git. Sharing a busy folder needs a spoken "oui" (ticket #21).
-    if (folderBusy()) return { kind: "error", result: { error: "project_busy_not_git" } };
+    // No worktree without git: the task can only share the busy folder.
+    if (folderBusy()) return { kind: "confirm", reason: "folder_busy_not_git" };
     return projectFolder();
+  }
+
+  /** A followed task by its spoken name, else any thread by its title. */
+  private findTask(
+    shell: ShellState,
+    reference: string,
+  ): { kind: "found"; thread: Thread; name: string } | { kind: "other"; result: ToolResult } {
+    const followed = this.findFollowed(reference);
+    if (followed.kind === "found") {
+      const thread = shell.threads.get(followed.task.threadId);
+      if (thread === undefined) return { kind: "other", result: { error: "unknown_task" } };
+      return { kind: "found", thread, name: followed.task.spokenName };
+    }
+    // Several followed tasks fit: the user picks among them before any other thread.
+    if (followed.result.status === "ambiguous_task") return followed;
+    const match = findThread(shell, reference);
+    if (match.kind === "none") return followed;
+    if (match.kind === "ambiguous") return { kind: "other", result: match.result };
+    return { kind: "found", thread: match.thread, name: match.thread.title };
   }
 
   /** By spoken name; when no name fits, by spoken name and project title together. */
@@ -451,8 +545,20 @@ function findThread(shell: ShellState, reference: string): ThreadMatch {
 }
 
 type WorkspaceChoice =
-  | { kind: "ok"; workspace: LaunchWorkspace }
+  | { kind: "ok"; workspace: LaunchWorkspace; claim: FolderClaim | null }
+  | { kind: "confirm"; reason: "folder_busy" | "folder_busy_not_git" }
   | { kind: "error"; result: ToolResult };
+
+/** What start_task chose before it launches: the same after a "oui". */
+interface Launch {
+  shell: ShellState;
+  project: Project;
+  prompt: string;
+  provider: Provider;
+  model: ModelSelection;
+  runtimeMode: string;
+  proposedName: string | null;
+}
 
 type ProjectMatch = { kind: "found"; project: Project } | { kind: "other"; result: ToolResult };
 

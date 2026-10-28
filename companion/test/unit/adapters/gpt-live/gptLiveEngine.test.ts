@@ -179,7 +179,7 @@ describe("tool calls", () => {
 });
 
 describe("speech activity", () => {
-  test("a piece of transcript says who is speaking now, never what was said", async () => {
+  test("a piece of transcript says who is speaking now, and what the user said", async () => {
     const { transport, events, open } = setup();
     await open();
 
@@ -188,8 +188,9 @@ describe("speech activity", () => {
     // An empty piece is no speech: GPT-Live streams silence too.
     transport.socket.receive({ type: "session.output_transcript.delta", delta: "" });
 
+    // The core checks a spoken "oui" in the user's words; the assistant's are never needed.
     assert.deepEqual(events, [
-      { type: "speech", speaker: "user" },
+      { type: "speech", speaker: "user", text: "Lance Claude" },
       { type: "speech", speaker: "assistant" },
     ]);
   });

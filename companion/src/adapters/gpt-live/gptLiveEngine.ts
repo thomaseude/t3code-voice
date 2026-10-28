@@ -296,7 +296,11 @@ class LiveSession implements VoiceSession {
     // Only the transcript tells when someone speaks: the audio streams silence too.
     const speaker = TRANSCRIPT_SPEAKERS.get(event?.type);
     if (speaker !== undefined && typeof event.delta === "string" && event.delta !== "") {
-      this.onEvent({ type: "speech", speaker });
+      this.onEvent(
+        speaker === "user"
+          ? { type: "speech", speaker, text: event.delta }
+          : { type: "speech", speaker },
+      );
       return;
     }
     // The delegation model's events come wrapped; a finished function item is a tool call.

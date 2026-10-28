@@ -85,9 +85,9 @@ During a session the companion answers the voice model's tools from T3's state:
   The agent works in a new worktree when the project is set to `worktree` in T3, when the
   project's folder already has a running agent, or when the user asks for one. The
   worktree starts from the repository's main branch (the one `origin/HEAD` names), fetched
-  from origin. A busy project that is not a git repository starts nothing
-  (`project_busy_not_git`); neither does a new worktree asked for in a repository with no
-  branch (`worktree_unavailable`). Several projects with the title the user said start nothing:
+  from origin. A busy project that is not a git repository, or `workspace: shared` on a
+  busy folder, asks for a "oui" first (see below). A new worktree asked for in a repository
+  with no branch starts nothing (`worktree_unavailable`). Several projects with the title the user said start nothing:
   the answer lists their folder names, and the model calls again with `folder`. A model
   that fits several models, with or without its agent named, answers `ambiguous_model`
   with each agent and model;
@@ -99,6 +99,10 @@ During a session the companion answers the voice model's tools from T3's state:
   a waiting message is taken back from the queue, a message that started an idle thread
   interrupts its run. An undo that failed can be asked again within the 60 s. A steered message, or
   one the agent already took, answers `too_late`;
+- `interrupt_task` stops the agent of a task the user named (its run interrupted, its
+  queued runs cancelled), after a "oui". It takes a followed task's spoken name, else the
+  title of any thread. A task with no run answers `not_running`. The task stays followed,
+  and "non, arrête" cancels nothing after it;
 - `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
   a task by its spoken name. Two threads with one title are offered as "<title> sur
   <project>";
@@ -108,6 +112,36 @@ During a session the companion answers the voice model's tools from T3's state:
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
 
 A reference that fits several projects or tasks acts on none: the answer lists the choices.
+
+A risky action needs a spoken "oui", checked by the companion, not by the voice model:
+
+1. The first call does nothing. It answers `{needs_confirmation: true, read_back, confirmation}`.
+   `confirmation` is a token.
+2. The model reads `read_back` and asks the question.
+3. The model calls the same tool again with `confirmation`. What runs is the action that
+   was read back, whatever else the second call says.
+4. The action runs only if the user's answer (the engine's transcript, kept in memory
+   only) holds a yes word ("oui", "ouais", "vas-y", "d'accord", "ok", "confirme"…) and no
+   word of doubt ("non", "pas", "mais", "attends"…). The answer is what the user says in
+   turns that start after the assistant started reading the question: words less than 1 s
+   apart are one turn, so the late transcript of the request never counts. It is judged
+   once the user was quiet 1 s, so "oui… mais attends" is heard whole. When the user said
+   nothing yet, the companion waits 1.5 s for a late transcript. An answer still going at
+   the end of the 60 s window, or cut by the end of the session, runs nothing.
+5. While a question is open, announcements wait: a "oui" only ever answers the question
+   the user heard. The question closes when its answer is judged (after the model sends
+   the token back), when the user's answer can no longer be a yes ("non", "attends"…),
+   after 60 s, or when the session ends.
+
+The answers when nothing runs:
+
+- `not_confirmed`: the answer was not a clear yes;
+- `confirmation_expired`: the answer came more than 60 s after the question;
+- `invalid_confirmation`: the token is unknown, already used, or from another tool or session;
+- `session_closed`: the voice session ended before the question was asked.
+
+A token works once. A voice session has one question at most: a new question replaces the
+one before.
 
 While a session is open, the companion announces the news of each followed task: a run
 that completed (after 5 s, in case the agent goes on) with a short summary, a run that
