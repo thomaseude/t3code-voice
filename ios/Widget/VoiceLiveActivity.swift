@@ -4,7 +4,7 @@ import SwiftUI
 import WidgetKit
 
 /// The lock screen and Dynamic Island while a conversation runs: the microphone is on or
-/// muted, its status, how long it has run, and the Mute/Unmute and End buttons.
+/// muted, its status, how long it has run, and the Mute/Unmute, Speaker and End buttons.
 struct VoiceLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VoiceActivityAttributes.self) { context in
@@ -19,6 +19,7 @@ struct VoiceLiveActivity: Widget {
                     .monospacedDigit()
                     .frame(maxWidth: 60)
                 MuteButton(muted: context.state.muted)
+                if context.state.live { SpeakerButton(on: context.state.speaker) }
                 EndButton()
             }
             .padding()
@@ -33,6 +34,7 @@ struct VoiceLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     HStack {
                         MuteButton(muted: context.state.muted)
+                        if context.state.live { SpeakerButton(on: context.state.speaker) }
                         EndButton()
                     }
                 }
@@ -66,6 +68,19 @@ private struct MuteButton: View {
             Image(systemName: muted ? "mic.fill" : "mic.slash.fill")
                 .accessibilityLabel(muted ? "Rétablir le micro" : "Couper le micro")
         }
+    }
+}
+
+private struct SpeakerButton: View {
+    let on: Bool
+
+    var body: some View {
+        Button(intent: SpeakerSessionIntent()) {
+            Image(systemName: on ? "speaker.wave.3.fill" : "speaker.fill")
+                .accessibilityLabel("Haut-parleur")
+                .accessibilityValue(on ? "Activé" : "Désactivé")
+        }
+        .tint(on ? Color.accentColor : Color.secondary)
     }
 }
 

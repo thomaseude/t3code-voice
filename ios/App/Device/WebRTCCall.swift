@@ -22,6 +22,7 @@ final class WebRTCCall: VoiceCall {
     private var hungUp = false
     /// Only the call that activated the audio session deactivates it.
     private var audioActive = false
+    private var routeChangeObserver: NSObjectProtocol?
 
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String {
         guard await AVAudioApplication.requestRecordPermission() else { throw VoiceCallError.microphoneDenied }
@@ -33,6 +34,7 @@ final class WebRTCCall: VoiceCall {
             self.observer = observer
             watchHeadset(observer: observer)
             let peer = try makePeer(observer: observer)
+            watchRouteChanges(observer: observer)
             let offer = try await peer.makeOffer()
             try stopIfHungUp()
             try await peer.setLocal(offer)
@@ -54,6 +56,17 @@ final class WebRTCCall: VoiceCall {
         } catch {
             throw VoiceCallError.failed
         }
+    }
+
+    func setSpeaker(_ on: Bool) throws {
+        let audio = RTCAudioSession.sharedInstance()
+        audio.lockForConfiguration()
+        defer { audio.unlockForConfiguration() }
+        try audio.overrideOutputAudioPort(on ? .speaker : .none)
+    }
+
+    var outputIsSpeaker: Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
     }
 
     func hangUp() {
@@ -114,6 +127,8 @@ final class WebRTCCall: VoiceCall {
         peer?.close()
         peer = nil
         observer = nil
+        if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
+        routeChangeObserver = nil
         guard audioActive else { return }
         audioActive = false
         let audio = RTCAudioSession.sharedInstance()
@@ -138,7 +153,21 @@ final class WebRTCCall: VoiceCall {
         defer { audio.unlockForConfiguration() }
         try audio.setConfiguration(config, active: true)
         audioActive = true
+        // Each session starts on the earpiece or the headset, even if the last one used the speaker.
+        try? audio.overrideOutputAudioPort(.none)
         audio.isAudioEnabled = true
+    }
+
+    /// iOS drops the speaker when a headset comes or goes. It never turns the speaker on by
+    /// itself: without `.defaultToSpeaker`, the voice goes to the earpiece when a headset goes away.
+    private func watchRouteChanges(observer: CallObserver) {
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak observer] _ in
+            observer?.report(.routeChanged)
+        }
     }
 
     private func makePeer(observer: CallObserver) throws -> RTCPeerConnection {

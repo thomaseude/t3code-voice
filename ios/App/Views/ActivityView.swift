@@ -77,6 +77,13 @@ struct ActivityView: View {
                     if session.state.isLive {
                         Button(muted ? "Micro" : "Muet") { Task { await session.toggleMute() } }
                             .buttonStyle(.bordered)
+                        Button { session.toggleSpeaker() } label: {
+                            Label("Haut-parleur", systemImage: session.speaker ? "speaker.wave.3.fill" : "speaker.fill")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(session.speaker ? Color.accentColor : Color.secondary)
+                        .accessibilityValue(session.speaker ? "Activé" : "Désactivé")
                     }
                     Button("Fin", role: .destructive) { Task { await session.end() } }
                         .buttonStyle(.borderedProminent)

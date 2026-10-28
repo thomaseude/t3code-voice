@@ -102,6 +102,8 @@ enum VoiceCallEvent: Equatable {
     case sessionStarted
     /// `session.closed` on the data channel: the session ended on the voice engine's side.
     case sessionClosed
+    /// The audio route changed: a headset came or went, or the speaker was turned on or off.
+    case routeChanged
     /// The peer connection or the data channel failed.
     case lost
     /// The AirPods (or another headset) went away: iOS would go on with the phone's own mic.
@@ -116,6 +118,11 @@ protocol VoiceCall: AnyObject {
     /// Opens the microphone and returns the SDP offer, without waiting for full ICE gathering.
     func start(onEvent: @escaping @MainActor (VoiceCallEvent) async -> Void) async throws -> String
     func accept(answer: String) async throws
+    /// Sends the voice to the iPhone speaker, or back to the earpiece or the headset. It
+    /// changes only the output: the audio session stays active.
+    func setSpeaker(_ on: Bool) throws
+    /// Whether the voice goes to the iPhone speaker now.
+    var outputIsSpeaker: Bool { get }
     /// Closes the connection and the microphone. Safe to call twice.
     func hangUp()
     /// Sends silence instead of the microphone, or the microphone again.
@@ -125,6 +132,7 @@ protocol VoiceCall: AnyObject {
 /// What the user sees and hears of the session: the Live Activity and the start sound.
 @MainActor
 protocol SessionFeedback {
+    func showSpeaker(_ on: Bool)
     func show(_ state: SessionState)
     /// Once per session, when the user can talk.
     func playStartSound()
@@ -137,6 +145,9 @@ final class VoiceSessionController: ObservableObject {
     @Published private(set) var state: SessionState = .idle
     /// Why the last session failed, until the next start.
     @Published private(set) var lastFailure: SessionFailure?
+    /// The voice goes to the iPhone speaker. Off at the start of each session: an answer about
+    /// the code must not play aloud in a room by surprise (decided by Thomas in #19).
+    @Published private(set) var speaker = false
 
     private let client: CompanionClient
     private let authenticator: Authenticator
@@ -217,6 +228,22 @@ final class VoiceSessionController: ObservableObject {
         await finish(.user)
     }
 
+    /// The Speaker button, in the app or on the Live Activity.
+    func toggleSpeaker() {
+        if state == .idle {
+            // Like End: after the app was killed, its Live Activity still shows the microphone.
+            feedback.show(.idle)
+            return
+        }
+        guard case .live = state, let call else { return }
+        do {
+            try call.setSpeaker(!speaker)
+        } catch {
+            return
+        }
+        showSpeaker(!speaker)
+    }
+
     private func handle(_ event: VoiceCallEvent, from call: VoiceCall) async {
         guard call === self.call else { return }
         switch event {
@@ -227,6 +254,10 @@ final class VoiceSessionController: ObservableObject {
             if muteWhenLive { await setMuted(true) }
         case .sessionClosed:
             await finish(.voice)
+        case .routeChanged:
+            // The event can arrive after a tap turned the speaker on again, so read the route
+            // now. A route change only ever turns the speaker off (spec #15, "Audio").
+            if !call.outputIsSpeaker { showSpeaker(false) }
         case .lost:
             await finish(.error(.lost))
         case .headsetLost:
@@ -259,6 +290,7 @@ final class VoiceSessionController: ObservableObject {
         show(.ending(reason))
         call?.hangUp()
         call = nil
+        showSpeaker(false)
         let session = self.session
         self.session = nil
         // After `session.closed` the companion has nothing left to close.
@@ -268,6 +300,12 @@ final class VoiceSessionController: ObservableObject {
 
     private func isCurrent(_ call: VoiceCall) -> Bool {
         call === self.call && state == .connecting
+    }
+
+    private func showSpeaker(_ on: Bool) {
+        guard speaker != on else { return }
+        speaker = on
+        feedback.showSpeaker(on)
     }
 
     private func show(_ state: SessionState) {
