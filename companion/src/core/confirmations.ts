@@ -93,7 +93,7 @@ interface Question {
   /** What the user said in those turns, as the engine transcribed it. */
   heard: string;
   /** "complete" once the user was quiet ANSWER_QUIET_MS after their last word. */
-  answer: "none" | "speaking" | "complete";
+  answerState: "none" | "speaking" | "complete";
   /** Whether the model sent the token back: it works once. */
   taken: boolean;
   /** Why the question ended, or null while it is still open. */
@@ -132,7 +132,7 @@ export class Confirmations {
       run: request.run,
       readAt: null,
       heard: "",
-      answer: "none",
+      answerState: "none",
       taken: false,
       ended: null,
       wake: () => {},
@@ -168,7 +168,7 @@ export class Confirmations {
     if (question === null || question.ended !== null || question.readAt === null) return;
     if (this.userTurnStartedAt < question.readAt) return;
     question.heard += text;
-    question.answer = "speaking";
+    question.answerState = "speaking";
     question.stopAnswerTimer();
     question.stopAnswerTimer = this.clock.schedule(ANSWER_QUIET_MS, () =>
       this.answerComplete(question),
@@ -205,22 +205,22 @@ export class Confirmations {
    * closes the question: the answer can no longer be a yes.
    */
   private answerComplete(question: Question): void {
-    question.answer = "complete";
+    question.answerState = "complete";
     if (hasDoubt(question.heard)) this.end(question, "doubted");
     else question.wake();
   }
 
   /** Waits until the answer is complete, or the user said nothing for TRANSCRIPT_WAIT_MS. */
   private async answerEnded(question: Question): Promise<void> {
-    if (question.ended === null && question.answer === "none") {
+    if (question.ended === null && question.answerState === "none") {
       await this.sleep(question, TRANSCRIPT_WAIT_MS);
     }
-    while (question.ended === null && question.answer === "speaking") {
+    while (question.ended === null && question.answerState === "speaking") {
       await this.sleep(question, null);
     }
   }
 
-  /** Waits until the question is woken, or `ms` at most. */
+  /** Waits until the question is woken, or `ms` at most (no limit when `ms` is null). */
   private sleep(question: Question, ms: number | null): Promise<void> {
     return new Promise((resolve) => {
       const done = () => {
