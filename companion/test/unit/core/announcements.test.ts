@@ -738,6 +738,26 @@ describe("speaking at the next gap", () => {
 
     assert.equal(session.spoken.length, 1);
   });
+
+  test("a session is not at a gap while a confirmation question waits for its answer", () => {
+    const clock = new FakeClock();
+    const queue = new AnnouncementQueue({
+      registry: new InMemoryTaskRegistry(),
+      shell: () => null,
+      push: new FakePushSender(),
+      clock,
+      log: () => {},
+    });
+    queue.openSession("s1", { speak: () => {}, timeZone: "Europe/Paris" });
+    clock.advance(2_000);
+    assert.equal(queue.isQuiet("s1"), true);
+
+    queue.questionOpen("s1", true);
+    assert.equal(queue.isQuiet("s1"), false);
+
+    queue.questionOpen("s1", false);
+    assert.equal(queue.isQuiet("s1"), true);
+  });
 });
 
 describe("when no voice session can speak", () => {
