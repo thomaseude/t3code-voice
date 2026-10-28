@@ -19,7 +19,7 @@ import type {
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
 import { awarenessOf, eventKeyOf } from "./awareness.ts";
-import { FolderClaims } from "./folderClaims.ts";
+import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
@@ -138,20 +138,24 @@ export class VoiceTasks {
             workspace: "shared_folder",
             request: prompt,
           },
-          run: () => {
-            this.folderClaims.claim(project.id);
-            return this.launch(launch, { type: "project_folder" });
-          },
+          run: () =>
+            this.launch(launch, { type: "project_folder" }, this.folderClaims.claim(project.id)),
         },
       };
     }
-    return this.launch(launch, place.workspace);
+    return this.launch(launch, place.workspace, place.claim);
   }
 
-  /** Starts the thread in `workspace`, follows it, and reads back what started. */
-  private async launch(launch: Launch, workspace: LaunchWorkspace): Promise<ToolOutcome> {
+  /**
+   * Starts the thread in `workspace`, follows it, and reads back what started. `claim` holds
+   * the project folder while T3 starts the thread in it.
+   */
+  private async launch(
+    launch: Launch,
+    workspace: LaunchWorkspace,
+    claim: FolderClaim | null,
+  ): Promise<ToolOutcome> {
     const { shell, project, prompt, provider } = launch;
-    const inFolder = workspace.type === "project_folder";
     let threadId: string;
     try {
       ({ threadId } = await this.options.backend.launchThread({
@@ -164,10 +168,10 @@ export class VoiceTasks {
         workspace,
       }));
     } catch (error) {
-      if (inFolder) this.folderClaims.release(project.id);
+      if (claim !== null) this.folderClaims.release(claim);
       return { result: this.failed("start_task", error) };
     }
-    if (inFolder) this.folderClaims.launched(project.id, threadId);
+    if (claim !== null) this.folderClaims.launched(claim, threadId);
     // Chosen right before it is stored, with no await between, so two starts never take the same name.
     const spokenName = chooseSpokenName({
       proposed: launch.proposedName,
@@ -415,10 +419,11 @@ export class VoiceTasks {
           (thread) =>
             thread.projectId === project.id && thread.worktreePath === null && isRunning(thread),
         );
-    const projectFolder = (): WorkspaceChoice => {
-      this.folderClaims.claim(project.id);
-      return { kind: "ok", workspace: { type: "project_folder" } };
-    };
+    const projectFolder = (): WorkspaceChoice => ({
+      kind: "ok",
+      workspace: { type: "project_folder" },
+      claim: this.folderClaims.claim(project.id),
+    });
     if (asked === "shared") {
       return folderBusy() ? { kind: "confirm", reason: "folder_busy" } : projectFolder();
     }
@@ -433,7 +438,7 @@ export class VoiceTasks {
       return { kind: "error", result: this.failed("start_task", error) };
     }
     if (baseBranch !== null) {
-      return { kind: "ok", workspace: { type: "new_worktree", baseBranch } };
+      return { kind: "ok", workspace: { type: "new_worktree", baseBranch }, claim: null };
     }
     if (worktreeAsked) return { kind: "error", result: { error: "worktree_unavailable" } };
     // No worktree without git: the task can only share the busy folder.
@@ -540,7 +545,7 @@ function findThread(shell: ShellState, reference: string): ThreadMatch {
 }
 
 type WorkspaceChoice =
-  | { kind: "ok"; workspace: LaunchWorkspace }
+  | { kind: "ok"; workspace: LaunchWorkspace; claim: FolderClaim | null }
   | { kind: "confirm"; reason: "folder_busy" | "folder_busy_not_git" }
   | { kind: "error"; result: ToolResult };
 

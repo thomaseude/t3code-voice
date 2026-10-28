@@ -3,6 +3,13 @@
 
 import type { VoiceTool } from "../ports/voiceEngine.ts";
 
+/** The token a tool gave with needs_confirmation, sent back once the user said yes. */
+const CONFIRMATION_PARAMETER = {
+  type: "string",
+  description:
+    "Only after a needs_confirmation answer and the user's spoken yes: the token it gave.",
+};
+
 export const VOICE_TOOLS: VoiceTool[] = [
   {
     name: "list_projects",
@@ -68,11 +75,7 @@ export const VOICE_TOOLS: VoiceTool[] = [
           description:
             'A short French name for the task, 2 to 4 words from the request, e.g. "tests Reviews".',
         },
-        confirmation: {
-          type: "string",
-          description:
-            "Only after a needs_confirmation answer and the user's spoken yes: the token it gave.",
-        },
+        confirmation: CONFIRMATION_PARAMETER,
       },
       required: ["project", "prompt"],
       additionalProperties: false,
@@ -119,11 +122,7 @@ export const VOICE_TOOLS: VoiceTool[] = [
           description:
             "A followed task's spoken name, or the title of any thread, as the user said it.",
         },
-        confirmation: {
-          type: "string",
-          description:
-            "Only after a needs_confirmation answer and the user's spoken yes: the token it gave.",
-        },
+        confirmation: CONFIRMATION_PARAMETER,
       },
       required: ["task"],
       additionalProperties: false,

@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmations.ts";
+import { ANSWER_PAUSE_MS, TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmations.ts";
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
@@ -71,12 +71,19 @@ async function setup({
   });
   await sessions.open("d1", { sdpOffer: "v=0", timeZone: null });
   let calls = 0;
-  /** Calls a tool as the voice model would, and returns what the core answered. */
+  /**
+   * Calls a tool as the voice model would, and returns what the core answered. A question
+   * is read to the user, as the voice model does.
+   */
   async function call(name: string, args: unknown = {}) {
     const callId = `c${++calls}`;
     engine.last.emit({ type: "tool_call", callId, name, arguments: args });
     await settle();
-    return engine.last.toolResults.find((result) => result.callId === callId)?.result;
+    const result = engine.last.toolResults.find((each) => each.callId === callId)?.result;
+    if ((result as { needs_confirmation?: boolean } | undefined)?.needs_confirmation) {
+      engine.last.emit({ type: "speech", speaker: "assistant" });
+    }
+    return result;
   }
   /** The user says `text`, as the engine's transcript of it. */
   async function say(text: string) {
@@ -85,7 +92,7 @@ async function setup({
   }
   /**
    * Calls the tool again with the confirmation the core gave, as the voice model does after
-   * the user's answer, and waits as long as the core waits for a late transcript.
+   * the user's answer, and waits as long as the core waits for the end of the answer.
    */
   async function confirm(name: string, question: unknown, args: unknown = {}) {
     const callId = `c${++calls}`;
@@ -98,6 +105,8 @@ async function setup({
     });
     await settle();
     clock.advance(TRANSCRIPT_WAIT_MS);
+    await settle();
+    clock.advance(ANSWER_PAUSE_MS);
     await settle();
     return engine.last.toolResults.find((result) => result.callId === callId)?.result;
   }
@@ -960,9 +969,76 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     await settle();
     clock.advance(500);
     await say("oui");
+    clock.advance(ANSWER_PAUSE_MS);
+    await settle();
 
     const result = engine.last.toolResults.find((each) => each.callId === "late")?.result;
     assert.deepEqual(result, { status: "interrupted", task: "tests Reviews" });
+    assert.equal(backend.commands.length, 1);
+  });
+
+  test("the answer is judged whole, after the user paused: « oui… mais attends » is not a yes", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    await say("Oui");
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "early",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    clock.advance(ANSWER_PAUSE_MS - 200);
+    await say(" mais attends");
+    clock.advance(ANSWER_PAUSE_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "early")?.result;
+    assert.deepEqual(result, { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("a yes word in the request, transcribed after the question, is not the answer", async () => {
+    const { backend, engine, clock, say } = await withRunningTask();
+    engine.last.emit({
+      type: "tool_call",
+      callId: "ask",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews" },
+    });
+    await settle();
+    const question = engine.last.toolResults.find((each) => each.callId === "ask")?.result as {
+      confirmation: string;
+    };
+    await say("OK, interromps tests reviews");
+    engine.last.emit({ type: "speech", speaker: "assistant" });
+
+    engine.last.emit({
+      type: "tool_call",
+      callId: "confirm",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    clock.advance(TRANSCRIPT_WAIT_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "confirm")?.result;
+    assert.deepEqual(result, { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("transcript pieces join as they come: « ou » + « ais » is « ouais »", async () => {
+    const { backend, call, say, confirm } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+    await say("Ou");
+    await say("ais");
+
+    await confirm("interrupt_task", question);
+
     assert.equal(backend.commands.length, 1);
   });
 
@@ -1138,6 +1214,31 @@ describe("start_task in a folder another agent works in: only after a clear « o
       request: "Corriger les tests des Reviews",
     });
     assert.equal(registry.followedTasks().length, 1);
+  });
+
+  test("a shared start that fails leaves the folder busy for a start still launching", async () => {
+    const { backend, engine, call, say, confirm } = await setup();
+    let releaseFirst = () => {};
+    backend.launchGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    engine.last.emit({ type: "tool_call", callId: "a", name: "start_task", arguments: startArgs });
+    await settle();
+    const sharedArgs = { ...startArgs, workspace: "shared", spoken_name: "autre tâche" };
+    const question = await call("start_task", sharedArgs);
+    backend.launchGate = null;
+    backend.failNextCommand = "launch";
+    await say("oui");
+    await confirm("start_task", question, sharedArgs);
+
+    await call("start_task", { ...startArgs, spoken_name: "troisième tâche" });
+    releaseFirst();
+    await settle();
+
+    assert.deepEqual(
+      backend.commands.map((command) => (command.type === "launch" ? command.workspace.type : "")),
+      ["new_worktree", "project_folder"],
+    );
   });
 
   test("a shared folder asked for on a busy project needs a « oui » too", async () => {

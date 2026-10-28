@@ -49,7 +49,7 @@ interface ActiveSession {
   /** How to take back the session's last start or message, and until when (clock time). */
   lastAction?: { undo: Undo; until: number };
   /** The question the user must answer "oui" to, before a risky action runs. */
-  confirmations: Confirmations<ToolOutcome>;
+  confirmations: Confirmations;
 }
 
 /** How often open sessions are checked for a revoked device, when no tool is called. */
@@ -217,6 +217,7 @@ export class VoiceSessionManager implements VoiceSessions {
     }
     if (event.type === "speech") {
       if (event.speaker === "user") session.confirmations.heard(event.text);
+      else session.confirmations.assistantSpoke();
       this.options.announcements.heardSpeech(session.id);
       return;
     }
@@ -262,7 +263,7 @@ export class VoiceSessionManager implements VoiceSessions {
       case "interrupt_task":
         return this.act(session, name, args, async () => tasks.interruptTask(args));
       case "send_message":
-        return this.remember(session, name, await tasks.sendMessage(args));
+        return this.answer(session, name, await tasks.sendMessage(args));
       case "follow_thread":
         return tasks.followThread(args);
       case "unfollow_thread":
@@ -306,13 +307,13 @@ export class VoiceSessionManager implements VoiceSessions {
     session: ActiveSession,
     tool: string,
     args: unknown,
-    ask: () => Promise<ToolOutcome>,
+    call: () => Promise<ToolOutcome>,
   ): Promise<unknown> {
     const token = (args as { confirmation?: unknown } | null)?.confirmation;
-    if (typeof token !== "string") return this.remember(session, tool, await ask());
+    if (typeof token !== "string") return this.answer(session, tool, await call());
     const taken = await session.confirmations.take(tool, token);
     if (taken.kind === "refused") return taken.result;
-    return this.remember(session, tool, await taken.run());
+    return this.answer(session, tool, await taken.run());
   }
 
   /**
@@ -320,7 +321,7 @@ export class VoiceSessionManager implements VoiceSessions {
    * question replaces the undo before, also one that did nothing: "non, arrête" never
    * reaches past it.
    */
-  private remember(session: ActiveSession, tool: string, outcome: ToolOutcome): unknown {
+  private answer(session: ActiveSession, tool: string, outcome: ToolOutcome): unknown {
     if ("confirm" in outcome) {
       session.lastAction = undefined;
       return session.confirmations.ask({ tool, ...outcome.confirm });
