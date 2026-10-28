@@ -45,7 +45,7 @@ final class AppModel: ObservableObject {
         self.modelName = modelName
         self.endSession = endSession
         deviceName = modelName
-        isPaired = (try? store.load()) != nil
+        isPaired = client.isPaired
     }
 
     /// Called with the text of each QR code the camera reads.
