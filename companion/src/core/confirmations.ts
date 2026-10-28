@@ -108,7 +108,7 @@ interface Question {
 /** The question of one voice session. */
 export class Confirmations {
   private readonly clock: Clock;
-  /** `onQuestionOpen` hears when announcements must wait for a question, and when no more. */
+  /** Told `true` when a question opens, so announcements wait, and `false` when it closes. */
   private readonly onQuestionOpen: (open: boolean) => void;
   private question: Question | null = null;
   /** When the user's current turn started, and their last word. */
