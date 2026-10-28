@@ -128,8 +128,10 @@ A risky action needs a spoken "oui", checked by the companion, not by the voice 
    once the user was quiet 1 s, so "oui… mais attends" is heard whole. When the user said
    nothing yet, the companion waits 1.5 s for a late transcript. An answer still going at
    the end of the 60 s window, or cut by the end of the session, runs nothing.
-5. While a question waits for its answer (until the answer, or 60 s), announcements wait
-   too: a "oui" only ever answers the question the user heard.
+5. While a question is open, announcements wait: a "oui" only ever answers the question
+   the user heard. The question closes when the model sends the token back, when the
+   user's answer can no longer be a yes ("non", "attends"…), after 60 s, or when the
+   session ends.
 
 The answers when nothing runs:
 

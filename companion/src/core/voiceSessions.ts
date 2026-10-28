@@ -145,7 +145,7 @@ export class VoiceSessionManager implements VoiceSessions {
       timeZone,
       openedAt: this.options.clock.now(),
       confirmations: new Confirmations(this.options.clock, (open) =>
-        this.options.announcements.questionWaiting(id, open),
+        this.options.announcements.questionOpen(id, open),
       ),
     };
     this.byDevice.set(deviceId, session);

@@ -662,6 +662,28 @@ describe("speaking at the next gap", () => {
     assert.equal(session.spoken.length, 1);
   });
 
+  test("an announcement held by a question is spoken soon after the user says no", async () => {
+    const { open, update, wait } = setup();
+    const session = await open();
+    session.emit({
+      type: "tool_call",
+      callId: "ask",
+      name: "interrupt_task",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    update("t1", { status: "failed" });
+    session.emit({ type: "speech", speaker: "assistant" });
+    await wait(1_000);
+
+    session.emit({ type: "speech", speaker: "user", text: "non, laisse" });
+    await wait(1_999);
+    assert.deepEqual(session.spoken, []);
+    await wait(1);
+
+    assert.equal(session.spoken.length, 1);
+  });
+
   test("an announcement held by a question nobody answers is spoken once it expires", async () => {
     const { open, update, wait } = setup();
     const session = await open();

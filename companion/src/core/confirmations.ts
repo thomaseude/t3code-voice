@@ -7,9 +7,10 @@
 // itself: the model's opinion of the answer does not count, and anything unclear is not a yes.
 //
 // A token works once, for one action, in one voice session, for 60 s. Each session has one
-// question at most: a new question replaces the one before. While a question waits for its
-// answer, announcements wait too, so a "oui" only ever answers the question the user heard
-// (decided by Thomas in #21).
+// question at most: a new question replaces the one before. While a question is open,
+// announcements wait, so a "oui" only ever answers the question the user heard (decided by
+// Thomas in #21). A question closes when it is judged, when the user's words can no longer
+// make a yes, when its 60 s run out, or when the session ends.
 
 import type { Clock } from "../ports/clock.ts";
 import { randomSecret } from "./secrets.ts";
@@ -82,7 +83,6 @@ export type Confirmed =
 interface Question {
   token: string;
   tool: string;
-  askedAt: number;
   run: () => Promise<ToolOutcome>;
   /**
    * When the assistant started reading the question. Only a turn of the user that starts
@@ -92,49 +92,62 @@ interface Question {
   /** What the user said in those turns, as the engine transcribed it. */
   heard: string;
   lastSpeechAt: number | null;
+  /** Whether the model sent the token back: it works once. */
+  taken: boolean;
+  /** Why the question ended, or null while it is still open. */
+  ended: "judged" | "expired" | "replaced" | "session_closed" | null;
+  /** Wakes the judging of the answer: the user spoke, or the question ended. */
+  wake: () => void;
+  stopTimer: () => void;
 }
 
-/** The questions of one voice session. */
+/** The question of one voice session. */
 export class Confirmations {
   private readonly clock: Clock;
+  /** `onQuestionOpen` hears when announcements must wait for a question, and when no more. */
+  private readonly onQuestionOpen: (open: boolean) => void;
   private question: Question | null = null;
-  /** Questions whose token was taken, while they wait for the end of the user's answer. */
-  private readonly waiting = new Set<{ question: Question; wake: () => void }>();
   /** When the user's current turn started, and their last word. */
   private userTurnStartedAt = Number.NEGATIVE_INFINITY;
   private lastUserSpeechAt = Number.NEGATIVE_INFINITY;
-  private closed = false;
-  private readonly onOpenChange: (open: boolean) => void;
-  private cancelExpiry = () => {};
+  private sessionClosed = false;
 
-  /** `onOpenChange` hears when a question starts and stops waiting for its answer. */
-  constructor(clock: Clock, onOpenChange: (open: boolean) => void) {
+  constructor(clock: Clock, onQuestionOpen: (open: boolean) => void) {
     this.clock = clock;
-    this.onOpenChange = onOpenChange;
+    this.onQuestionOpen = onQuestionOpen;
   }
 
   /** Replaces any earlier question, and answers what the voice model reads to the user. */
   ask(request: ConfirmRequest): ToolResult {
+    if (this.sessionClosed) return { error: "session_closed" };
+    const before = this.question;
     const token = randomSecret(16);
-    this.question = {
+    const question: Question = {
       token,
       tool: request.tool,
-      askedAt: this.clock.now(),
       run: request.run,
       readAt: null,
       heard: "",
       lastSpeechAt: null,
+      taken: false,
+      ended: null,
+      wake: () => {},
+      stopTimer: () => {},
     };
-    this.cancelExpiry();
-    this.cancelExpiry = this.clock.schedule(CONFIRM_WINDOW_MS, () => this.stopWaiting());
-    this.onOpenChange(true);
+    question.stopTimer = this.clock.schedule(CONFIRM_WINDOW_MS, () =>
+      this.end(question, "expired"),
+    );
+    this.question = question;
+    if (before !== null) this.end(before, "replaced");
+    this.onQuestionOpen(true);
     return { needs_confirmation: true, read_back: request.readBack, confirmation: token };
   }
 
   /** The assistant speaks: after a question, the user's next turn is the answer. */
   assistantSpoke(): void {
-    if (this.question !== null && this.question.readAt === null) {
-      this.question.readAt = this.clock.now();
+    const question = this.question;
+    if (question !== null && question.ended === null && question.readAt === null) {
+      question.readAt = this.clock.now();
     }
   }
 
@@ -146,85 +159,86 @@ export class Confirmations {
     const now = this.clock.now();
     if (now - this.lastUserSpeechAt >= ANSWER_QUIET_MS) this.userTurnStartedAt = now;
     this.lastUserSpeechAt = now;
-    const questions = [this.question, ...[...this.waiting].map((waiter) => waiter.question)];
-    for (const question of questions) {
-      if (question === null || question.readAt === null) continue;
-      if (this.userTurnStartedAt < question.readAt) continue;
-      question.heard += text;
-      question.lastSpeechAt = now;
-    }
-    for (const waiter of this.waiting) waiter.wake();
+    const question = this.question;
+    if (question === null || question.ended !== null || question.readAt === null) return;
+    if (this.userTurnStartedAt < question.readAt) return;
+    question.heard += text;
+    question.lastSpeechAt = now;
+    // "non", "attends"…: whatever comes next, the answer is no longer a yes.
+    if (hasDoubt(question.heard)) this.onQuestionOpen(false);
+    question.wake();
   }
 
-  /** The session ended: no action runs any more, even one whose answer is coming in. */
+  /** The session ended: no question stays open, and no action runs any more. */
   close(): void {
-    this.closed = true;
-    this.question = null;
-    this.stopWaiting();
-    for (const waiter of this.waiting) waiter.wake();
+    this.sessionClosed = true;
+    if (this.question !== null) this.end(this.question, "session_closed");
   }
 
   /** Uses the token up. The action may run only when this answers "confirmed". */
   async take(tool: string, token: string): Promise<Confirmed> {
     const question = this.question;
-    if (question === null || question.token !== token || question.tool !== tool) {
+    if (question === null || question.taken || question.token !== token || question.tool !== tool) {
       return { kind: "refused", result: { error: "invalid_confirmation" } };
     }
-    this.question = null;
-    this.stopWaiting();
-    const deadline = question.askedAt + CONFIRM_WINDOW_MS;
-    if (this.clock.now() > deadline || !(await this.answerEnded(question, deadline))) {
-      return { kind: "refused", result: { error: "confirmation_expired" } };
-    }
-    if (this.closed || !isClearYes(question.heard)) {
+    question.taken = true;
+    await this.answerEnded(question);
+    const ended = question.ended;
+    this.end(question, "judged");
+    if (ended === "expired") return { kind: "refused", result: { error: "confirmation_expired" } };
+    if (ended !== null || !isClearYes(question.heard)) {
       return { kind: "refused", result: { error: "not_confirmed" } };
     }
     return { kind: "confirmed", run: question.run };
   }
 
-  /** No question waits for an answer any more: it was taken, it expired, or the session ended. */
-  private stopWaiting(): void {
-    this.cancelExpiry();
-    this.cancelExpiry = () => {};
-    this.onOpenChange(false);
-  }
-
   /**
-   * Waits until the user was quiet ANSWER_QUIET_MS, or said nothing for TRANSCRIPT_WAIT_MS.
-   * False when they still talk at the deadline.
+   * Waits until the user was quiet ANSWER_QUIET_MS, or said nothing for TRANSCRIPT_WAIT_MS,
+   * or the question ended.
    */
-  private async answerEnded(question: Question, deadline: number): Promise<boolean> {
-    if (question.lastSpeechAt === null) await this.waitForWords(question, TRANSCRIPT_WAIT_MS);
-    while (question.lastSpeechAt !== null && !this.closed) {
-      const now = this.clock.now();
-      const quietFor = now - question.lastSpeechAt;
-      if (quietFor >= ANSWER_QUIET_MS) return true;
-      if (now >= deadline) return false;
-      await this.waitForWords(question, Math.min(ANSWER_QUIET_MS - quietFor, deadline - now));
+  private async answerEnded(question: Question): Promise<void> {
+    if (question.ended === null && question.lastSpeechAt === null) {
+      await this.sleep(question, TRANSCRIPT_WAIT_MS);
     }
-    return true;
+    while (question.ended === null && question.lastSpeechAt !== null) {
+      const quietFor = this.clock.now() - question.lastSpeechAt;
+      if (quietFor >= ANSWER_QUIET_MS) return;
+      await this.sleep(question, ANSWER_QUIET_MS - quietFor);
+    }
   }
 
-  /** Waits until the user says something, or `ms` at most. */
-  private waitForWords(question: Question, ms: number): Promise<void> {
+  /** Waits `ms`, or less if the question is woken. */
+  private sleep(question: Question, ms: number): Promise<void> {
     return new Promise((resolve) => {
-      const waiter = {
-        question,
-        wake: () => {
-          cancel();
-          this.waiting.delete(waiter);
-          resolve();
-        },
+      const done = () => {
+        cancel();
+        question.wake = () => {};
+        resolve();
       };
-      const cancel = this.clock.schedule(ms, waiter.wake);
-      this.waiting.add(waiter);
+      const cancel = this.clock.schedule(ms, done);
+      question.wake = done;
     });
+  }
+
+  /** Ends the question once: its timer stops, its judging wakes, announcements may go on. */
+  private end(question: Question, reason: NonNullable<Question["ended"]>): void {
+    if (question.ended !== null) return;
+    question.ended = reason;
+    question.stopTimer();
+    question.wake();
+    if (this.question === question) this.onQuestionOpen(false);
   }
 }
 
 /** A yes word, with no doubt word. */
 function isClearYes(heard: string): boolean {
-  const words = keyOf(heard).split(" ").filter(Boolean);
-  if (words.some((word) => DOUBT_WORDS.has(word))) return false;
-  return words.some((word) => YES_WORDS.has(word));
+  return !hasDoubt(heard) && wordsOf(heard).some((word) => YES_WORDS.has(word));
+}
+
+function hasDoubt(heard: string): boolean {
+  return wordsOf(heard).some((word) => DOUBT_WORDS.has(word));
+}
+
+function wordsOf(heard: string): string[] {
+  return keyOf(heard).split(" ").filter(Boolean);
 }

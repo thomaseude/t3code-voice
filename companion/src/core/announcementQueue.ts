@@ -33,8 +33,8 @@ interface QueuedSession extends SpeakingSession {
   lastSpeechAt: number;
   /** Tool calls the model still waits for: it speaks their result next. */
   pendingToolCalls: number;
-  /** A confirmation question waits for the user's answer: an announcement would blur it. */
-  questionWaiting: boolean;
+  /** A confirmation question is open: an announcement would blur its answer. */
+  questionOpen: boolean;
   cancelFlush: () => void;
 }
 
@@ -60,7 +60,7 @@ export class AnnouncementQueue {
       items: [],
       lastSpeechAt: Number.NEGATIVE_INFINITY,
       pendingToolCalls: 0,
-      questionWaiting: false,
+      questionOpen: false,
       cancelFlush: () => {},
     });
   }
@@ -97,11 +97,11 @@ export class AnnouncementQueue {
     this.heardSpeech(id);
   }
 
-  /** Holds announcements while a confirmation question waits for its answer. */
-  questionWaiting(id: string, waiting: boolean): void {
+  /** Holds announcements while a confirmation question is open. */
+  questionOpen(id: string, open: boolean): void {
     const session = this.sessions.get(id);
     if (session === undefined) return;
-    session.questionWaiting = waiting;
+    session.questionOpen = open;
     this.flush(session);
   }
 
@@ -129,7 +129,7 @@ export class AnnouncementQueue {
   private flush(session: QueuedSession) {
     session.cancelFlush();
     session.cancelFlush = () => {};
-    if (session.items.length === 0 || session.pendingToolCalls > 0 || session.questionWaiting) {
+    if (session.items.length === 0 || session.pendingToolCalls > 0 || session.questionOpen) {
       return;
     }
     const now = this.options.clock.now();
