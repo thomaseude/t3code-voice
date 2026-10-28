@@ -157,11 +157,14 @@ export const VOICE_TOOLS: VoiceTool[] = [
     },
   },
   {
-    name: "get_task_details",
+    name: "summarize_thread",
     description:
-      "Details on a task: its status, as T3 reports it, and a longer summary of " +
-      "what the agent did in its last finished run (null while it runs). For a failure, " +
-      "its cause and when the run can resume.",
+      "What a task is about and where it stands: its status, as T3 reports it, and a spoken " +
+      "summary of its whole conversation so far, also while the agent runs. For a failure, " +
+      "its cause and when the run can resume. too_long: the summary left part of the " +
+      "conversation out; suggest opening T3 for the rest. summary null with a status: the " +
+      "status changed while the summary was made, or there is nothing to summarize; give " +
+      "the status and offer to ask again.",
     parameters: {
       type: "object",
       properties: {
@@ -169,6 +172,37 @@ export const VOICE_TOOLS: VoiceTool[] = [
           type: "string",
           description:
             "A followed task's spoken name, or the title of any thread, as get_activity gives it.",
+        },
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_recent_messages",
+    description:
+      "The last messages of a task, oldest first, when the user asks what the agent or they " +
+      'themselves said ("relis-moi son dernier message", "qu\'est-ce que je lui avais ' +
+      'demandé ?"). Each message has who wrote it (user, agent or t3), its time and a short ' +
+      "excerpt where code is named, not given. cut: the excerpt left the rest of the message " +
+      "out. older: pass it as before to read the messages just older, or null when none are left.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description:
+            "A followed task's spoken name, or the title of any thread, as get_activity gives it.",
+        },
+        count: {
+          type: "integer",
+          minimum: 1,
+          maximum: 10,
+          description: "How many messages; omit for 3.",
+        },
+        before: {
+          type: "string",
+          description: "The older value of the last answer, to read further back.",
         },
       },
       required: ["task"],
@@ -201,7 +235,9 @@ export function voiceInstructions(projectNames: string[]): string {
     "Si l'outil répond not_confirmed, confirmation_expired ou invalid_confirmation, rien n'a été fait : dis-le, et repose la question en rappelant l'outil sans confirmation si l'utilisateur le veut toujours.",
     "Après start_task ou send_message, relis toujours ce qui a été fait : pour un lancement, l'agent, le modèle, le projet, la demande et le nom de la tâche ; pour un message, la tâche et le message.",
     'Si l\'utilisateur dit "non, arrête" ou "annule" juste après cette relecture, appelle cancel_last_action.',
-    "Le compagnon t'envoie les nouvelles des tâches suivies (terminée, échouée, attend une réponse ou une autorisation) : dis-les telles quelles, sans en changer le statut. Si l'utilisateur veut en savoir plus, appelle get_task_details.",
+    "Le compagnon t'envoie les nouvelles des tâches suivies (terminée, échouée, attend une réponse ou une autorisation) : dis-les telles quelles, sans en changer le statut. Si l'utilisateur veut en savoir plus, appelle summarize_thread.",
+    "Pour dire où en est une tâche ou de quoi elle parle, appelle summarize_thread ; pour relire ce qu'ont dit l'agent ou l'utilisateur, appelle get_recent_messages. Ne lis jamais à voix haute du code, un log ou un chemin de fichier complet : dis en quelques mots ce qu'ils font, et donne seulement le nom court d'un fichier.",
+    "Quand too_long ou cut vaut true, ou quand la réponse serait longue, résume et propose d'ouvrir T3 pour le détail.",
     "Appelle les tâches par leur nom court. Quand un outil renvoie plusieurs choix, lis-les et demande lequel ; ne choisis jamais à la place de l'utilisateur. S'il répond par une position (« la deuxième »), rappelle l'outil avec le nom à cette position.",
     'Quand l\'utilisateur dit "fin" ou "c\'est bon, merci", dis au revoir en quelques mots et appelle end_session.',
   ].join("\n");

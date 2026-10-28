@@ -41,6 +41,8 @@ const MIGRATIONS = [
      estimated_cost_usd REAL NOT NULL
    );
    CREATE INDEX usage_records_by_day ON usage_records (day)`,
+  // Nothing reads the long summary since summarize_thread replaced get_task_details (#39).
+  "ALTER TABLE task_summaries DROP COLUMN long",
 ];
 
 interface Row {
@@ -135,18 +137,18 @@ export class SqliteTaskRegistry implements TaskRegistry {
   saveSummary(threadId: string, eventKey: string, summary: TaskSummary): void {
     this.db
       .prepare(
-        `INSERT INTO task_summaries (thread_id, event_key, short, long) VALUES (?, ?, ?, ?)
+        `INSERT INTO task_summaries (thread_id, event_key, short) VALUES (?, ?, ?)
          ON CONFLICT (thread_id, event_key) DO UPDATE
-         SET short = excluded.short, long = excluded.long`,
+         SET short = excluded.short`,
       )
-      .run(threadId, eventKey, summary.short, summary.long);
+      .run(threadId, eventKey, summary.short);
   }
 
   summaryOf(threadId: string, eventKey: string): TaskSummary | null {
     const row = this.db
-      .prepare("SELECT short, long FROM task_summaries WHERE thread_id = ? AND event_key = ?")
-      .get(threadId, eventKey) as { short: string; long: string } | undefined;
-    return row === undefined ? null : { short: row.short, long: row.long };
+      .prepare("SELECT short FROM task_summaries WHERE thread_id = ? AND event_key = ?")
+      .get(threadId, eventKey) as { short: string } | undefined;
+    return row === undefined ? null : { short: row.short };
   }
 
   saveUsage(record: UsageRecord): void {

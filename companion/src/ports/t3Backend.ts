@@ -69,14 +69,32 @@ export interface Thread {
   updatedAt: string;
 }
 
-/** A message of a thread: the user's, the agent's, or T3's own. */
+/**
+ * A message of a thread: the user's, the agent's, or T3's own. Tool calls and diffs are not
+ * messages.
+ */
 export interface ThreadMessage {
+  id: string;
   role: "user" | "assistant" | "system";
   text: string;
   /** The run the message belongs to, or null. */
   runId: string | null;
   /** ISO date. */
   createdAt: string;
+}
+
+/** Some messages of a thread, oldest first. */
+export interface ThreadPage {
+  messages: ThreadMessage[];
+  /** Pass it as `before` to read the messages older than these; null when none are left. */
+  olderCursor: string | null;
+}
+
+export interface ReadThreadOptions {
+  /** How many of the newest messages to read; all of them when absent. */
+  limit?: number;
+  /** An `olderCursor`: read only the messages older than the page that gave it. */
+  before?: string | null;
 }
 
 export interface ProviderModel {
@@ -180,8 +198,11 @@ export interface T3Backend {
   ): ShellSubscription;
   /** Reads the folder of a project. Only `orchestration:read` is needed. */
   inspectRepository(path: string): Promise<RepositoryInfo>;
-  /** The thread's messages, oldest first. Only `orchestration:read` is needed. */
-  readThread(threadId: string): Promise<ThreadMessage[]>;
+  /**
+   * The thread's newest messages, oldest first, and a cursor to read older ones. An unknown
+   * cursor reads nothing. Only `orchestration:read` is needed.
+   */
+  readThread(threadId: string, options?: ReadThreadOptions): Promise<ThreadPage>;
   launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }>;
   sendMessage(request: SendMessageRequest): Promise<void>;
   /**

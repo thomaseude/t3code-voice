@@ -120,6 +120,15 @@ export class FakeTransport implements T3Transport {
     return connection;
   }
 
+  /** Whole thread projections, by thread id, as T3's HTTP route gives them. */
+  readonly threads = new Map<string, unknown>();
+  readonly threadReads: string[] = [];
+
+  async fetchWholeThreadProjection(threadId: string): Promise<unknown> {
+    this.threadReads.push(threadId);
+    return this.threads.get(threadId) ?? {};
+  }
+
   lastConnection(): FakeConnection {
     const connection = this.connections.at(-1);
     if (!connection) throw new Error("no connection was opened");

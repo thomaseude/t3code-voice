@@ -109,10 +109,6 @@ export class TaskWatcher {
       .then((announcement) => {
         if (this.stopped) return;
         this.options.queue.announce(announcement);
-        // A failure is told by its cause; its summary is made now, for get_task_details.
-        if (announcement.state === "failed") {
-          this.options.summaries.summaryOf(thread, eventKey).catch(() => {});
-        }
       })
       .catch((error) => {
         this.options.log(

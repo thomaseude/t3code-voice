@@ -131,7 +131,8 @@ describe("opening a voice session", () => {
         "interrupt_task",
         "follow_thread",
         "unfollow_thread",
-        "get_task_details",
+        "summarize_thread",
+        "get_recent_messages",
         "end_session",
       ],
     );

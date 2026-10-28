@@ -74,22 +74,41 @@ describe("SQLite task registry", () => {
     const first = SqliteTaskRegistry.open(path);
     first.follow(followedTask("t1"));
     assert.equal(first.summaryOf("t1", "completed:run-1"), null);
-    first.saveSummary("t1", "completed:run-1", { short: "Court 1.", long: "Long 1." });
-    first.saveSummary("t1", "completed:run-2", { short: "Court 2.", long: "Long 2." });
+    first.saveSummary("t1", "completed:run-1", { short: "Court 1." });
+    first.saveSummary("t1", "completed:run-2", { short: "Court 2." });
     first.close();
 
     const second = SqliteTaskRegistry.open(path);
-    assert.deepEqual(second.summaryOf("t1", "completed:run-1"), {
-      short: "Court 1.",
-      long: "Long 1.",
-    });
-    assert.deepEqual(second.summaryOf("t1", "completed:run-2"), {
-      short: "Court 2.",
-      long: "Long 2.",
-    });
+    assert.deepEqual(second.summaryOf("t1", "completed:run-1"), { short: "Court 1." });
+    assert.deepEqual(second.summaryOf("t1", "completed:run-2"), { short: "Court 2." });
     second.unfollow("t1");
     assert.equal(second.summaryOf("t1", "completed:run-2"), null);
     second.close();
+  });
+
+  test("a database written before the long summary was dropped keeps its short summaries", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    SqliteTaskRegistry.open(path).close();
+    // The schema as it was then: version 3, with a "long" column.
+    const db = new DatabaseSync(path);
+    db.exec(`DROP TABLE task_summaries;
+      CREATE TABLE task_summaries (
+        thread_id TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        short TEXT NOT NULL,
+        long TEXT NOT NULL,
+        PRIMARY KEY (thread_id, event_key)
+      );
+      INSERT INTO task_summaries VALUES ('t1', 'completed:run-1', 'Court.', 'Long.');
+      PRAGMA user_version = 3;`);
+    db.close();
+
+    const registry = SqliteTaskRegistry.open(path);
+    registry.follow(followedTask("t1"));
+    assert.deepEqual(registry.summaryOf("t1", "completed:run-1"), { short: "Court." });
+    registry.saveSummary("t1", "completed:run-2", { short: "Court 2." });
+    assert.deepEqual(registry.summaryOf("t1", "completed:run-2"), { short: "Court 2." });
+    registry.close();
   });
 
   test("the database file is created readable by its owner only", async () => {
@@ -145,9 +164,11 @@ describe("SQLite task registry", () => {
     const old = SqliteTaskRegistry.open(path);
     old.follow(followedTask("t1"));
     old.close();
-    // As the registry of #22 left it: two migrations.
+    // As the registry of #22 left it: two migrations, and summaries with a "long" column.
     const db = new DatabaseSync(path);
-    db.exec("DROP TABLE usage_records; PRAGMA user_version = 2;");
+    db.exec(`DROP TABLE usage_records;
+      ALTER TABLE task_summaries ADD COLUMN long TEXT NOT NULL DEFAULT '';
+      PRAGMA user_version = 2;`);
     db.close();
 
     const registry = SqliteTaskRegistry.open(path);

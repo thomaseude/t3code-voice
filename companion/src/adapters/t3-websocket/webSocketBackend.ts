@@ -4,6 +4,7 @@
 import {
   type LaunchThreadRequest,
   type Project,
+  type ReadThreadOptions,
   type RepositoryInfo,
   type SendMessageRequest,
   type ServerInfo,
@@ -13,7 +14,7 @@ import {
   type T3Backend,
   type T3Config,
   T3IncompatibleError,
-  type ThreadMessage,
+  type ThreadPage,
 } from "../../ports/t3Backend.ts";
 import {
   assertCompatible,
@@ -22,7 +23,12 @@ import {
   type T3Pin,
   toServerInfo,
 } from "./compatibility.ts";
-import { fetchDescriptor, issueWebSocketTicket, T3HttpError } from "./http.ts";
+import {
+  fetchDescriptor,
+  fetchWholeThreadProjection,
+  issueWebSocketTicket,
+  T3HttpError,
+} from "./http.ts";
 import {
   ConnectionClosedError,
   openRpcConnection,
@@ -59,6 +65,8 @@ const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 export interface T3Transport {
   fetchDescriptor(): Promise<EnvironmentDescriptor>;
   openConnection(): Promise<RpcConnection>;
+  /** The whole projection of a thread, over HTTP. */
+  fetchWholeThreadProjection(threadId: string): Promise<WireJson>;
 }
 
 export interface WebSocketBackendOptions {
@@ -73,6 +81,7 @@ export interface WebSocketBackendOptions {
 export function makeHttpTransport(baseUrl: string, token: string): T3Transport {
   return {
     fetchDescriptor: () => fetchDescriptor(baseUrl),
+    fetchWholeThreadProjection: (threadId) => fetchWholeThreadProjection(baseUrl, token, threadId),
     openConnection: async () => {
       const ticket = await issueWebSocketTicket(baseUrl, token);
       const url = new URL("/ws", baseUrl);
@@ -145,8 +154,18 @@ export class WebSocketT3Backend implements T3Backend {
     return toRepositoryInfo(answer);
   }
 
-  async readThread(threadId: string): Promise<ThreadMessage[]> {
-    return toThreadMessages(await this.projection(threadId));
+  async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<ThreadPage> {
+    // Only a checked connection proves the server is a tested version.
+    await this.connection();
+    // The pages are cut here, from every message. The cursor is the id of the oldest
+    // message of the page.
+    const all = toThreadMessages(await this.options.transport.fetchWholeThreadProjection(threadId));
+    const end =
+      options.before == null ? all.length : all.findIndex((each) => each.id === options.before);
+    if (end === -1) return { messages: [], olderCursor: null };
+    const start = options.limit === undefined ? 0 : Math.max(end - options.limit, 0);
+    const messages = all.slice(start, end);
+    return { messages, olderCursor: start > 0 ? (messages[0]?.id ?? null) : null };
   }
 
   async launchThread(request: LaunchThreadRequest): Promise<{ threadId: string }> {
@@ -171,7 +190,7 @@ export class WebSocketT3Backend implements T3Backend {
     messageId: string,
   ): Promise<boolean> {
     // T3 does not return the id of the run that waits with the message: read it back.
-    const run = runOfMessage(await this.projection(threadId), messageId);
+    const run = runOfMessage(await this.recentProjection(threadId), messageId);
     // Cancelled already: an earlier try whose answer was lost took it back.
     if (run?.status === "cancelled") return true;
     if (run?.status !== "queued") return false;
@@ -183,7 +202,7 @@ export class WebSocketT3Backend implements T3Backend {
     // T3 0.1.0 has no `thread.stop` command: interrupt the active run and cancel the
     // queued ones, which both versions know. Each command gets its own id, derived from
     // `commandId` so that a retry sends the same ones.
-    const { active, queued } = runsToStop(await this.projection(threadId));
+    const { active, queued } = runsToStop(await this.recentProjection(threadId));
     for (const runId of queued) {
       await this.dispatch({
         type: "queued-run.cancel",
@@ -230,7 +249,8 @@ export class WebSocketT3Backend implements T3Backend {
     this.connectionPromise = null;
   }
 
-  private projection(threadId: string): Promise<WireJson> {
+  /** The WebSocket's projection: only a window of the thread's last turns. */
+  private recentProjection(threadId: string): Promise<WireJson> {
     return this.call(METHODS.getThreadProjection, { threadId }, "the thread");
   }
 

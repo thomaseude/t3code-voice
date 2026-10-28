@@ -695,8 +695,8 @@ describe("commands", () => {
   });
 
   test("readThread reads the thread's messages, oldest first, with their run", async () => {
-    const { backend, connection } = await connected();
-    connection.answer = () => ({
+    const { backend, transport, connection } = await connected();
+    transport.threads.set("t1", {
       runs: [],
       messages: [
         {
@@ -719,25 +719,135 @@ describe("commands", () => {
       ],
     });
 
-    const messages = await backend.readThread("t1");
+    const page = await backend.readThread("t1");
 
-    assert.deepEqual(connection.requests, [
-      { tag: "orchestration.getThreadProjection", payload: { threadId: "t1" } },
-    ]);
-    assert.deepEqual(messages, [
-      {
-        role: "user",
-        text: "Corrige les tests des Reviews",
-        runId: "run-1",
-        createdAt: "2026-10-26T10:00:00.000Z",
-      },
-      {
-        role: "assistant",
-        text: "J'ai corrigé les tests.",
-        runId: "run-1",
-        createdAt: "2026-10-26T10:05:00.000Z",
-      },
-    ]);
+    // The WebSocket's projection is only a window of recent turns: the HTTP one is whole.
+    assert.deepEqual(transport.threadReads, ["t1"]);
+    assert.deepEqual(connection.requests, []);
+    assert.deepEqual(page, {
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          text: "Corrige les tests des Reviews",
+          runId: "run-1",
+          createdAt: "2026-10-26T10:00:00.000Z",
+        },
+        {
+          id: "m2",
+          role: "assistant",
+          text: "J'ai corrigé les tests.",
+          runId: "run-1",
+          createdAt: "2026-10-26T10:05:00.000Z",
+        },
+      ],
+      olderCursor: null,
+    });
+  });
+
+  test("readThread pages back from the newest messages with a cursor", async () => {
+    const { backend, transport } = await connected();
+    const message = (id: string, minute: number) => ({
+      id,
+      runId: null,
+      role: "assistant",
+      text: `Message ${id}`,
+      streaming: false,
+      createdAt: `2026-10-26T10:0${minute}:00.000Z`,
+    });
+    transport.threads.set("t1", {
+      messages: [message("m1", 1), message("m2", 2), message("m3", 3), message("m4", 4)],
+    });
+
+    const newest = await backend.readThread("t1", { limit: 2 });
+    assert.deepEqual(
+      newest.messages.map((each) => each.id),
+      ["m3", "m4"],
+    );
+    assert.ok(newest.olderCursor !== null);
+
+    const older = await backend.readThread("t1", { limit: 2, before: newest.olderCursor });
+    assert.deepEqual(
+      older.messages.map((each) => each.id),
+      ["m1", "m2"],
+    );
+    assert.equal(older.olderCursor, null);
+  });
+
+  test("readThread leaves out workflow scripts, which are code and not conversation", async () => {
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          text: "Lance le workflow",
+          createdAt: "2026-10-26T10:00:00.000Z",
+        },
+        {
+          id: "m2",
+          role: "assistant",
+          text: "export const meta = {}",
+          workflowScript: true,
+          createdAt: "2026-10-26T10:01:00.000Z",
+        },
+      ],
+    });
+
+    const page = await backend.readThread("t1");
+
+    assert.deepEqual(
+      page.messages.map((each) => each.id),
+      ["m1"],
+    );
+  });
+
+  test("readThread leaves out a user message that is a workflow script without T3's flag", async () => {
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          text: "// workflow\nexport const meta = { name: 'x' }",
+          createdAt: "2026-10-26T10:00:00.000Z",
+        },
+        {
+          id: "m2",
+          role: "user",
+          text: "export const meta = {}",
+          workflowScript: false,
+          createdAt: "2026-10-26T10:01:00.000Z",
+        },
+      ],
+    });
+
+    const page = await backend.readThread("t1");
+
+    assert.deepEqual(
+      page.messages.map((each) => each.id),
+      ["m2"],
+    );
+  });
+
+  test("readThread checks T3's version before it reads", async () => {
+    const transport = new FakeTransport();
+    transport.descriptor = { ...transport.descriptor, serverVersion: "9.9.9" };
+    const backend = makeBackend(transport);
+
+    await assert.rejects(backend.readThread("t1"), T3IncompatibleError);
+    assert.deepEqual(transport.threadReads, []);
+  });
+
+  test("readThread with an unknown cursor reads nothing", async () => {
+    const { backend, transport } = await connected();
+    transport.threads.set("t1", {
+      messages: [{ id: "m1", role: "user", text: "Bonjour", createdAt: "2026-10-26T10:00Z" }],
+    });
+
+    const page = await backend.readThread("t1", { limit: 2, before: "gone" });
+
+    assert.deepEqual(page, { messages: [], olderCursor: null });
   });
 
   test("archiveThread sends T3's command", async () => {

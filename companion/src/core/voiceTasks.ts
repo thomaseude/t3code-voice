@@ -1,6 +1,6 @@
 // Starting and steering T3 tasks by voice: the tools start_task, send_message,
-// interrupt_task, follow_thread, unfollow_thread, get_task_details, and the undo behind
-// cancel_last_action.
+// interrupt_task, follow_thread, unfollow_thread, the undo behind cancel_last_action, and
+// the reading tools get_recent_messages and summarize_thread.
 //
 // Every tool checks its arguments, finds the project or task the user named, and acts on
 // T3 only when exactly one fits. Several fits return the choices; nothing is guessed. A
@@ -16,21 +16,23 @@ import type {
   T3Backend,
   T3Config,
   Thread,
+  ThreadPage,
 } from "../ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry } from "../ports/taskRegistry.ts";
-import { awarenessOf, eventKeyOf } from "./awareness.ts";
+import { awarenessOf, eventKeyOf, readingStatusOf } from "./awareness.ts";
 import { type FolderClaim, FolderClaims } from "./folderClaims.ts";
 import { errorKind } from "./secrets.ts";
 import { hasQueuedOrLiveRun, isRunning, type ShellState } from "./shellState.ts";
+import { spokenExcerpt } from "./spokenExcerpts.ts";
 import { chooseSpokenName, findByName, keyOf } from "./spokenNames.ts";
-import type { TaskSummaries } from "./taskSummaries.ts";
+import type { ConversationSummary, TaskSummaries } from "./taskSummaries.ts";
 
 export interface VoiceTasksOptions {
   backend: T3Backend;
   registry: TaskRegistry;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
-  /** The summaries get_task_details reads. */
+  /** The summaries summarize_thread reads. */
   summaries: TaskSummaries;
   clock: Clock;
   /** A new unique id, for T3 command and message ids. */
@@ -58,6 +60,13 @@ const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-a
 
 /** T3 driver kinds and the name the user says for them. */
 const DRIVER_NAMES: Record<string, string> = { claudeAgent: "claude", codex: "codex" };
+
+/** How many messages get_recent_messages reads when the model does not say, and at most. */
+const DEFAULT_MESSAGE_COUNT = 3;
+const MAX_MESSAGE_COUNT = 10;
+
+/** Who wrote a message, in the words the voice model gets. */
+const SPEAKERS = { user: "user", assistant: "agent", system: "t3" } as const;
 
 /** Longest first title sent to T3, which writes the real one from the prompt. */
 const TITLE_LENGTH = 80;
@@ -287,7 +296,7 @@ export class VoiceTasks {
     if (followed.kind === "found") {
       return { status: "already_followed", task: followed.task.spokenName };
     }
-    const match = findThread(shell, reference);
+    const match = findThread(shell, reference, shell.topLevelThreads());
     if (match.kind === "none") return { error: "unknown_task" };
     if (match.kind === "ambiguous") return match.result;
     const thread: Thread = match.thread;
@@ -317,36 +326,90 @@ export class VoiceTasks {
   }
 
   /**
-   * get_task_details: the task's status from T3, and the long summary of its finished run.
-   * A followed task by its spoken name, else any thread by its title (decided by Thomas in #22).
+   * summarize_thread: the task's status from T3, and a summary of its conversation so far,
+   * also while a run goes on. A followed task by its spoken name, else any thread by its
+   * title (decided by Thomas in #22).
    */
-  async taskDetails(args: unknown): Promise<ToolResult> {
+  async summarizeThread(args: unknown): Promise<ToolResult> {
     const reference = nonEmptyText((args as Record<string, unknown> | null)?.task);
     if (reference === null) return { error: "invalid_arguments" };
     const shell = this.options.shell();
     if (shell === null) return { error: "t3_unavailable" };
-    const match = this.findTask(shell, reference);
+    const match = this.findTask(shell, reference, { archived: true });
     if (match.kind !== "found") return match.result;
     const { thread, name } = match;
 
-    const state = awarenessOf(thread);
-    const eventKey = eventKeyOf(thread);
-    const finished = state === "completed" || state === "failed";
-    const summary =
-      finished && eventKey !== null
-        ? await this.options.summaries.summaryOf(thread, eventKey)
-        : null;
+    const status = readingStatusOf(thread);
+    let conversation: ConversationSummary;
+    try {
+      conversation = await this.options.summaries.conversationSummaryOf(thread, status);
+    } catch (error) {
+      return this.failed("summarize_thread", error);
+    }
+    // The run may have changed meanwhile: T3's new status goes without the summary, which
+    // was made for the old one and could contradict it.
+    const latest = this.options.shell();
+    if (latest === null) return { error: "t3_unavailable" };
+    const current = latest.threads.get(thread.id) ?? thread;
+    const moved = readingStatusOf(current) !== status;
     const details: ToolResult = {
       task: name,
-      project: shell.projects.get(thread.projectId)?.title ?? null,
-      status: state ?? "idle",
-      summary: summary?.long ?? null,
+      project: latest.projects.get(current.projectId)?.title ?? null,
+      status: readingStatusOf(current),
+      summary: moved ? null : conversation.summary,
+      too_long: moved ? false : conversation.tooLong,
     };
-    if (state === "failed") {
-      details.failure = thread.lastError?.failureClass ?? "unknown";
-      details.resumes_at = thread.lastError?.resumesAt ?? null;
+    if (details.status === "failed") {
+      details.failure = current.lastError?.failureClass ?? "unknown";
+      details.resumes_at = current.lastError?.resumesAt ?? null;
     }
     return details;
+  }
+
+  /**
+   * get_recent_messages: the task's last messages, oldest first, as short spoken excerpts,
+   * and a cursor to read older ones. Read-only: any thread, followed or not.
+   */
+  async recentMessages(args: unknown): Promise<ToolResult> {
+    const input = args as Record<string, unknown> | null;
+    const reference = nonEmptyText(input?.task);
+    const count = input?.count ?? DEFAULT_MESSAGE_COUNT;
+    const before = input?.before;
+    if (
+      reference === null ||
+      !(Number.isInteger(count) && (count as number) >= 1) ||
+      !optionalText(before)
+    ) {
+      return { error: "invalid_arguments" };
+    }
+    const shell = this.options.shell();
+    if (shell === null) return { error: "t3_unavailable" };
+    const match = this.findTask(shell, reference, { archived: true });
+    if (match.kind !== "found") return match.result;
+    const { thread, name } = match;
+
+    let page: ThreadPage;
+    try {
+      page = await this.options.backend.readThread(thread.id, {
+        limit: Math.min(count as number, MAX_MESSAGE_COUNT),
+        before: nonEmptyText(before),
+      });
+    } catch (error) {
+      return this.failed("get_recent_messages", error);
+    }
+    // Read after the messages: a run that ended meanwhile is not told as running.
+    const latest = this.options.shell();
+    if (latest === null) return { error: "t3_unavailable" };
+    return {
+      task: name,
+      project: latest.projects.get(thread.projectId)?.title ?? null,
+      status: readingStatusOf(latest.threads.get(thread.id) ?? thread),
+      messages: page.messages.map((message) => {
+        const { excerpt, cut } = spokenExcerpt(message.text);
+        return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };
+      }),
+      older: page.olderCursor,
+    };
   }
 
   unfollowThread(args: unknown): ToolResult {
@@ -446,10 +509,14 @@ export class VoiceTasks {
     return projectFolder();
   }
 
-  /** A followed task by its spoken name, else any thread by its title. */
+  /**
+   * A followed task by its spoken name, else any thread by its title. With `archived`, an
+   * archived thread is found too, when no active one fits.
+   */
   private findTask(
     shell: ShellState,
     reference: string,
+    { archived = false } = {},
   ): { kind: "found"; thread: Thread; name: string } | { kind: "other"; result: ToolResult } {
     const followed = this.findFollowed(reference);
     if (followed.kind === "found") {
@@ -459,7 +526,12 @@ export class VoiceTasks {
     }
     // Several followed tasks fit: the user picks among them before any other thread.
     if (followed.result.status === "ambiguous_task") return followed;
-    const match = findThread(shell, reference);
+    let match = findThread(shell, reference, shell.topLevelThreads());
+    // A bare project name finds its project's only archived thread, never a list of them.
+    if (match.kind === "none" && archived) {
+      const inArchive = findThread(shell, reference, shell.archivedThreads());
+      if (!(inArchive.kind === "ambiguous" && namesAProject(shell, reference))) match = inArchive;
+    }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };
     return { kind: "found", thread: match.thread, name: match.thread.title };
@@ -522,11 +594,11 @@ type ThreadMatch =
   | { kind: "none" };
 
 /**
- * A thread by its title; when no title fits, by its title and project together. Two threads
- * with one title are then offered as "Fix tests sur Joombo", which finds one when repeated.
+ * One of `threads` by its title; when no title fits, by its title and project together. Two
+ * threads with one title are then offered as "Fix tests sur Joombo", which finds one when
+ * repeated.
  */
-function findThread(shell: ShellState, reference: string): ThreadMatch {
-  const threads = shell.topLevelThreads();
+function findThread(shell: ShellState, reference: string, threads: Thread[]): ThreadMatch {
   const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
   const byTitle = findByName(reference, threads, (thread) => thread.title);
   const match =
@@ -542,6 +614,13 @@ function findThread(shell: ShellState, reference: string): ThreadMatch {
     return shared ? `${thread.title} sur ${projectOf(thread)}` : thread.title;
   });
   return { kind: "ambiguous", result: { status: "ambiguous_task", choices } };
+}
+
+/** True when every word of `reference` is in a project's title: "Joombo", "sur Joombo". */
+function namesAProject(shell: ShellState, reference: string): boolean {
+  return (
+    findByName(reference, [...shell.projects.values()], (project) => project.title).kind !== "none"
+  );
 }
 
 type WorkspaceChoice =

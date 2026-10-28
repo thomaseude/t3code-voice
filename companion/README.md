@@ -110,9 +110,23 @@ During a session the companion answers the voice model's tools from T3's state:
 - `follow_thread` / `unfollow_thread` follow any thread by its title, or stop following
   a task by its spoken name. Two threads with one title are offered as "<title> sur
   <project>";
-- `get_task_details` gives a task's status from T3 and the long summary of its last
-  finished run, with the cause and `resumes_at` of a failure. It takes a followed task's
-  spoken name, else the title of any thread;
+- `summarize_thread` gives a task's status from T3 and a spoken summary of its whole
+  conversation, also while the agent runs. When T3's status changes while the summary is
+  made, the new status comes with no summary. A failure also gives its cause and `resumes_at`.
+  `too_long: true` means part of the conversation was left out: the assistant suggests
+  opening T3;
+- `get_recent_messages` gives a task's last messages (3 by default, at most 10), oldest
+  first, as short spoken excerpts: a code block is named "(bloc de code)", a path keeps its
+  file name, a link keeps its words, and an excerpt stops at about 400 characters (`cut:
+  true`). `older` is a cursor: passed back as `before`, it reads the messages just older.
+  Tool calls and diffs are not messages;
+- both reading tools take a followed task's spoken name, else the title of any thread,
+  archived ones too when no active thread fits. A bare project name ("Joombo") finds its
+  project's only archived thread, never a list of them. They
+  give T3's state even for a result the user dismissed in T3, `queued` for a run that waits
+  its turn, and `idle` for a thread with no run. They read the whole thread over T3's HTTP
+  route `GET /api/orchestration/threads/:id`: the WebSocket's projection is only a window
+  of the last turns;
 - `end_session` when the user says "fin" or "c'est bon, merci": the session closes 5 s later.
 
 A reference that fits several projects or tasks acts on none: the answer lists the choices.
@@ -220,11 +234,12 @@ Settings in `config.json`, all optional:
 the user's requests to; it calls the companion's tools by name. It is billed per token, on
 top of GPT-Live's $0.05 per minute.
 
-`summaryModel` is the cheap text model that summarizes what an agent did when a followed
-task completes or fails. The announcement speaks the short summary; `get_task_details` gives the
-long one. `get_task_details` on a finished thread nobody follows also asks for a summary,
-on each request, and keeps none. The model reads the agent's last messages of the run,
-with `store: false`. Without an OpenAI key there are no summaries.
+`summaryModel` is the cheap text model that summarizes what an agent did. When a followed
+task completes, it reads the agent's last messages of the run, and the announcement speaks
+its summary. For `summarize_thread`, it reads the thread's first message and its latest
+ones, up to 16,000 characters. That summary is kept in memory until the thread's last
+message, its length or T3's status changes. Every call uses `store: false`. Without an
+OpenAI key there are no summaries.
 
 `publicUrl` is the HTTPS address the iPhone reaches the companion at. `t3-voice pair` puts it
 in the QR code, and needs it.
@@ -383,7 +398,7 @@ src/
     secrets.ts               masks credentials in anything the companion prints
   adapters/
     t3-websocket/            T3 over /ws: connector, backend, RPC frames, wire translation,
-                             pairing/ticket HTTP calls, pinned version check
+                             pairing/ticket/thread HTTP calls, pinned version check
     config/                  ConfigStore on files in ~/.config/t3voice/
     device-auth/             DeviceAuth with the companion's own opaque tokens (stored
                              hashed), replaced on use every 30 days

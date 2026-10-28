@@ -11,10 +11,7 @@ import {
 
 class FakeResponsesTransport implements ResponsesTransport {
   readonly bodies: WireJson[] = [];
-  answer: { status: number; body: WireJson } = answerWith({
-    short: "Les tests passent.",
-    long: "L'agent a corrigé deux tests et tout passe.",
-  });
+  answer: { status: number; body: WireJson } = answerWith({ short: "Les tests passent." });
 
   async createResponse(body: WireJson) {
     this.bodies.push(body);
@@ -46,11 +43,10 @@ function setup() {
 const REQUEST = {
   request: "Corrige les tests des Reviews",
   output: "J'ai corrigé `reviews_test.rb`.",
-  outcome: "completed" as const,
 };
 
 describe("OpenAiSummarizer", () => {
-  test("asks the configured model for a short and a long summary, as JSON", async () => {
+  test("asks the configured model for a short summary, as JSON", async () => {
     const { transport, summarizer } = setup();
 
     await summarizer.summarize(REQUEST);
@@ -59,11 +55,10 @@ describe("OpenAiSummarizer", () => {
     assert.equal(body.model, "gpt-5.4-mini");
     assert.equal(body.store, false);
     assert.match(body.instructions, /French/);
-    assert.match(body.input, /Outcome: completed/);
     assert.match(body.input, /Corrige les tests des Reviews/);
     assert.match(body.input, /J'ai corrigé `reviews_test.rb`./);
     assert.equal(body.text.format.type, "json_schema");
-    assert.deepEqual(body.text.format.schema.required, ["short", "long"]);
+    assert.deepEqual(body.text.format.schema.required, ["short"]);
   });
 
   test("a thread with no request says so instead of an empty one", async () => {
@@ -74,13 +69,10 @@ describe("OpenAiSummarizer", () => {
     assert.match(transport.bodies[0].input, /User's request: unknown/);
   });
 
-  test("returns the two summaries the model wrote", async () => {
+  test("returns the summary the model wrote", async () => {
     const { summarizer } = setup();
 
-    assert.deepEqual(await summarizer.summarize(REQUEST), {
-      short: "Les tests passent.",
-      long: "L'agent a corrigé deux tests et tout passe.",
-    });
+    assert.deepEqual(await summarizer.summarize(REQUEST), { short: "Les tests passent." });
   });
 
   test("an error status fails with its code only, never the message", async () => {
@@ -99,8 +91,8 @@ describe("OpenAiSummarizer", () => {
   test("an answer that is not the expected JSON fails", async () => {
     const { transport, summarizer } = setup();
     for (const answer of [
-      answerWith({ short: "Seulement court." }),
-      answerWith({ short: "", long: "Long." }),
+      answerWith({ long: "Seulement long." }),
+      answerWith({ short: " " }),
       { status: 200, body: { output: [] } },
       {
         status: 200,
@@ -110,5 +102,54 @@ describe("OpenAiSummarizer", () => {
       transport.answer = answer;
       await assert.rejects(summarizer.summarize(REQUEST), /unexpected answer/);
     }
+  });
+});
+
+const CONVERSATION = {
+  status: "running",
+  messages: [
+    { role: "user" as const, text: "Corrige les tests des Reviews" },
+    { role: "assistant" as const, text: "Je lance `bin/rails test`." },
+  ],
+  omitted: 3,
+};
+
+describe("OpenAiSummarizer.summarizeConversation", () => {
+  test("asks for a spoken summary of the conversation, with T3's status", async () => {
+    const { transport, summarizer } = setup();
+    transport.answer = answerWith({ summary: "Il corrige les tests ; il travaille encore." });
+
+    const summary = await summarizer.summarizeConversation(CONVERSATION);
+
+    assert.equal(summary, "Il corrige les tests ; il travaille encore.");
+    const [body] = transport.bodies;
+    assert.equal(body.model, "gpt-5.4-mini");
+    assert.equal(body.store, false);
+    assert.match(body.instructions, /French/);
+    assert.match(body.instructions, /still running/);
+    assert.match(body.instructions, /waiting_for_input/);
+    assert.match(body.instructions, /queued/);
+    assert.match(body.input, /Status: running/);
+    assert.match(body.input, /User: Corrige les tests des Reviews/);
+    assert.match(body.input, /Agent: Je lance `bin\/rails test`./);
+    assert.match(body.input, /3 messages left out/);
+    assert.deepEqual(body.text.format.schema.required, ["summary"]);
+  });
+
+  test("an answer with no summary fails", async () => {
+    const { transport, summarizer } = setup();
+    transport.answer = answerWith({ summary: "" });
+
+    await assert.rejects(summarizer.summarizeConversation(CONVERSATION), /unexpected answer/);
+  });
+
+  test("an error status fails with its code only, never the message", async () => {
+    const { transport, summarizer } = setup();
+    transport.answer = { status: 500, body: { error: { message: "Corrige les tests" } } };
+
+    await assert.rejects(summarizer.summarizeConversation(CONVERSATION), (error: Error) => {
+      assert.equal(error.message, "OpenAI refused the summary (500).");
+      return true;
+    });
   });
 });
