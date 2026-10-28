@@ -348,13 +348,13 @@ export class VoiceTasks {
     }
     // The run may have changed meanwhile: T3's new status goes without the summary, which
     // was made for the old one and could contradict it.
-    const now = this.options.shell();
-    if (now === null) return { error: "t3_unavailable" };
-    const current = now.threads.get(thread.id) ?? thread;
+    const latest = this.options.shell();
+    if (latest === null) return { error: "t3_unavailable" };
+    const current = latest.threads.get(thread.id) ?? thread;
     const moved = readingStatusOf(current) !== status;
     const details: ToolResult = {
       task: name,
-      project: now.projects.get(current.projectId)?.title ?? null,
+      project: latest.projects.get(current.projectId)?.title ?? null,
       status: readingStatusOf(current),
       summary: moved ? null : conversation.summary,
       too_long: moved ? false : conversation.tooLong,
@@ -398,12 +398,12 @@ export class VoiceTasks {
       return this.failed("get_recent_messages", error);
     }
     // Read after the messages: a run that ended meanwhile is not told as running.
-    const now = this.options.shell();
-    if (now === null) return { error: "t3_unavailable" };
+    const latest = this.options.shell();
+    if (latest === null) return { error: "t3_unavailable" };
     return {
       task: name,
-      project: now.projects.get(thread.projectId)?.title ?? null,
-      status: readingStatusOf(now.threads.get(thread.id) ?? thread),
+      project: latest.projects.get(thread.projectId)?.title ?? null,
+      status: readingStatusOf(latest.threads.get(thread.id) ?? thread),
       messages: page.messages.map((message) => {
         const { excerpt, cut } = spokenExcerpt(message.text);
         return { from: SPEAKERS[message.role], time: message.createdAt, excerpt, cut };
@@ -527,8 +527,9 @@ export class VoiceTasks {
     // Several followed tasks fit: the user picks among them before any other thread.
     if (followed.result.status === "ambiguous_task") return followed;
     let match = findThread(shell, reference, shell.topLevelThreads());
-    if (match.kind === "none" && archived) {
-      match = findThread(shell, reference, shell.archivedThreads(), { skipBareProject: true });
+    // A bare project name never searches the archive: it would offer all of it.
+    if (match.kind === "none" && archived && !namesAProject(shell, reference)) {
+      match = findThread(shell, reference, shell.archivedThreads());
     }
     if (match.kind === "none") return followed;
     if (match.kind === "ambiguous") return { kind: "other", result: match.result };
@@ -594,24 +595,15 @@ type ThreadMatch =
 /**
  * One of `threads` by its title; when no title fits, by its title and project together. Two
  * threads with one title are then offered as "Fix tests sur Joombo", which finds one when
- * repeated. With `skipBareProject`, a reference that names nothing but a project finds
- * nothing: it never offers a project's whole archive.
+ * repeated.
  */
-function findThread(
-  shell: ShellState,
-  reference: string,
-  threads: Thread[],
-  { skipBareProject = false } = {},
-): ThreadMatch {
+function findThread(shell: ShellState, reference: string, threads: Thread[]): ThreadMatch {
   const projectOf = (thread: Thread) => shell.projects.get(thread.projectId)?.title ?? "";
   const byTitle = findByName(reference, threads, (thread) => thread.title);
-  const byProject = () =>
-    findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`);
-  let match = byTitle.kind === "none" ? byProject() : byTitle;
-  const bareProject = () => findByName(reference, threads, projectOf).kind !== "none";
-  if (byTitle.kind === "none" && skipBareProject && match.kind === "ambiguous" && bareProject()) {
-    match = { kind: "none" };
-  }
+  const match =
+    byTitle.kind === "none"
+      ? findByName(reference, threads, (thread) => `${thread.title} ${projectOf(thread)}`)
+      : byTitle;
   if (match.kind === "none") return { kind: "none" };
   if (match.kind === "found") return { kind: "found", thread: match.item };
   const choices = match.items.map((thread) => {
@@ -621,6 +613,13 @@ function findThread(
     return shared ? `${thread.title} sur ${projectOf(thread)}` : thread.title;
   });
   return { kind: "ambiguous", result: { status: "ambiguous_task", choices } };
+}
+
+/** True when every word of `reference` is in a project's title: "Joombo", "sur Joombo". */
+function namesAProject(shell: ShellState, reference: string): boolean {
+  return (
+    findByName(reference, [...shell.projects.values()], (project) => project.title).kind !== "none"
+  );
 }
 
 type WorkspaceChoice =

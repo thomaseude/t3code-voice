@@ -209,7 +209,7 @@ describe("get_recent_messages", () => {
       "    npm test\n\nC'est tout.",
       "Voir C:\\Users\\Thomas\\joombo\\src\\main.ts et D:\\logs\\run.log.",
       "1. Lance :\n\n        npm install --save secret\n\nFini.",
-      "1. Installe :\n\n    ```bash\n    npm ci\n    ```\n\n    Puis vérifie.",
+      "1. Installe :\n\n    ```bash\n    npm ci\n    ```\n\n    Puis vérifie.\n\n```\nnpm test\n```\n\n    rm -rf build",
       "Ouvre C:/Users/me/src/main.ts, src\\core\\main.ts et C:\\\\Users\\\\me\\\\app.ts.",
     ];
     backend.messages.set(
@@ -237,7 +237,7 @@ describe("get_recent_messages", () => {
         "(bloc de code) C'est tout.",
         "Voir main.ts et run.log.",
         "Lance : (bloc de code) Fini.",
-        "Installe : (bloc de code) Puis vérifie.",
+        "Installe : (bloc de code) Puis vérifie. (bloc de code) (bloc de code)",
         "Ouvre main.ts, main.ts et app.ts.",
       ],
     );
@@ -306,6 +306,18 @@ describe("get_recent_messages", () => {
     };
 
     assert.equal(result.task, "Refonte page offre");
+  });
+
+  test("a bare project name never finds an archived thread, even a single one", async () => {
+    const { call, state } = await setup({
+      threads: [RUNNING, thread("t2", { title: "Fix tests", projectId: "p2", archived: true })],
+    });
+    state.apply({ type: "project.updated", sequence: 2, project: project("p2", "Totem") });
+
+    assert.deepEqual(await call("summarize_thread", { task: "Totem" }), {
+      error: "unknown_task",
+      followed: ["tests Reviews"],
+    });
   });
 
   test("a bare project name never lists the project's whole archive", async () => {
