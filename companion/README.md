@@ -120,12 +120,16 @@ A risky action needs a spoken "oui", checked by the companion, not by the voice 
 2. The model reads `read_back` and asks the question.
 3. The model calls the same tool again with `confirmation`. What runs is the action that
    was read back, whatever else the second call says.
-4. The action runs only if the user's words since the assistant started reading the
-   question (the engine's transcript, kept in memory only) hold a yes word ("oui", "ouais",
-   "vas-y", "d'accord", "ok", "confirme"…) and no word of doubt ("non", "pas", "mais",
-   "attends"…). The answer is judged once the user paused 1 s, so "oui… mais attends" is
-   heard whole. When the user said nothing yet, the companion waits 1.5 s for a late
-   transcript.
+4. The action runs only if the user's answer (the engine's transcript, kept in memory
+   only) holds a yes word ("oui", "ouais", "vas-y", "d'accord", "ok", "confirme"…) and no
+   word of doubt ("non", "pas", "mais", "attends"…). The answer is what the user says in
+   turns that start after the assistant started reading the question: words less than 1 s
+   apart are one turn, so the late transcript of the request never counts. It is judged
+   once the user was quiet 1 s, so "oui… mais attends" is heard whole. When the user said
+   nothing yet, the companion waits 1.5 s for a late transcript. An answer still going at
+   the end of the 60 s window, or cut by the end of the session, runs nothing.
+5. While a question waits for its answer (until the answer, or 60 s), announcements wait
+   too: a "oui" only ever answers the question the user heard.
 
 The answers when nothing runs:
 

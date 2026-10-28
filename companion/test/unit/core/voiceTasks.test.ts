@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { ANSWER_PAUSE_MS, TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmations.ts";
+import { ANSWER_QUIET_MS, TRANSCRIPT_WAIT_MS } from "../../../src/core/confirmations.ts";
 import { ShellState } from "../../../src/core/shellState.ts";
 import { VoiceSessionManager } from "../../../src/core/voiceSessions.ts";
 import { VoiceTasks } from "../../../src/core/voiceTasks.ts";
@@ -106,7 +106,7 @@ async function setup({
     await settle();
     clock.advance(TRANSCRIPT_WAIT_MS);
     await settle();
-    clock.advance(ANSWER_PAUSE_MS);
+    clock.advance(ANSWER_QUIET_MS);
     await settle();
     return engine.last.toolResults.find((result) => result.callId === callId)?.result;
   }
@@ -969,7 +969,7 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     await settle();
     clock.advance(500);
     await say("oui");
-    clock.advance(ANSWER_PAUSE_MS);
+    clock.advance(ANSWER_QUIET_MS);
     await settle();
 
     const result = engine.last.toolResults.find((each) => each.callId === "late")?.result;
@@ -991,9 +991,9 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
       arguments: { task: "tests reviews", confirmation: question.confirmation },
     });
     await settle();
-    clock.advance(ANSWER_PAUSE_MS - 200);
+    clock.advance(ANSWER_QUIET_MS - 200);
     await say(" mais attends");
-    clock.advance(ANSWER_PAUSE_MS);
+    clock.advance(ANSWER_QUIET_MS);
     await settle();
 
     const result = engine.last.toolResults.find((each) => each.callId === "early")?.result;
@@ -1003,6 +1003,8 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
 
   test("a yes word in the request, transcribed after the question, is not the answer", async () => {
     const { backend, engine, clock, say } = await withRunningTask();
+    await say("Interromps tests reviews");
+    clock.advance(300);
     engine.last.emit({
       type: "tool_call",
       callId: "ask",
@@ -1013,8 +1015,9 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     const question = engine.last.toolResults.find((each) => each.callId === "ask")?.result as {
       confirmation: string;
     };
-    await say("OK, interromps tests reviews");
     engine.last.emit({ type: "speech", speaker: "assistant" });
+    clock.advance(200);
+    await say(", OK ?");
 
     engine.last.emit({
       type: "tool_call",
@@ -1028,6 +1031,52 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
 
     const result = engine.last.toolResults.find((each) => each.callId === "confirm")?.result;
     assert.deepEqual(result, { error: "not_confirmed" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an answer still going at the end of the 60 s window is too late", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    clock.advance(59_000);
+    await say("oui");
+    engine.last.emit({
+      type: "tool_call",
+      callId: "long",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    for (let second = 0; second < 5; second++) {
+      clock.advance(500);
+      await say(" et après tu regarderas les logs");
+    }
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
+    const result = engine.last.toolResults.find((each) => each.callId === "long")?.result;
+    assert.deepEqual(result, { error: "confirmation_expired" });
+    assert.deepEqual(backend.commands, []);
+  });
+
+  test("an answer cut by the end of the session runs nothing", async () => {
+    const { backend, engine, clock, call, say } = await withRunningTask();
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    await say("oui");
+    engine.last.emit({
+      type: "tool_call",
+      callId: "cut",
+      name: "interrupt_task",
+      arguments: { task: "tests reviews", confirmation: question.confirmation },
+    });
+    await settle();
+    engine.last.emit({ type: "closed", reason: "closed" });
+    clock.advance(ANSWER_QUIET_MS);
+    await settle();
+
     assert.deepEqual(backend.commands, []);
   });
 

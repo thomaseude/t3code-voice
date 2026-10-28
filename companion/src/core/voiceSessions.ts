@@ -137,13 +137,16 @@ export class VoiceSessionManager implements VoiceSessions {
       );
       return { status: "failed" };
     }
+    const id = randomSecret(16);
     session = {
-      id: randomSecret(16),
+      id,
       deviceId,
       engineSession,
       timeZone,
       openedAt: this.options.clock.now(),
-      confirmations: new Confirmations(this.options.clock),
+      confirmations: new Confirmations(this.options.clock, (open) =>
+        this.options.announcements.questionWaiting(id, open),
+      ),
     };
     this.byDevice.set(deviceId, session);
     this.options.announcements.openSession(session.id, {
@@ -163,6 +166,7 @@ export class VoiceSessionManager implements VoiceSessions {
   private forget(session: ActiveSession) {
     session.cancelEnd?.();
     this.options.announcements.closeSession(session.id);
+    session.confirmations.close();
     if (this.byDevice.get(session.deviceId) === session) this.byDevice.delete(session.deviceId);
   }
 

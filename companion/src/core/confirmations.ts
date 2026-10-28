@@ -7,12 +7,14 @@
 // itself: the model's opinion of the answer does not count, and anything unclear is not a yes.
 //
 // A token works once, for one action, in one voice session, for 60 s. Each session has one
-// question at most: a new question replaces the one before.
+// question at most: a new question replaces the one before. While a question waits for its
+// answer, announcements wait too, so a "oui" only ever answers the question the user heard
+// (decided by Thomas in #21).
 
 import type { Clock } from "../ports/clock.ts";
 import { randomSecret } from "./secrets.ts";
 import { keyOf } from "./spokenNames.ts";
-import type { ToolOutcome } from "./voiceTasks.ts";
+import type { ToolOutcome, ToolResult } from "./voiceTasks.ts";
 
 /** How long the user has to answer a question. */
 export const CONFIRM_WINDOW_MS = 60_000;
@@ -24,10 +26,11 @@ export const CONFIRM_WINDOW_MS = 60_000;
 export const TRANSCRIPT_WAIT_MS = 1_500;
 
 /**
- * The pause that ends an answer: the answer is judged once the user said nothing for this
- * long, so "oui… mais attends" is heard whole (decided by Thomas in #21).
+ * How long the user must be quiet for their words to end: the answer is judged then, so
+ * "oui… mais attends" is heard whole (decided by Thomas in #21). Words closer together
+ * than this are one turn.
  */
-export const ANSWER_PAUSE_MS = 1_000;
+export const ANSWER_QUIET_MS = 1_000;
 
 /** Words that make an answer a yes. */
 const YES_WORDS = new Set([
@@ -68,13 +71,13 @@ const DOUBT_WORDS = new Set([
 export interface ConfirmRequest {
   tool: string;
   /** What the voice model reads to the user before asking. No ids, no secrets. */
-  readBack: Record<string, unknown>;
+  readBack: ToolResult;
   run(): Promise<ToolOutcome>;
 }
 
 export type Confirmed =
   | { kind: "confirmed"; run: () => Promise<ToolOutcome> }
-  | { kind: "refused"; result: Record<string, unknown> };
+  | { kind: "refused"; result: ToolResult };
 
 interface Question {
   token: string;
@@ -82,13 +85,13 @@ interface Question {
   askedAt: number;
   run: () => Promise<ToolOutcome>;
   /**
-   * Whether the assistant started reading the question. The user's words count only from
-   * then on: the transcript of the request itself can arrive after the question.
+   * When the assistant started reading the question. Only a turn of the user that starts
+   * after it is the answer: the transcript of the request itself can come in later.
    */
-  read: boolean;
-  /** What the user said since, as the engine transcribed it. */
+  readAt: number | null;
+  /** What the user said in those turns, as the engine transcribed it. */
   heard: string;
-  lastHeardAt: number | null;
+  lastSpeechAt: number | null;
 }
 
 /** The questions of one voice session. */
@@ -97,29 +100,42 @@ export class Confirmations {
   private question: Question | null = null;
   /** Questions whose token was taken, while they wait for the end of the user's answer. */
   private readonly waiting = new Set<{ question: Question; wake: () => void }>();
+  /** When the user's current turn started, and their last word. */
+  private userTurnStartedAt = Number.NEGATIVE_INFINITY;
+  private lastUserSpeechAt = Number.NEGATIVE_INFINITY;
+  private closed = false;
+  private readonly onOpenChange: (open: boolean) => void;
+  private cancelExpiry = () => {};
 
-  constructor(clock: Clock) {
+  /** `onOpenChange` hears when a question starts and stops waiting for its answer. */
+  constructor(clock: Clock, onOpenChange: (open: boolean) => void) {
     this.clock = clock;
+    this.onOpenChange = onOpenChange;
   }
 
   /** Replaces any earlier question, and answers what the voice model reads to the user. */
-  ask(request: ConfirmRequest): Record<string, unknown> {
+  ask(request: ConfirmRequest): ToolResult {
     const token = randomSecret(16);
     this.question = {
       token,
       tool: request.tool,
       askedAt: this.clock.now(),
       run: request.run,
-      read: false,
+      readAt: null,
       heard: "",
-      lastHeardAt: null,
+      lastSpeechAt: null,
     };
+    this.cancelExpiry();
+    this.cancelExpiry = this.clock.schedule(CONFIRM_WINDOW_MS, () => this.stopWaiting());
+    this.onOpenChange(true);
     return { needs_confirmation: true, read_back: request.readBack, confirmation: token };
   }
 
-  /** The assistant speaks: after a question, the user's next words are the answer. */
+  /** The assistant speaks: after a question, the user's next turn is the answer. */
   assistantSpoke(): void {
-    if (this.question !== null) this.question.read = true;
+    if (this.question !== null && this.question.readAt === null) {
+      this.question.readAt = this.clock.now();
+    }
   }
 
   /**
@@ -127,12 +143,24 @@ export class Confirmations {
    * spaces. Kept in memory, never logged.
    */
   heard(text: string): void {
+    const now = this.clock.now();
+    if (now - this.lastUserSpeechAt >= ANSWER_QUIET_MS) this.userTurnStartedAt = now;
+    this.lastUserSpeechAt = now;
     const questions = [this.question, ...[...this.waiting].map((waiter) => waiter.question)];
     for (const question of questions) {
-      if (question === null || !question.read) continue;
+      if (question === null || question.readAt === null) continue;
+      if (this.userTurnStartedAt < question.readAt) continue;
       question.heard += text;
-      question.lastHeardAt = this.clock.now();
+      question.lastSpeechAt = now;
     }
+    for (const waiter of this.waiting) waiter.wake();
+  }
+
+  /** The session ended: no action runs any more, even one whose answer is coming in. */
+  close(): void {
+    this.closed = true;
+    this.question = null;
+    this.stopWaiting();
     for (const waiter of this.waiting) waiter.wake();
   }
 
@@ -143,24 +171,38 @@ export class Confirmations {
       return { kind: "refused", result: { error: "invalid_confirmation" } };
     }
     this.question = null;
-    if (this.clock.now() - question.askedAt > CONFIRM_WINDOW_MS) {
+    this.stopWaiting();
+    const deadline = question.askedAt + CONFIRM_WINDOW_MS;
+    if (this.clock.now() > deadline || !(await this.answerEnded(question, deadline))) {
       return { kind: "refused", result: { error: "confirmation_expired" } };
     }
-    await this.waitForAnswer(question);
-    if (!isClearYes(question.heard)) {
+    if (this.closed || !isClearYes(question.heard)) {
       return { kind: "refused", result: { error: "not_confirmed" } };
     }
     return { kind: "confirmed", run: question.run };
   }
 
-  /** Waits until the user paused ANSWER_PAUSE_MS, or said nothing for TRANSCRIPT_WAIT_MS. */
-  private async waitForAnswer(question: Question): Promise<void> {
-    if (question.lastHeardAt === null) await this.waitForWords(question, TRANSCRIPT_WAIT_MS);
-    while (question.lastHeardAt !== null) {
-      const quietFor = this.clock.now() - question.lastHeardAt;
-      if (quietFor >= ANSWER_PAUSE_MS) return;
-      await this.waitForWords(question, ANSWER_PAUSE_MS - quietFor);
+  /** No question waits for an answer any more: it was taken, it expired, or the session ended. */
+  private stopWaiting(): void {
+    this.cancelExpiry();
+    this.cancelExpiry = () => {};
+    this.onOpenChange(false);
+  }
+
+  /**
+   * Waits until the user was quiet ANSWER_QUIET_MS, or said nothing for TRANSCRIPT_WAIT_MS.
+   * False when they still talk at the deadline.
+   */
+  private async answerEnded(question: Question, deadline: number): Promise<boolean> {
+    if (question.lastSpeechAt === null) await this.waitForWords(question, TRANSCRIPT_WAIT_MS);
+    while (question.lastSpeechAt !== null && !this.closed) {
+      const now = this.clock.now();
+      const quietFor = now - question.lastSpeechAt;
+      if (quietFor >= ANSWER_QUIET_MS) return true;
+      if (now >= deadline) return false;
+      await this.waitForWords(question, Math.min(ANSWER_QUIET_MS - quietFor, deadline - now));
     }
+    return true;
   }
 
   /** Waits until the user says something, or `ms` at most. */

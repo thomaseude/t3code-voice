@@ -631,6 +631,56 @@ describe("speaking at the next gap", () => {
     assert.deepEqual(session.spoken, ["«tests Reviews» sur Joombo demande une autorisation."]);
   });
 
+  test("an announcement waits while a confirmation question waits for its answer", async () => {
+    const { open, update, wait } = setup();
+    const session = await open();
+    session.emit({
+      type: "tool_call",
+      callId: "ask",
+      name: "interrupt_task",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    const { confirmation } = session.toolResults[0]?.result as { confirmation: string };
+
+    update("t1", { status: "failed" });
+    await wait(10_000);
+    assert.deepEqual(session.spoken, []);
+    session.emit({ type: "speech", speaker: "assistant" });
+    await wait(1_000);
+    session.emit({ type: "speech", speaker: "user", text: "oui" });
+    session.emit({
+      type: "tool_call",
+      callId: "confirm",
+      name: "interrupt_task",
+      arguments: { task: "tests Reviews", confirmation },
+    });
+    await wait(1_000);
+    assert.deepEqual(session.spoken, []);
+    await wait(2_000);
+
+    assert.equal(session.spoken.length, 1);
+  });
+
+  test("an announcement held by a question nobody answers is spoken once it expires", async () => {
+    const { open, update, wait } = setup();
+    const session = await open();
+    session.emit({
+      type: "tool_call",
+      callId: "ask",
+      name: "interrupt_task",
+      arguments: { task: "tests Reviews" },
+    });
+    await settle();
+    update("t1", { status: "failed" });
+
+    await wait(59_999);
+    assert.deepEqual(session.spoken, []);
+    await wait(1);
+
+    assert.equal(session.spoken.length, 1);
+  });
+
   test("announcements queued during speech are spoken together, in order", async () => {
     const { open, update, wait } = setup({
       followed: [
