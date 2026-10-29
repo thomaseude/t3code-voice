@@ -527,10 +527,24 @@ export class VoiceSessionManager implements VoiceSessions {
     args: unknown,
     call: () => Promise<ToolOutcome>,
   ): Promise<unknown> {
-    const token = (args as { confirmation?: unknown } | null)?.confirmation;
-    if (typeof token !== "string") return this.answer(session, tool, await call());
-    const taken = await session.confirmations.take(tool, token);
-    if (taken.kind === "refused") return taken.result;
+    const code = (args as { confirmation?: unknown } | null)?.confirmation;
+    // The model may send the code as a number.
+    if (typeof code !== "string" && typeof code !== "number") {
+      return this.answer(session, tool, await call());
+    }
+    // A code before any question is made up: the model filled the optional field. The call
+    // then runs as a first call, so a risky action still asks its question.
+    if (!session.confirmations.hasAsked()) {
+      this.options.log(
+        `t3-voice: ${tool} confirmation ignored (no question was asked in this session).`,
+      );
+      return this.answer(session, tool, await call());
+    }
+    const taken = await session.confirmations.take(tool, code);
+    if (taken.kind === "refused") {
+      this.options.log(`t3-voice: ${tool} confirmation refused (${taken.why}).`);
+      return taken.result;
+    }
     return this.answer(session, tool, await taken.run());
   }
 

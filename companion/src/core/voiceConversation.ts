@@ -3,11 +3,11 @@
 
 import type { VoiceTool } from "../ports/voiceEngine.ts";
 
-/** The token a tool gave with needs_confirmation, sent back once the user said yes. */
+/** The code a tool gave with needs_confirmation, sent back once the user said yes. */
 const CONFIRMATION_PARAMETER = {
   type: "string",
   description:
-    "Only after a needs_confirmation answer and the user's spoken yes: the token it gave.",
+    "Only after a needs_confirmation answer and the user's spoken yes: the 4-digit code it gave, exactly. Never a code you made up.",
 };
 
 export const VOICE_TOOLS: VoiceTool[] = [

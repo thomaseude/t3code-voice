@@ -1,20 +1,23 @@
 // Confirmations: a risky action runs only after the user said a clear "oui" to it.
 //
-// A tool that needs a yes does not act. It answers a question with a confirmation token,
-// and the voice model reads the question to the user. The action runs only when the model
-// calls the same tool again with that token, and only if the user's own words since the
+// A tool that needs a yes does not act. It answers a question with a 4-digit confirmation
+// code, and the voice model reads the question to the user. The action runs only when the
+// model calls the same tool again with that code, and only if the user's own words since the
 // assistant started reading the question are a clear yes. The companion checks those words
 // itself: the model's opinion of the answer does not count, and anything unclear is not a yes.
 //
-// A token works once, for one action, in one voice session, for 60 s. Each session has one
+// The code is not a secret: the spoken yes is the check. It only ties the second call to the
+// question, and stays short so the voice model copies it without mistakes.
+//
+// A code works once, for one action, in one voice session, for 60 s. Each session has one
 // question at most: a new question replaces the one before. While a question is open,
 // announcements wait, so a "oui" only ever answers the question the user heard (decided by
 // Thomas in #21). A question closes when its answer is judged (after the model sends the
-// token back), when the user's words can no longer make a yes, when its 60 s run out, or
+// code back), when the user's words can no longer make a yes, when its 60 s run out, or
 // when the session ends.
 
+import { randomInt } from "node:crypto";
 import type { Clock } from "../ports/clock.ts";
-import { randomSecret } from "./secrets.ts";
 import { keyOf } from "./spokenNames.ts";
 import type { ToolOutcome, ToolResult } from "./voiceTasks.ts";
 
@@ -77,12 +80,15 @@ export interface ConfirmRequest {
   run(): Promise<ToolOutcome>;
 }
 
+/** Why a code is invalid. Logged, so a refusal can be explained without the transcript. */
+export type InvalidCode = "no_question" | "already_used" | "wrong_code" | "other_tool";
+
 export type Confirmed =
   | { kind: "confirmed"; run: () => Promise<ToolOutcome> }
-  | { kind: "refused"; result: ToolResult };
+  | { kind: "refused"; result: ToolResult; why: string };
 
 interface Question {
-  token: string;
+  code: string;
   tool: string;
   run: () => Promise<ToolOutcome>;
   /**
@@ -94,7 +100,7 @@ interface Question {
   heard: string;
   /** "complete" once the user was quiet ANSWER_QUIET_MS after their last word. */
   answerState: "none" | "speaking" | "complete";
-  /** Whether the model sent the token back: it works once. */
+  /** Whether the model sent the code back: it works once. */
   taken: boolean;
   /** Why the question ended, or null while it is still open. */
   ended: "judged" | "doubted" | "expired" | "replaced" | "session_closed" | null;
@@ -110,24 +116,33 @@ export class Confirmations {
   private readonly clock: Clock;
   /** Told `true` when a question opens, so announcements wait, and `false` when it closes. */
   private readonly onQuestionOpen: (open: boolean) => void;
+  private readonly newCode: () => string;
   private question: Question | null = null;
   /** When the user's current turn started, and their last word. */
   private userTurnStartedAt = Number.NEGATIVE_INFINITY;
   private lastUserSpeechAt = Number.NEGATIVE_INFINITY;
   private sessionClosed = false;
 
-  constructor(clock: Clock, onQuestionOpen: (open: boolean) => void) {
+  /** `newCode` draws a question's code; tests give a fixed one. */
+  constructor(
+    clock: Clock,
+    onQuestionOpen: (open: boolean) => void,
+    newCode: () => string = randomCode,
+  ) {
     this.clock = clock;
     this.onQuestionOpen = onQuestionOpen;
+    this.newCode = newCode;
   }
 
   /** Replaces any earlier question, and answers what the voice model reads to the user. */
   ask(request: ConfirmRequest): ToolResult {
     if (this.sessionClosed) return { error: "session_closed" };
     const before = this.question;
-    const token = randomSecret(16);
+    // Never the code before: the model may still hold it, and it must not answer this question.
+    let code = this.newCode();
+    while (code === before?.code) code = randomCode();
     const question: Question = {
-      token,
+      code,
       tool: request.tool,
       run: request.run,
       readAt: null,
@@ -145,7 +160,12 @@ export class Confirmations {
     this.question = question;
     if (before !== null) this.end(before, "replaced");
     this.onQuestionOpen(true);
-    return { needs_confirmation: true, read_back: request.readBack, confirmation: token };
+    return { needs_confirmation: true, read_back: request.readBack, confirmation: code };
+  }
+
+  /** Whether a question was asked in this session: a code sent before is made up. */
+  hasAsked(): boolean {
+    return this.question !== null;
   }
 
   /** The assistant speaks: after a question, the user's next turn is the answer. */
@@ -182,21 +202,50 @@ export class Confirmations {
     if (this.question !== null) this.end(this.question, "session_closed");
   }
 
-  /** Uses the token up. The action may run only when this answers "confirmed". */
-  async take(tool: string, token: string): Promise<Confirmed> {
-    const question = this.question;
-    if (question === null || question.taken || question.token !== token || question.tool !== tool) {
-      return { kind: "refused", result: { error: "invalid_confirmation" } };
+  /**
+   * Uses the code up. The action may run only when this answers "confirmed". Only the digits
+   * of `sentCode` count: the model may send "4 7 1 2". A number gets back the leading zeros
+   * it lost: 472 is "0472".
+   */
+  async take(tool: string, sentCode: string | number): Promise<Confirmed> {
+    const digits =
+      typeof sentCode === "number"
+        ? String(sentCode).padStart(4, "0")
+        : sentCode.replace(/\D/g, "");
+    const invalid = this.checkCode(tool, digits);
+    if (invalid !== null) {
+      return {
+        kind: "refused",
+        result: { error: "invalid_confirmation" },
+        why: `invalid_confirmation: ${invalid}`,
+      };
     }
+    const question = this.question as Question;
     question.taken = true;
     await this.answerEnded(question);
     const ended = question.ended;
     this.end(question, "judged");
-    if (ended === "expired") return { kind: "refused", result: { error: "confirmation_expired" } };
+    if (ended === "expired") {
+      return {
+        kind: "refused",
+        result: { error: "confirmation_expired" },
+        why: "confirmation_expired",
+      };
+    }
     if (ended !== null || !hasYes(question.heard)) {
-      return { kind: "refused", result: { error: "not_confirmed" } };
+      return { kind: "refused", result: { error: "not_confirmed" }, why: "not_confirmed" };
     }
     return { kind: "confirmed", run: question.run };
+  }
+
+  /** Why `code` cannot answer the open question for `tool`, or null when it can. */
+  private checkCode(tool: string, code: string): InvalidCode | null {
+    const question = this.question;
+    if (question === null) return "no_question";
+    if (question.code !== code) return "wrong_code";
+    if (question.taken) return "already_used";
+    if (question.tool !== tool) return "other_tool";
+    return null;
   }
 
   /**
@@ -242,6 +291,11 @@ export class Confirmations {
     question.wake();
     if (this.question === question) this.onQuestionOpen(false);
   }
+}
+
+/** A random code of 4 digits, "0000" to "9999". */
+function randomCode(): string {
+  return String(randomInt(10_000)).padStart(4, "0");
 }
 
 /** A yes word. An answer with a doubt word never gets here: answerComplete closed it. */

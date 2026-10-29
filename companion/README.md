@@ -134,9 +134,11 @@ A reference that fits several projects or tasks acts on none: the answer lists t
 A risky action needs a spoken "oui", checked by the companion, not by the voice model:
 
 1. The first call does nothing. It answers `{needs_confirmation: true, read_back, confirmation}`.
-   `confirmation` is a token.
+   `confirmation` is a 4-digit code. It is not a secret (the spoken yes is the check): it ties
+   the second call to the question, and is short so the voice model copies it right.
 2. The model reads `read_back` and asks the question.
-3. The model calls the same tool again with `confirmation`. What runs is the action that
+3. The model calls the same tool again with `confirmation`. Only its digits count, so
+   `"4 7 1 2"` and `4712` work too. What runs is the action that
    was read back, whatever else the second call says.
 4. The action runs only if the user's answer (the engine's transcript, kept in memory
    only) holds a yes word ("oui", "ouais", "vas-y", "d'accord", "ok", "confirme"…) and no
@@ -148,18 +150,26 @@ A risky action needs a spoken "oui", checked by the companion, not by the voice 
    the end of the 60 s window, or cut by the end of the session, runs nothing.
 5. While a question is open, announcements wait: a "oui" only ever answers the question
    the user heard. The question closes when its answer is judged (after the model sends
-   the token back), when the user's answer can no longer be a yes ("non", "attends"…),
+   the code back), when the user's answer can no longer be a yes ("non", "attends"…),
    after 60 s, or when the session ends.
 
 The answers when nothing runs:
 
 - `not_confirmed`: the answer was not a clear yes;
 - `confirmation_expired`: the answer came more than 60 s after the question;
-- `invalid_confirmation`: the token is unknown, already used, or from another tool or session;
+- `invalid_confirmation`: the code is unknown, already used, or from another tool or session;
 - `session_closed`: the voice session ended before the question was asked.
 
-A token works once. A voice session has one question at most: a new question replaces the
-one before.
+A code works once. A voice session has one question at most: a new question replaces the
+one before, and never gets its code.
+
+Each refusal writes one log line with its reason, never the code or the transcript, for
+example `t3-voice: start_task confirmation refused (invalid_confirmation: wrong_code).` The
+reasons of `invalid_confirmation`: `wrong_code`, `already_used`, `other_tool`.
+
+A code sent before any question of the session is made up: the voice model filled the
+optional field. The companion logs `confirmation ignored` and runs the call as a first call,
+so a risky action still asks its question.
 
 While a session is open, the companion announces the news of each followed task: a run
 that completed (after 5 s, in case the agent goes on) with a short summary, a run that
