@@ -540,7 +540,7 @@ export class VoiceSessionManager implements VoiceSessions {
       );
       return this.answer(session, tool, await call());
     }
-    const taken = await session.confirmations.take(tool, String(code));
+    const taken = await session.confirmations.take(tool, code);
     if (taken.kind === "refused") {
       this.options.log(`t3-voice: ${tool} confirmation refused (${taken.why}).`);
       return taken.result;

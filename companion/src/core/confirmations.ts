@@ -116,15 +116,22 @@ export class Confirmations {
   private readonly clock: Clock;
   /** Told `true` when a question opens, so announcements wait, and `false` when it closes. */
   private readonly onQuestionOpen: (open: boolean) => void;
+  private readonly newCode: () => string;
   private question: Question | null = null;
   /** When the user's current turn started, and their last word. */
   private userTurnStartedAt = Number.NEGATIVE_INFINITY;
   private lastUserSpeechAt = Number.NEGATIVE_INFINITY;
   private sessionClosed = false;
 
-  constructor(clock: Clock, onQuestionOpen: (open: boolean) => void) {
+  /** `newCode` draws a question's code; tests give a fixed one. */
+  constructor(
+    clock: Clock,
+    onQuestionOpen: (open: boolean) => void,
+    newCode: () => string = randomCode,
+  ) {
     this.clock = clock;
     this.onQuestionOpen = onQuestionOpen;
+    this.newCode = newCode;
   }
 
   /** Replaces any earlier question, and answers what the voice model reads to the user. */
@@ -132,8 +139,8 @@ export class Confirmations {
     if (this.sessionClosed) return { error: "session_closed" };
     const before = this.question;
     // Never the code before: the model may still hold it, and it must not answer this question.
-    let code = newCode();
-    while (code === before?.code) code = newCode();
+    let code = this.newCode();
+    while (code === before?.code) code = randomCode();
     const question: Question = {
       code,
       tool: request.tool,
@@ -197,10 +204,15 @@ export class Confirmations {
 
   /**
    * Uses the code up. The action may run only when this answers "confirmed". Only the digits
-   * of `sentCode` count: the model may send "4 7 1 2".
+   * of `sentCode` count: the model may send "4 7 1 2". A number gets back the leading zeros
+   * it lost: 472 is "0472".
    */
-  async take(tool: string, sentCode: string): Promise<Confirmed> {
-    const invalid = this.checkCode(tool, sentCode.replace(/\D/g, ""));
+  async take(tool: string, sentCode: string | number): Promise<Confirmed> {
+    const digits =
+      typeof sentCode === "number"
+        ? String(sentCode).padStart(4, "0")
+        : sentCode.replace(/\D/g, "");
+    const invalid = this.checkCode(tool, digits);
     if (invalid !== null) {
       return {
         kind: "refused",
@@ -282,7 +294,7 @@ export class Confirmations {
 }
 
 /** A random code of 4 digits, "0000" to "9999". */
-function newCode(): string {
+function randomCode(): string {
   return String(randomInt(10_000)).padStart(4, "0");
 }
 

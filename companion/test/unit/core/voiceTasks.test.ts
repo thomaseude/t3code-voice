@@ -1198,9 +1198,10 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
   });
 
   test("a code sent back with spaces or as a number still confirms", async () => {
+    // Codes with a leading zero sent as a number: see confirmations.test.ts.
     for (const spoken of [
       (code: string) => code.split("").join(" "),
-      (code: string) => Number(code),
+      (code: string) => (code.startsWith("0") ? code : Number(code)),
     ]) {
       const { backend, call, say, confirm } = await withRunningTask();
       const question = (await call("interrupt_task", { task: "tests reviews" })) as {
