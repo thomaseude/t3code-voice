@@ -173,6 +173,15 @@ describe("start_task", () => {
     });
   });
 
+  test("starts the thread when the model sends a confirmation no question asked for", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("start_task", { ...startArgs, confirmation: "oui" });
+
+    assert.equal(backend.commands.length, 1);
+    assert.equal((result as { status?: string }).status, "started");
+  });
+
   test("the started task is followed, under its spoken name", async () => {
     const { registry, call } = await setup();
 
@@ -1154,15 +1163,15 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     assert.deepEqual(backend.commands, []);
   });
 
-  test("a confirmation from another device's session does nothing", async () => {
+  test("a confirmation from another device's session does nothing: that session asks its own question", async () => {
     const { backend, call, say, confirm, sessions } = await withRunningTask();
     const question = await call("interrupt_task", { task: "tests reviews" });
     await sessions.open("d2", { sdpOffer: "v=0", timeZone: null });
     await say("oui");
 
-    assert.deepEqual(await confirm("interrupt_task", question), {
-      error: "invalid_confirmation",
-    });
+    const answer = await confirm("interrupt_task", question, { task: "tests reviews" });
+
+    assert.equal((answer as { needs_confirmation?: boolean }).needs_confirmation, true);
     assert.deepEqual(backend.commands, []);
   });
 
@@ -1205,11 +1214,24 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     }
   });
 
+  test("a confirmation made up before any question is ignored: the call runs as a first call", async () => {
+    const { backend, call, logs } = await withRunningTask();
+
+    const question = await call("interrupt_task", { task: "tests reviews", confirmation: "oui" });
+
+    assert.equal((question as { needs_confirmation?: boolean }).needs_confirmation, true);
+    assert.deepEqual(backend.commands, []);
+    assert.ok(
+      logs.includes(
+        "t3-voice: interrupt_task confirmation ignored (no question was asked in this session).",
+      ),
+    );
+  });
+
   test("each refused confirmation is logged with why, never with the code", async () => {
     const { call, say, confirm, logs } = await withRunningTask();
     const refusals = () => logs.filter((line) => line.includes("confirmation refused"));
 
-    await confirm("interrupt_task", { confirmation: "1234" });
     const question = (await call("interrupt_task", { task: "tests reviews" })) as {
       confirmation: string;
     };
@@ -1221,7 +1243,6 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     await confirm("interrupt_task", question);
 
     assert.deepEqual(refusals(), [
-      "t3-voice: interrupt_task confirmation refused (invalid_confirmation: no_question).",
       "t3-voice: interrupt_task confirmation refused (invalid_confirmation: wrong_code).",
       "t3-voice: start_task confirmation refused (invalid_confirmation: other_tool).",
       "t3-voice: interrupt_task confirmation refused (not_confirmed).",

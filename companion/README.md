@@ -165,8 +165,11 @@ one before, and never gets its code.
 
 Each refusal writes one log line with its reason, never the code or the transcript, for
 example `t3-voice: start_task confirmation refused (invalid_confirmation: wrong_code).` The
-reasons of `invalid_confirmation`: `no_question` (no question was asked in this session),
-`wrong_code`, `already_used`, `other_tool`.
+reasons of `invalid_confirmation`: `wrong_code`, `already_used`, `other_tool`.
+
+A code sent before any question of the session is made up: the voice model filled the
+optional field. The companion logs `confirmation ignored` and runs the call as a first call,
+so a risky action still asks its question.
 
 While a session is open, the companion announces the news of each followed task: a run
 that completed (after 5 s, in case the agent goes on) with a short summary, a run that

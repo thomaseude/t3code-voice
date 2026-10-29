@@ -532,6 +532,14 @@ export class VoiceSessionManager implements VoiceSessions {
     if (typeof code !== "string" && typeof code !== "number") {
       return this.answer(session, tool, await call());
     }
+    // A code before any question is made up: the model filled the optional field. The call
+    // then runs as a first call, so a risky action still asks its question.
+    if (!session.confirmations.hasAsked()) {
+      this.options.log(
+        `t3-voice: ${tool} confirmation ignored (no question was asked in this session).`,
+      );
+      return this.answer(session, tool, await call());
+    }
     const taken = await session.confirmations.take(tool, String(code));
     if (taken.kind === "refused") {
       this.options.log(`t3-voice: ${tool} confirmation refused (${taken.why}).`);

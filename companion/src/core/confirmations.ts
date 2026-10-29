@@ -156,6 +156,11 @@ export class Confirmations {
     return { needs_confirmation: true, read_back: request.readBack, confirmation: code };
   }
 
+  /** Whether a question was asked in this session: a code sent before is made up. */
+  hasAsked(): boolean {
+    return this.question !== null;
+  }
+
   /** The assistant speaks: after a question, the user's next turn is the answer. */
   assistantSpoke(): void {
     const question = this.question;
