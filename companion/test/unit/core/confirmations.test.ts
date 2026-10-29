@@ -41,6 +41,10 @@ describe("Confirmations", () => {
     assert.deepEqual(opened, [true, false]);
     assert.equal(clock.pendingTimers(), 0);
     const taken = await confirmations.take("interrupt_task", asked.confirmation as string);
-    assert.deepEqual(taken, { kind: "refused", result: { error: "not_confirmed" } });
+    assert.deepEqual(taken, {
+      kind: "refused",
+      result: { error: "not_confirmed" },
+      why: "not_confirmed",
+    });
   });
 });

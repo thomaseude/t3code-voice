@@ -1181,6 +1181,55 @@ describe("interrupt_task: only after the task is named and a clear « oui »", (
     assert.deepEqual(backend.commands, []);
   });
 
+  test("the confirmation is a 4-digit code, short enough for the voice model to copy", async () => {
+    const { call } = await withRunningTask();
+    const question = await call("interrupt_task", { task: "tests reviews" });
+
+    assert.match((question as { confirmation: string }).confirmation, /^\d{4}$/);
+  });
+
+  test("a code sent back with spaces or as a number still confirms", async () => {
+    for (const spoken of [
+      (code: string) => code.split("").join(" "),
+      (code: string) => Number(code),
+    ]) {
+      const { backend, call, say, confirm } = await withRunningTask();
+      const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+        confirmation: string;
+      };
+      await say("oui");
+
+      await confirm("interrupt_task", { confirmation: spoken(question.confirmation) });
+
+      assert.equal(backend.commands.length, 1);
+    }
+  });
+
+  test("each refused confirmation is logged with why, never with the code", async () => {
+    const { call, say, confirm, logs } = await withRunningTask();
+    const refusals = () => logs.filter((line) => line.includes("confirmation refused"));
+
+    await confirm("interrupt_task", { confirmation: "1234" });
+    const question = (await call("interrupt_task", { task: "tests reviews" })) as {
+      confirmation: string;
+    };
+    const wrong = question.confirmation === "0000" ? "0001" : "0000";
+    await confirm("interrupt_task", { confirmation: wrong });
+    await confirm("start_task", question, startArgs);
+    await say("hmm");
+    await confirm("interrupt_task", question);
+    await confirm("interrupt_task", question);
+
+    assert.deepEqual(refusals(), [
+      "t3-voice: interrupt_task confirmation refused (invalid_confirmation: no_question).",
+      "t3-voice: interrupt_task confirmation refused (invalid_confirmation: wrong_code).",
+      "t3-voice: start_task confirmation refused (invalid_confirmation: other_tool).",
+      "t3-voice: interrupt_task confirmation refused (not_confirmed).",
+      "t3-voice: interrupt_task confirmation refused (invalid_confirmation: already_used).",
+    ]);
+    assert.ok(logs.every((line) => !line.includes(question.confirmation)));
+  });
+
   test("a thread nobody follows is found by its title", async () => {
     const { backend, call, say, confirm } = await setup({
       threads: [thread("t9", { status: "running", title: "Fix flaky Reviews specs" })],
