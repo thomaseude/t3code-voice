@@ -146,6 +146,47 @@ describe("opening a Codex voice session", () => {
   });
 });
 
+describe("when Codex fails while a session opens", () => {
+  test("a refused realtime start fails the open, and the companion keeps running", async () => {
+    const { rpc, events, open } = setup();
+    rpc.realtimeStartError = new Error("realtime call refused");
+    await assert.rejects(open(), VoiceEngineError);
+    await settle();
+    assert.equal(rpc.closed, true);
+    assert.deepEqual(events, []);
+  });
+
+  test("an app-server that exits during the realtime start fails the open", async () => {
+    const { rpc, open } = setup();
+    rpc.answersOffer = false;
+    const opening = open();
+    await settle();
+    rpc.exit();
+    await assert.rejects(opening, VoiceEngineError);
+    await settle();
+  });
+
+  test("fails within 15 s when Codex does not answer the thread start, and stops it", async () => {
+    const { rpc, clock, open } = setup();
+    rpc.answersThread = false;
+    const opening = open();
+    await settle();
+    clock.advance(15_000);
+    await assert.rejects(opening, VoiceEngineError);
+    assert.equal(rpc.closed, true);
+  });
+
+  test("fails within 15 s when Codex does not answer the realtime start, and stops it", async () => {
+    const { rpc, clock, open } = setup();
+    const opening = open();
+    rpc.answersThread = false;
+    await settle();
+    clock.advance(15_000);
+    await assert.rejects(opening, VoiceEngineError);
+    assert.equal(rpc.closed, true);
+  });
+});
+
 describe("during a Codex voice session", () => {
   test("hands a tool call of the Codex thread to the core and sends its result back", async () => {
     const { rpc, events, open } = setup();
@@ -229,6 +270,18 @@ describe("ending a Codex voice session", () => {
     await session.close();
     await session.close();
     assert.deepEqual(rpc.sent("thread/realtime/stop"), [{ threadId: THREAD }]);
+    assert.equal(rpc.closed, true);
+    assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
+  });
+
+  test("close() ends within 10 s when Codex does not answer the realtime stop", async () => {
+    const { rpc, clock, events, open } = setup();
+    const session = await open();
+    rpc.answersStop = false;
+    const closing = session.close();
+    await settle();
+    clock.advance(10_000);
+    await closing;
     assert.equal(rpc.closed, true);
     assert.deepEqual(events, [{ type: "closed", reason: "closed" }]);
   });

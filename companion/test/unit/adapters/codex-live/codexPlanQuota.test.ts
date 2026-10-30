@@ -47,6 +47,12 @@ describe("reading the plan's quota from Codex", () => {
     assert.equal((await quota.read()).limitReached, true);
   });
 
+  test("says a limit is reached when Codex does not know whether usage is allowed", async () => {
+    const { rpc, quota } = setup();
+    rpc.limits = rateLimits({ ordinaryUsageAllowed: null });
+    assert.equal((await quota.read()).limitReached, true);
+  });
+
   test("a window Codex does not report is left out", async () => {
     const { rpc, quota } = setup();
     const limits = rateLimits({ fiveHourUsed: 10 });

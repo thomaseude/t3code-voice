@@ -29,8 +29,8 @@ export interface CodexAppServerOptions {
   acceptedVersions: string[];
 }
 
-/** A started app-server answers `initialize` within this time, or is not used. */
-const START_TIMEOUT_MS = 10_000;
+/** Codex answers a request within this time, or the app-server is not used. */
+export const ANSWER_TIMEOUT_MS = 10_000;
 
 /**
  * Starts an app-server and initializes it. Throws, with the app-server stopped, when it
@@ -41,6 +41,7 @@ export async function startPinnedCodex(options: CodexAppServerOptions): Promise<
   try {
     const initialized = await withTimeout(
       options.clock,
+      ANSWER_TIMEOUT_MS,
       rpc.request("initialize", {
         clientInfo: { name: "t3-voice", title: null, version: "0.1.0" },
         capabilities: { experimentalApi: true, requestAttestation: false },
@@ -58,11 +59,16 @@ export async function startPinnedCodex(options: CodexAppServerOptions): Promise<
   }
 }
 
-/** Rejects with `message` when `promise` takes longer than START_TIMEOUT_MS. */
-export async function withTimeout<T>(clock: Clock, promise: Promise<T>, message: string) {
+/** Rejects with `message` when `promise` takes longer than `timeoutMs`. */
+export async function withTimeout<T>(
+  clock: Clock,
+  timeoutMs: number,
+  promise: Promise<T>,
+  message: string,
+) {
   let cancel = () => {};
   const timeout = new Promise<never>((_resolve, reject) => {
-    cancel = clock.schedule(START_TIMEOUT_MS, () => reject(new Error(message)));
+    cancel = clock.schedule(timeoutMs, () => reject(new Error(message)));
   });
   try {
     return await Promise.race([promise, timeout]);

@@ -54,7 +54,7 @@ export interface VoiceEngine {
   /** The model sessions run on, for the usage records. */
   readonly model: string;
   readonly billing: VoiceBilling;
-  /** What one minute of open session costs, in US dollars, silence included. Unused on a plan. */
+  /** What one minute of open session costs, in US dollars, silence included. 0 on a plan. */
   readonly usdPerMinute: number;
   /** Throws VoiceEngineError when the engine refuses or cannot be reached. */
   openSession(

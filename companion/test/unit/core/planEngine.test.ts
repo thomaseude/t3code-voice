@@ -40,8 +40,7 @@ function setup({
   const planEngine = new FakeVoiceEngine({
     model: "gpt-live-1-codex",
     billing: "plan_quota",
-    // A price the core must ignore: no money leaves on a plan.
-    usdPerMinute: 0.05,
+    usdPerMinute: 0,
   });
   const planQuota = new FakePlanQuota();
   planQuota.reading = reading;
@@ -108,8 +107,8 @@ describe("picking the engine when a session opens", () => {
     assert.equal(planEngine.sessions.length, 0);
   });
 
-  test("opens on the API engine when the plan reports neither limit", async () => {
-    const { apiEngine, planEngine, open } = setup({ reading: quota(null, null) });
+  test("opens on the API engine when the plan reports only one of its two limits", async () => {
+    const { apiEngine, planEngine, open } = setup({ reading: quota(80, null) });
     await open();
     assert.equal(apiEngine.sessions.length, 1);
     assert.equal(planEngine.sessions.length, 0);

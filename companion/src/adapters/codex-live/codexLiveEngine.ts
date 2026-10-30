@@ -16,10 +16,12 @@ import {
   type VoiceSessionRequest,
 } from "../../ports/voiceEngine.ts";
 import {
+  ANSWER_TIMEOUT_MS,
   type CodexAppServerOptions,
   type CodexRpc,
   startPinnedCodex,
   type WireJson,
+  withTimeout,
 } from "./codexRpc.ts";
 
 export interface CodexLiveEngineOptions extends CodexAppServerOptions {
@@ -57,24 +59,29 @@ export class CodexLiveEngine implements VoiceEngine {
       throw new VoiceEngineError(`Codex cannot be used: ${message}.`);
     }
     try {
-      const started = await rpc.request("thread/start", {
-        ephemeral: true,
-        sandbox: "read-only",
-        approvalPolicy: "never",
-        model: this.options.threadModel,
-        config: {
-          features: { shell_tool: false },
-          // Codex starts the delegated turns itself: the effort is set on the thread.
-          model_reasoning_effort: this.options.threadReasoningEffort,
-        },
-        developerInstructions: request.instructions,
-        dynamicTools: request.tools.map((tool) => ({
-          type: "function",
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.parameters,
-        })),
-      });
+      const started = await withTimeout(
+        this.options.clock,
+        ANSWER_TIMEOUT_MS,
+        rpc.request("thread/start", {
+          ephemeral: true,
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          model: this.options.threadModel,
+          config: {
+            features: { shell_tool: false },
+            // Codex starts the delegated turns itself: the effort is set on the thread.
+            model_reasoning_effort: this.options.threadReasoningEffort,
+          },
+          developerInstructions: request.instructions,
+          dynamicTools: request.tools.map((tool) => ({
+            type: "function",
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.parameters,
+          })),
+        }),
+        "codex did not start the thread in time",
+      );
       const threadId = started?.thread?.id;
       if (typeof threadId !== "string") throw new Error("no thread id");
       const session = new CodexLiveSession({ ...this.options, rpc, threadId, onEvent });
@@ -82,8 +89,8 @@ export class CodexLiveEngine implements VoiceEngine {
       return session;
     } catch (error) {
       rpc.close();
-      if (error instanceof VoiceEngineError) throw error;
-      throw new VoiceEngineError("Codex refused the voice session.");
+      const message = error instanceof Error ? error.message : String(error);
+      throw new VoiceEngineError(`Codex refused the voice session: ${message}.`);
     }
   }
 }
@@ -123,25 +130,25 @@ class CodexLiveSession implements VoiceSession {
       this.resolveSdp = resolve;
       this.rejectSdp = reject;
     });
-    const cancelTimeout = this.options.clock.schedule(SDP_ANSWER_TIMEOUT_MS, () =>
-      this.rejectSdp(new VoiceEngineError("Codex did not answer the voice offer in time.")),
+    const realtime = this.rpc.request("thread/realtime/start", {
+      threadId: this.threadId,
+      outputModality: "audio",
+      transport: { type: "webrtc", sdp: request.sdpOffer },
+      version: "v3",
+      clientManagedHandoffs: true,
+      includeStartupContext: false,
+      // Replaces Codex's own voice prompt (a coding companion) with ours.
+      prompt: request.instructions,
+    });
+    // Waiting on both at once: a failure of either one is always handled.
+    const [, answer] = await withTimeout(
+      this.options.clock,
+      SDP_ANSWER_TIMEOUT_MS,
+      Promise.all([realtime, sdp]),
+      "codex did not answer the voice offer in time",
     );
-    try {
-      await this.rpc.request("thread/realtime/start", {
-        threadId: this.threadId,
-        outputModality: "audio",
-        transport: { type: "webrtc", sdp: request.sdpOffer },
-        version: "v3",
-        clientManagedHandoffs: true,
-        includeStartupContext: false,
-        // Replaces Codex's own voice prompt (a coding companion) with ours.
-        prompt: request.instructions,
-      });
-      this.sdpAnswer = await sdp;
-      this.opened = true;
-    } finally {
-      cancelTimeout();
-    }
+    this.sdpAnswer = answer;
+    this.opened = true;
   }
 
   speak(text: string): void {
@@ -160,14 +167,19 @@ class CodexLiveSession implements VoiceSession {
 
   async close(): Promise<void> {
     if (this.ended) return;
-    await this.rpc.request("thread/realtime/stop", { threadId: this.threadId }).catch(() => {});
+    await withTimeout(
+      this.options.clock,
+      ANSWER_TIMEOUT_MS,
+      this.rpc.request("thread/realtime/stop", { threadId: this.threadId }),
+      "codex did not stop the session in time",
+    ).catch(() => {});
     this.end("closed");
   }
 
   private end(reason: "closed" | "failed") {
     if (this.ended) return;
     this.ended = true;
-    this.rejectSdp(new VoiceEngineError("The Codex app-server stopped."));
+    this.rejectSdp(new Error("the codex app-server stopped"));
     this.rpc.close();
     if (this.opened) this.options.onEvent({ type: "closed", reason });
   }

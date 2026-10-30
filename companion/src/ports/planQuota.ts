@@ -8,7 +8,7 @@ export interface PlanQuotaReading {
   fiveHourPercentLeft: number | null;
   /** Left in the weekly window, or null when the plan reports no such window. */
   weekPercentLeft: number | null;
-  /** The plan says a limit is reached: no session may draw from it now. */
+  /** A limit is reached, or the plan does not say usage is allowed: no session may draw from it. */
   limitReached: boolean;
 }
 

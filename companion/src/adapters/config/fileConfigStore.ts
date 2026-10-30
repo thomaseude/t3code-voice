@@ -11,7 +11,6 @@ import {
   type CompanionConfig,
   ConfigError,
   type ConfigStore,
-  DEFAULT_MIN_PLAN_QUOTA_PERCENT,
   DEFAULT_SESSION_LIMITS,
   DEFAULT_VOICE,
   type PairingWindow,
@@ -123,7 +122,7 @@ export class FileConfigStore implements ConfigStore {
       !(Number.isFinite(minQuota) && minQuota >= 0 && minQuota <= 100)
     ) {
       throw new ConfigError(
-        `${path}: "voice.minPlanQuotaPercent" must be a percent, 0 to 100, e.g. ${DEFAULT_MIN_PLAN_QUOTA_PERCENT}.`,
+        `${path}: "voice.minPlanQuotaPercent" must be a percent, 0 to 100, e.g. ${DEFAULT_VOICE.minPlanQuotaPercent}.`,
       );
     }
     const codexVersions = data.voice?.acceptedCodexVersions;

@@ -659,15 +659,14 @@ function messageOf(error: unknown): string {
 
 function usageOf(session: ActiveSession, now: number): UsageRecord {
   const minutes = (now - session.openedAt) / MINUTE_MS;
-  const billing = session.engine.billing;
   return {
     sessionId: session.id,
     engine: session.engine.model,
-    billing,
+    billing: session.engine.billing,
     day: session.day,
     startedAt: new Date(session.openedAt).toISOString(),
     minutes,
-    estimatedCostUsd: billing === "usd" ? roundUsd(minutes * session.engine.usdPerMinute) : 0,
+    estimatedCostUsd: roundUsd(minutes * session.engine.usdPerMinute),
   };
 }
 

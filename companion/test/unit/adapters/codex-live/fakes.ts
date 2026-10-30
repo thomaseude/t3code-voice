@@ -40,6 +40,12 @@ export class FakeCodexRpc implements CodexRpc {
   answersInitialize = true;
   /** Whether `thread/realtime/start` is followed by Codex's SDP answer. */
   answersOffer = true;
+  /** While set, `thread/realtime/start` fails with this error, like a refused offer. */
+  realtimeStartError: Error | null = null;
+  /** While false, `thread/start` and `thread/realtime/start` never answer, like a stuck Codex. */
+  answersThread = true;
+  /** While false, `thread/realtime/stop` never answers. */
+  answersStop = true;
   /** What `account/rateLimits/read` answers, or an Error it fails with. */
   limits: WireJson | Error = rateLimits();
   closed = false;
@@ -64,8 +70,14 @@ export class FakeCodexRpc implements CodexRpc {
         if (this.limits instanceof Error) throw this.limits;
         return this.limits;
       case "thread/start":
+        if (!this.answersThread) return new Promise(() => {});
         return { thread: { id: THREAD } };
+      case "thread/realtime/stop":
+        if (!this.answersStop) return new Promise(() => {});
+        return {};
       case "thread/realtime/start":
+        if (!this.answersThread) return new Promise(() => {});
+        if (this.realtimeStartError !== null) throw this.realtimeStartError;
         if (this.answersOffer) {
           setImmediate(() =>
             this.notifyClient("thread/realtime/sdp", { threadId: THREAD, sdp: "v=0 answer" }),
@@ -92,8 +104,11 @@ export class FakeCodexRpc implements CodexRpc {
   onExit(listener: () => void) {
     this.exitListeners.push(listener);
   }
+  /** Like the real child: a killed app-server exits, once. */
   close() {
+    if (this.closed) return;
     this.closed = true;
+    this.exit();
   }
 
   /** Sends a notification to the adapter, as Codex would. */

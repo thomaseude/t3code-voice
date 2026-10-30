@@ -3,6 +3,7 @@
 
 import { type PlanQuota, PlanQuotaError, type PlanQuotaReading } from "../../ports/planQuota.ts";
 import {
+  ANSWER_TIMEOUT_MS,
   type CodexAppServerOptions,
   type CodexRpc,
   startPinnedCodex,
@@ -23,6 +24,7 @@ export class CodexPlanQuota implements PlanQuota {
       rpc = await startPinnedCodex(this.options);
       const limits = await withTimeout(
         this.options.clock,
+        ANSWER_TIMEOUT_MS,
         rpc.request("account/rateLimits/read", { excludeResetCreditDetails: true }),
         "codex did not return the quota in time",
       );
@@ -44,8 +46,9 @@ function readingOf(limits: WireJson): PlanQuotaReading {
     // Codex sends the 5-hour window as `primary` and the week as `secondary`.
     fiveHourPercentLeft: percentLeft(snapshot?.primary),
     weekPercentLeft: percentLeft(snapshot?.secondary),
+    // Codex says null means "unknown": only an explicit true lets voice draw from the plan.
     limitReached:
-      limits?.ordinaryUsageAllowed === false || (reachedType !== null && reachedType !== undefined),
+      limits?.ordinaryUsageAllowed !== true || (reachedType !== null && reachedType !== undefined),
   };
 }
 

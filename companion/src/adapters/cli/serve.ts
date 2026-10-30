@@ -14,7 +14,6 @@ import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.t
 import type { Clock } from "../../ports/clock.ts";
 import {
   type ConfigStore,
-  DEFAULT_MIN_PLAN_QUOTA_PERCENT,
   DEFAULT_SERVER_HOST,
   DEFAULT_SERVER_PORT,
   DEFAULT_SESSION_LIMITS,
@@ -120,7 +119,7 @@ export async function runServe({
     summaryModel,
     codexModel,
     codexReasoningEffort,
-    minPlanQuotaPercent = DEFAULT_MIN_PLAN_QUOTA_PERCENT,
+    minPlanQuotaPercent,
     acceptedCodexVersions,
   } = { ...DEFAULT_VOICE, ...config.voice };
   const { idleMinutes, idleMinutesWhileTasksRun, dailyBudgetUsd } = {

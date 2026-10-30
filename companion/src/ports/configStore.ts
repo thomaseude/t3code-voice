@@ -19,10 +19,9 @@ export const DEFAULT_VOICE = {
   // The Codex thread of the plan engine (#56): 4 to 8 s per tool action in the spike.
   codexModel: "gpt-6.1-terra",
   codexReasoningEffort: "low",
+  /** Below this share of the plan's quota left, sessions open on the API engine. */
+  minPlanQuotaPercent: 20,
 };
-
-/** Below this share of the plan's quota left, sessions open on the API engine (#56). */
-export const DEFAULT_MIN_PLAN_QUOTA_PERCENT = 20;
 
 /** When a voice session stops by itself, and what voice may cost per day. */
 export interface SessionLimits {
@@ -57,8 +56,8 @@ export interface CompanionConfig {
     publicUrl?: string;
   };
   /**
-   * Voice engine, summary and session settings; each one missing takes its DEFAULT_VOICE,
-   * DEFAULT_SESSION_LIMITS or DEFAULT_MIN_PLAN_QUOTA_PERCENT value.
+   * Voice engine, summary and session settings; each one missing takes its DEFAULT_VOICE or
+   * DEFAULT_SESSION_LIMITS value.
    */
   voice?: {
     model?: string;
