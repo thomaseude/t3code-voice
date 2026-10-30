@@ -234,6 +234,21 @@ describe("during a Codex voice session", () => {
     ]);
   });
 
+  test("speaks a long final answer whole (decided by Thomas in #56)", async () => {
+    const { rpc, open } = setup();
+    await open();
+    const long = "Le fil a corrigé les tests des Reviews. ".repeat(40);
+    rpc.notifyClient("item/completed", {
+      threadId: THREAD,
+      turnId: "turn_1",
+      item: { type: "agentMessage", id: "a1", text: long, phase: "final_answer" },
+    });
+    rpc.notifyClient("turn/completed", { threadId: THREAD, turn: { id: "turn_1" } });
+    assert.deepEqual(rpc.sent("thread/realtime/appendSpeech"), [
+      { threadId: THREAD, text: long.trim() },
+    ]);
+  });
+
   test("reports who speaks from the transcript", async () => {
     const { rpc, events, open } = setup();
     await open();

@@ -33,8 +33,6 @@ export interface CodexLiveEngineOptions extends CodexAppServerOptions {
 
 /** OpenAI may take this long to answer the offer (spec #15, `POST /sessions`). */
 const SDP_ANSWER_TIMEOUT_MS = 15_000;
-/** Longer answers are not spoken: the voice model would read a wall of text. */
-const MAX_SPOKEN_CHARS = 1_200;
 
 export class CodexLiveEngine implements VoiceEngine {
   readonly model = "gpt-live-1-codex";
@@ -244,6 +242,7 @@ function speakableAnswer(item: WireJson): string | undefined {
   if (item?.type !== "agentMessage" || typeof item.text !== "string") return undefined;
   if (item.phase === "commentary") return undefined;
   const text = item.text.trim();
-  if (text === "" || text.length > MAX_SPOKEN_CHARS) return undefined;
+  // A long answer is spoken whole too (decided by Thomas in #56).
+  if (text === "") return undefined;
   return text;
 }
