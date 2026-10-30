@@ -6,6 +6,11 @@ import { VoiceTasks } from "../../src/core/voiceTasks.ts";
 import type { Clock } from "../../src/ports/clock.ts";
 import type { CompanionConfig, ConfigStore, PairingWindow } from "../../src/ports/configStore.ts";
 import type { Device, DeviceAuth, PairedDevice } from "../../src/ports/deviceAuth.ts";
+import {
+  type PlanQuota,
+  PlanQuotaError,
+  type PlanQuotaReading,
+} from "../../src/ports/planQuota.ts";
 import type { PushNotification, PushSender } from "../../src/ports/pushSender.ts";
 import type {
   ConversationSummaryRequest,
@@ -33,6 +38,7 @@ import {
 } from "../../src/ports/t3Backend.ts";
 import type { FollowedTask, TaskRegistry, UsageRecord } from "../../src/ports/taskRegistry.ts";
 import {
+  type VoiceBilling,
   type VoiceEngine,
   VoiceEngineError,
   type VoiceEvent,
@@ -280,13 +286,20 @@ export interface FakeVoiceSession extends VoiceSession {
 }
 
 export class FakeVoiceEngine implements VoiceEngine {
-  readonly model = "fake-live";
-  readonly usdPerMinute = 0.05;
+  readonly model: string;
+  readonly billing: VoiceBilling;
+  readonly usdPerMinute: number;
   readonly sessions: FakeVoiceSession[] = [];
   /** Makes the next openSession() fail, like an engine that refuses the offer. */
   failNextOpen = false;
   /** While set, openSession() waits for it, like an engine slow to answer. */
   answerGate: Promise<void> | null = null;
+
+  constructor({ model = "fake-live", billing = "usd" as VoiceBilling, usdPerMinute = 0.05 } = {}) {
+    this.model = model;
+    this.billing = billing;
+    this.usdPerMinute = usdPerMinute;
+  }
 
   get last(): FakeVoiceSession {
     const session = this.sessions.at(-1);
@@ -321,6 +334,22 @@ export class FakeVoiceEngine implements VoiceEngine {
     };
     this.sessions.push(session);
     return session;
+  }
+}
+
+/** A plan quota that reads what the test sets, or fails like an unreadable quota. */
+export class FakePlanQuota implements PlanQuota {
+  reading: PlanQuotaReading | "unreadable" = {
+    fiveHourPercentLeft: 80,
+    weekPercentLeft: 90,
+    limitReached: false,
+  };
+  reads = 0;
+
+  async read(): Promise<PlanQuotaReading> {
+    this.reads++;
+    if (this.reading === "unreadable") throw new PlanQuotaError("codex is not installed.");
+    return this.reading;
   }
 }
 

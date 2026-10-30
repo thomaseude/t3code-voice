@@ -87,6 +87,7 @@ function usageRecord(fields: Partial<UsageRecord>): UsageRecord {
   return {
     sessionId: "earlier",
     engine: "fake-live",
+    billing: "usd",
     day: TODAY,
     startedAt: "2026-10-26T08:00:00.000Z",
     minutes: 10,
@@ -357,6 +358,7 @@ describe("usage", () => {
       {
         sessionId,
         engine: "fake-live",
+        billing: "usd",
         day: TODAY,
         startedAt: "2026-10-26T10:00:00.000Z",
         minutes: 2,
