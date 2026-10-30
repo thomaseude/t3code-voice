@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { CodexPlanQuota } from "../../../../src/adapters/codex-live/codexPlanQuota.ts";
-import { CodexRefusal } from "../../../../src/adapters/codex-live/codexRpc.ts";
+import { CodexRpcError } from "../../../../src/adapters/codex-live/codexRpc.ts";
 import { PlanQuotaError } from "../../../../src/ports/planQuota.ts";
 import { FakeClock, settle } from "../../fakePorts.ts";
 import { FakeCodexRpc, rateLimits } from "./fakes.ts";
@@ -77,7 +77,7 @@ describe("reading the plan's quota from Codex", () => {
 
   test("a refused read points the operator to codex login", async () => {
     const { rpc, quota } = setup();
-    rpc.limits = new CodexRefusal(-32600);
+    rpc.limits = new CodexRpcError(-32600);
     await assert.rejects(quota.read(), (error: Error) => {
       assert.match(error.message, /codex answered error -32600/);
       assert.match(error.message, /is `codex login` done for this user\?/);
@@ -100,7 +100,7 @@ describe("reading the plan's quota from Codex", () => {
 
   test("is unreadable when Codex fails to read it, and stops the app-server", async () => {
     const { rpc, quota } = setup();
-    rpc.limits = new Error("not logged in");
+    rpc.limits = new Error("the codex app-server exited");
     await assert.rejects(quota.read(), PlanQuotaError);
     assert.equal(rpc.closed, true);
   });

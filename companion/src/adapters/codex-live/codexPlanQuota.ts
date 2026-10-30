@@ -5,8 +5,8 @@ import { type PlanQuota, PlanQuotaError, type PlanQuotaReading } from "../../por
 import {
   ANSWER_TIMEOUT_MS,
   type CodexAppServerOptions,
-  CodexRefusal,
   type CodexRpc,
+  CodexRpcError,
   startPinnedCodex,
   type WireJson,
   withTimeout,
@@ -33,7 +33,7 @@ export class CodexPlanQuota implements PlanQuota {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Codex starts without a login, then refuses the read with a code only.
-      const hint = error instanceof CodexRefusal ? "; is `codex login` done for this user?" : "";
+      const hint = error instanceof CodexRpcError ? "; is `codex login` done for this user?" : "";
       throw new PlanQuotaError(`Codex cannot read the plan's quota: ${message}${hint}`);
     } finally {
       rpc?.close();

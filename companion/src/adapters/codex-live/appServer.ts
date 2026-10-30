@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { CodexRefusal, type CodexRpc, type WireJson } from "./codexRpc.ts";
+import { type CodexRpc, CodexRpcError, type WireJson } from "./codexRpc.ts";
 
 export function startCodexAppServer(): CodexRpc {
   // The Codex thread runs here: an empty folder, so it sees no project.
@@ -59,7 +59,7 @@ export function startCodexAppServer(): CodexRpc {
     if (message.id !== undefined) {
       const call = pending.get(message.id);
       pending.delete(message.id);
-      if (message.error) call?.reject(new CodexRefusal(message.error.code));
+      if (message.error) call?.reject(new CodexRpcError(message.error.code));
       else call?.resolve(message.result);
       return;
     }
