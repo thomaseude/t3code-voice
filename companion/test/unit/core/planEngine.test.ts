@@ -199,7 +199,7 @@ describe("the daily budget with a plan engine", () => {
   test("a long plan session does not spend the API budget", async () => {
     const { clock, apiEngine, planQuota, sessions, open } = setup();
     const first = await open("d1");
-    // 300 minutes at $0.05 would be $15, over the $10 budget, if they were counted.
+    // On GPT-Live, at $0.05 per minute, 300 minutes would cost $15: over the $10 budget.
     clock.advance(300 * MINUTE);
     await sessions.close("d1", (first as { sessionId: string }).sessionId);
     planQuota.reading = quota(10, 50);

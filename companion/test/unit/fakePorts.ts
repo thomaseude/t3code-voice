@@ -344,10 +344,8 @@ export class FakePlanQuota implements PlanQuota {
     weekPercentLeft: 90,
     limitReached: false,
   };
-  reads = 0;
 
   async read(): Promise<PlanQuotaReading> {
-    this.reads++;
     if (this.reading === "unreadable") throw new PlanQuotaError("codex is not installed.");
     return this.reading;
   }
