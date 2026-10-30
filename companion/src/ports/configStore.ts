@@ -16,7 +16,13 @@ export const DEFAULT_VOICE = {
   voice: "brise",
   delegationModel: "gpt-5.6-terra",
   summaryModel: "gpt-5.4-mini",
+  // The Codex thread of the plan engine (#56): 4 to 8 s per tool action in the spike.
+  codexModel: "gpt-6.1-terra",
+  codexReasoningEffort: "low",
 };
+
+/** Below this share of the plan's quota left, sessions open on the API engine (#56). */
+export const DEFAULT_MIN_PLAN_QUOTA_PERCENT = 20;
 
 /** When a voice session stops by itself, and what voice may cost per day. */
 export interface SessionLimits {
@@ -51,8 +57,8 @@ export interface CompanionConfig {
     publicUrl?: string;
   };
   /**
-   * GPT-Live, summary and session settings; each one missing takes its DEFAULT_VOICE or
-   * DEFAULT_SESSION_LIMITS value.
+   * Voice engine, summary and session settings; each one missing takes its DEFAULT_VOICE,
+   * DEFAULT_SESSION_LIMITS or DEFAULT_MIN_PLAN_QUOTA_PERCENT value.
    */
   voice?: {
     model?: string;
@@ -61,6 +67,13 @@ export interface CompanionConfig {
     delegationModel?: string;
     /** The text model that summarizes what an agent did, for announcements. */
     summaryModel?: string;
+    /** The model of the Codex thread the plan engine hands requests and tool calls to. */
+    codexModel?: string;
+    codexReasoningEffort?: string;
+    /** Below this share of the plan's quota left (0 to 100), sessions use the API key. */
+    minPlanQuotaPercent?: number;
+    /** Replaces the tested Codex versions. Only add one after a voice session works on it. */
+    acceptedCodexVersions?: string[];
     idleMinutes?: number;
     idleMinutesWhileTasksRun?: number;
     dailyBudgetUsd?: number;

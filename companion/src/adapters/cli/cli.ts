@@ -12,7 +12,13 @@ import type { VoiceEngine } from "../../ports/voiceEngine.ts";
 import { listDevices, revokeDevice } from "./devices.ts";
 import { HiddenLineEditor } from "./hiddenLineEditor.ts";
 import { runPair } from "./pair.ts";
-import { runServe, type SummarizerSettings, type VoiceEngineSettings } from "./serve.ts";
+import {
+  type CodexVoice,
+  type CodexVoiceSettings,
+  runServe,
+  type SummarizerSettings,
+  type VoiceEngineSettings,
+} from "./serve.ts";
 import { runSetup } from "./setup.ts";
 import { runStatus } from "./status.ts";
 
@@ -21,6 +27,7 @@ export interface CliDependencies {
   t3: T3Connector;
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
+  codexVoice(settings: CodexVoiceSettings): CodexVoice;
   summarizer(settings: SummarizerSettings): Summarizer;
   pushSender(log: (line: string) => void): PushSender;
   /** main.ts plugs the SQLite registry in here. */
@@ -66,6 +73,7 @@ async function dispatch(
     t3,
     startServer,
     voiceEngine,
+    codexVoice,
     summarizer,
     pushSender,
     openTaskRegistry,
@@ -95,6 +103,7 @@ async function dispatch(
         t3,
         startServer,
         voiceEngine,
+        codexVoice,
         summarizer,
         pushSender,
         openTaskRegistry,

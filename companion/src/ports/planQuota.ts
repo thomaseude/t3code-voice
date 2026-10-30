@@ -17,7 +17,7 @@ export interface PlanQuota {
   read(): Promise<PlanQuotaReading>;
 }
 
-/** The quota could not be read. The message holds no secret. */
+/** The quota could not be read. The message holds no secret and ends without a period. */
 export class PlanQuotaError extends Error {
   constructor(message: string) {
     super(message);

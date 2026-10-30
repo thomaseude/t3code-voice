@@ -14,11 +14,13 @@ import type { ApiServerOptions, RunningApiServer } from "../../ports/apiServer.t
 import type { Clock } from "../../ports/clock.ts";
 import {
   type ConfigStore,
+  DEFAULT_MIN_PLAN_QUOTA_PERCENT,
   DEFAULT_SERVER_HOST,
   DEFAULT_SERVER_PORT,
   DEFAULT_SESSION_LIMITS,
   DEFAULT_VOICE,
 } from "../../ports/configStore.ts";
+import type { PlanQuota } from "../../ports/planQuota.ts";
 import type { PushSender } from "../../ports/pushSender.ts";
 import type { Summarizer } from "../../ports/summarizer.ts";
 import type { T3Backend, T3Connector } from "../../ports/t3Backend.ts";
@@ -34,6 +36,21 @@ export interface VoiceEngineSettings {
   delegationModel: string;
 }
 
+/** What the Codex voice engine (on the ChatGPT plan) is built with. */
+export interface CodexVoiceSettings {
+  /** The model of the Codex thread. */
+  model: string;
+  reasoningEffort: string;
+  /** Replaces the adapter's tested Codex versions when set. */
+  acceptedVersions?: string[];
+}
+
+/** The Codex voice engine and the quota of the plan it draws from. */
+export interface CodexVoice {
+  engine: VoiceEngine;
+  quota: PlanQuota;
+}
+
 /** What the summarizer is built with. `apiKey` is a secret: never print it. */
 export interface SummarizerSettings {
   apiKey: string;
@@ -47,6 +64,8 @@ export interface ServeOptions {
   startServer(options: ApiServerOptions): Promise<RunningApiServer>;
   /** main.ts plugs the GPT-Live adapter in here. */
   voiceEngine(settings: VoiceEngineSettings): VoiceEngine;
+  /** main.ts plugs the Codex voice adapter in here. */
+  codexVoice(settings: CodexVoiceSettings): CodexVoice;
   /** main.ts plugs the OpenAI summarizer in here. */
   summarizer(settings: SummarizerSettings): Summarizer;
   /** main.ts plugs the push adapter in here; `log` writes to the service's log. */
@@ -67,6 +86,7 @@ export async function runServe({
   t3,
   startServer,
   voiceEngine,
+  codexVoice,
   summarizer,
   pushSender,
   openTaskRegistry,
@@ -93,7 +113,16 @@ export async function runServe({
   const state = new ShellState();
   let connected = true;
   const shell = () => (connected && state.hasSnapshot ? state : null);
-  const { model, voice, delegationModel, summaryModel } = { ...DEFAULT_VOICE, ...config.voice };
+  const {
+    model,
+    voice,
+    delegationModel,
+    summaryModel,
+    codexModel,
+    codexReasoningEffort,
+    minPlanQuotaPercent = DEFAULT_MIN_PLAN_QUOTA_PERCENT,
+    acceptedCodexVersions,
+  } = { ...DEFAULT_VOICE, ...config.voice };
   const { idleMinutes, idleMinutesWhileTasksRun, dailyBudgetUsd } = {
     ...DEFAULT_SESSION_LIMITS,
     ...config.voice,
@@ -126,11 +155,20 @@ export async function runServe({
   });
 
   // Without a key, serve still runs: pairing and GET /activity need no voice engine.
-  if (apiKey === null)
-    out(`No OpenAI key in ${store.location}/openai.env: voice sessions are off.`);
+  if (apiKey === null) {
+    out(
+      `No OpenAI key in ${store.location}/openai.env: voice sessions open on Codex only, while ${minPlanQuotaPercent} % of the plan's quota is left.`,
+    );
+  }
   const engine = apiKey === null ? null : voiceEngine({ apiKey, model, voice, delegationModel });
+  const codex = codexVoice({
+    model: codexModel,
+    reasoningEffort: codexReasoningEffort,
+    ...(acceptedCodexVersions === undefined ? {} : { acceptedVersions: acceptedCodexVersions }),
+  });
   const voiceSessions = new VoiceSessionManager({
     engine,
+    plan: { engine: codex.engine, quota: codex.quota, minPercentLeft: minPlanQuotaPercent },
     shell,
     tasks: new VoiceTasks({ backend, registry, shell, summaries, clock, newId, log: out }),
     announcements: queue,

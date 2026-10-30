@@ -4,6 +4,10 @@
 
 import { join } from "node:path";
 import { runCli } from "./adapters/cli/cli.ts";
+import { startCodexAppServer } from "./adapters/codex-live/appServer.ts";
+import { CodexLiveEngine } from "./adapters/codex-live/codexLiveEngine.ts";
+import { CodexPlanQuota } from "./adapters/codex-live/codexPlanQuota.ts";
+import { DEFAULT_CODEX_VERSIONS } from "./adapters/codex-live/compatibility.ts";
 import { defaultConfigDir, FileConfigStore } from "./adapters/config/fileConfigStore.ts";
 import { OpaqueTokenAuth } from "./adapters/device-auth/opaqueTokenAuth.ts";
 import { GptLiveEngine } from "./adapters/gpt-live/gptLiveEngine.ts";
@@ -37,6 +41,18 @@ process.exitCode = await runCli(process.argv.slice(2), {
     startHttpApi({ ...options, auth, devicePairing: new DevicePairing({ store, auth }) }),
   voiceEngine: ({ apiKey, ...settings }) =>
     new GptLiveEngine({ transport: openAiTransport(apiKey), clock: systemClock, ...settings }),
+  // Codex runs on the login of the user the service runs as (`codex login`).
+  codexVoice: ({ model, reasoningEffort, acceptedVersions = DEFAULT_CODEX_VERSIONS }) => {
+    const appServer = { startAppServer: startCodexAppServer, clock: systemClock, acceptedVersions };
+    return {
+      engine: new CodexLiveEngine({
+        ...appServer,
+        threadModel: model,
+        threadReasoningEffort: reasoningEffort,
+      }),
+      quota: new CodexPlanQuota(appServer),
+    };
+  },
   summarizer: ({ apiKey, model }) =>
     new OpenAiSummarizer({ transport: openAiResponsesTransport(apiKey), model }),
   pushSender: (log) => new LogPushSender(log),

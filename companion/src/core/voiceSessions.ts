@@ -213,7 +213,7 @@ export class VoiceSessionManager implements VoiceSessions {
         };
       } catch (error) {
         this.options.log(
-          `t3-voice: the plan engine failed to open a session for device ${deviceId} (${scrubSecrets(messageOf(error))}).`,
+          `t3-voice: the plan engine failed to open a session for device ${deviceId}: ${scrubSecrets(messageOf(error))}`,
         );
       }
     }
