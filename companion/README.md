@@ -4,7 +4,8 @@ The service that runs next to a T3 Code server and lets the T3 Voice iOS app dri
 So far it connects to T3, reports its status, pairs iPhones with a QR code and serves an
 HTTP API that only answers paired devices. See the spec in issue #15.
 
-TypeScript on Node 22.18 or later. One runtime dependency, [`uqr`](https://github.com/unjs/uqr)
+TypeScript on Node 22.18 or later. Voice runs on Codex with a ChatGPT login, or on
+OpenAI's API with a key (see [Voice engines](#voice-engines)). One runtime dependency, [`uqr`](https://github.com/unjs/uqr)
 (no dependencies of its own), draws the pairing QR code; the rest uses Node's built-in
 `fetch` and `WebSocket`.
 
@@ -62,15 +63,16 @@ Routes:
   while the companion reconnects to T3.
 - `POST /sessions` starts a voice conversation. Body `{"sdp": "<WebRTC SDP offer>",
   "timeZone": "Europe/Paris"}` (`timeZone` is optional; it sets what "today" means, and
-  defaults to the server's). The companion sends the offer to GPT-Live with its own OpenAI
-  key and answers `201` with `{"sessionId", "sdp": "<SDP answer>"}` as soon as GPT-Live
-  answers and the companion's control channel is attached. GPT-Live's answer can take up
+  defaults to the server's). The companion picks the voice engine (see
+  [Voice engines](#voice-engines)), sends it the offer, and answers `201` with
+  `{"sessionId", "sdp": "<SDP answer>"}` as soon as the engine answers. On GPT-Live, the
+  companion's control channel must also be attached. The engine's answer can take up
   to 15 s; the attach after it waits 3 s at most. The app applies the answer and does not
   wait for full ICE gathering. A device
   has one session at most: a new `POST /sessions` closes the one it still had. Errors:
-  `400` `invalid_offer`, `403` `budget_reached` (today's sessions cost the daily budget),
-  `502` `voice_engine_failed` (OpenAI refused or cannot be reached), `503`
-  `voice_unavailable` (no OpenAI key).
+  `400` `invalid_offer`, `403` `budget_reached` (today's API sessions cost the daily
+  budget, and Codex cannot be used), `502` `voice_engine_failed` (OpenAI refused or cannot
+  be reached), `503` `voice_unavailable` (no OpenAI key, and Codex cannot be used).
 - `POST /sessions/:id/events` tells the companion about the app's microphone. Body
   `{"type": "mute"}` or `{"type": "unmute"}`. It answers `204`, `400` `invalid_event`, or
   `404` when the device has no session with this id.
@@ -197,13 +199,49 @@ no audio, so muted time counts as silence. 30 s before the
 stop, the assistant says it is about to stop; a word keeps the session open. At the limit,
 it says it stops, and the session closes 5 s later.
 
-The companion records, for each session, the minutes it was open and their estimated cost:
-GPT-Live's $0.05 per minute, silence included. The delegation model's tokens are not
-counted. An open session saves its record every minute. Once today's sessions (the
-server's calendar day) cost 80 % of the daily budget (`voice.dailyBudgetUsd`, default $10),
-each open session hears a warning once, at a gap. At 100 %, the open sessions say so and
-close 5 s later, and `POST /sessions` answers `403` until the next day. A session still
+The companion records, for each session, the engine, the minutes it was open and their
+estimated cost. On the API, the cost is GPT-Live's $0.05 per minute, silence included; the
+delegation model's tokens are not counted. On Codex, the minutes are recorded as
+`plan_quota` minutes, at no cost: they draw from the ChatGPT plan, not from money. An open
+session saves its record every minute.
+
+The daily budget (`voice.dailyBudgetUsd`, default $10) counts API sessions only. Once
+today's API sessions (the server's calendar day) cost 80 % of it, each open API session
+hears a warning once, at a gap. At 100 %, the open API sessions say so and close 5 s later,
+and new sessions open on Codex only: `POST /sessions` answers `403` when Codex cannot be
+used, until the next day. A session on Codex never stops for the budget. A session still
 open after midnight counts against the day it started on.
+
+### Voice engines
+
+Two engines speak with the phone. The companion picks one when a session opens, and the
+session stays on it until it ends:
+
+- **Codex** (`gpt-live-1-codex`), on the ChatGPT login of the user the service runs as. Its
+  minutes draw from the plan's quota, which the coding agents also use. The companion
+  starts one `codex app-server` per session, in an empty temporary folder. The voice model
+  hands each request to an ephemeral Codex thread: read-only sandbox, no shell, approval
+  policy `never`, and the companion's tools as dynamic tools. The thread's final answer is
+  spoken when its turn completes. A tool action takes 4 to 8 s with the default model.
+- **GPT-Live** (`gpt-live-1`), with the OpenAI key in `openai.env`, at $0.05 per minute.
+
+When a session opens, the companion reads the plan's quota (`account/rateLimits/read`, on a
+short-lived `codex app-server`, about 1 s). It takes the lower of the two limits, the 5-hour
+window and the week:
+
+| What the companion finds | Engine |
+|---|---|
+| 20 % or more of the quota left (`voice.minPlanQuotaPercent`) | Codex |
+| Less than 20 % left | GPT-Live |
+| A limit reached, the quota unreadable, no `codex` on the PATH, a Codex version that is not pinned, or Codex fails to open the session | GPT-Live |
+
+The log line of each choice gives the reason, for example
+`t3-voice: no plan engine for device d1: 15 % of the plan's quota is left, under 20 %.`
+Without an OpenAI key, the GPT-Live rows answer `503` `voice_unavailable`.
+
+Codex is a server requirement for voice on the plan: install it (`npm install -g
+@openai/codex`) and log in with your ChatGPT account (`codex login`), as the user the
+service runs as. The Codex voice has no `brise`: it uses Codex's default voice.
 
 - Every request except `POST /pair` needs a device token (`Authorization: Bearer <token>`). Without a valid
   one, the answer is `401` with an empty body. A revoked device is refused on its next
@@ -233,6 +271,9 @@ Settings in `config.json`, all optional:
     "voice": "brise",
     "delegationModel": "gpt-5.6-terra",
     "summaryModel": "gpt-5.4-mini",
+    "codexModel": "gpt-6.1-terra",
+    "codexReasoningEffort": "low",
+    "minPlanQuotaPercent": 20,
     "idleMinutes": 3,
     "idleMinutesWhileTasksRun": 20,
     "dailyBudgetUsd": 10
@@ -240,7 +281,9 @@ Settings in `config.json`, all optional:
 }
 ```
 
-`voice` sets the GPT-Live session. `delegationModel` is the Responses model GPT-Live hands
+`voice` sets the voice engines. `codexModel` and `codexReasoningEffort` set the Codex thread
+that the Codex engine hands requests and tool calls to. `minPlanQuotaPercent` is the share
+of the plan's quota (0 to 100) below which sessions open on GPT-Live. `delegationModel` is the Responses model GPT-Live hands
 the user's requests to; it calls the companion's tools by name. It is billed per token, on
 top of GPT-Live's $0.05 per minute.
 
@@ -266,7 +309,7 @@ proxy counts as one IP, and the companion logs a warning on the first proxied re
 ```sh
 cd companion
 mkdir -p ~/.config/systemd/user
-sed -e "s|@NODE@|$(command -v node)|" -e "s|@MAIN@|$PWD/dist/main.js|" \
+sed -e "s|@NODE@|$(command -v node)|" -e "s|@MAIN@|$PWD/dist/main.js|" -e "s|@PATH@|$PATH|" \
   deploy/t3-voice.service > ~/.config/systemd/user/t3-voice.service
 systemctl --user daemon-reload
 systemctl --user enable --now t3-voice
@@ -274,8 +317,9 @@ sudo loginctl enable-linger "$USER"   # start at boot, without a login session
 journalctl --user -u t3-voice -f      # logs
 ```
 
-The unit runs the `node` that was on your PATH when you ran `sed`. After a Node upgrade (with
-nvm, for example), run the `sed` line again, then `systemctl --user daemon-reload` and
+The unit runs the `node` that was on your PATH when you ran `sed`, with that PATH, so the
+companion finds `codex` there. After a Node upgrade (with nvm, for example), run the `sed`
+line again, then `systemctl --user daemon-reload` and
 `systemctl --user restart t3-voice`.
 
 ### Publish it over HTTPS
@@ -336,13 +380,13 @@ open, and prints the `chmod` command that fixes it.
 
 | File | Content |
 |---|---|
-| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`), `idleMinutes` (default 3), `idleMinutesWhileTasksRun` (default 20), `dailyBudgetUsd` (default 10) |
+| `config.json` | T3 URL, optional `t3.acceptedServerVersions`, `server` settings, and optional `voice` settings: `model` (default `gpt-live-1`), `voice` (default `brise`), `delegationModel` (the Responses model GPT-Live hands requests and tool calls to, default `gpt-5.6-terra`), `summaryModel` (the text model that summarizes finished tasks, default `gpt-5.4-mini`), `codexModel` (default `gpt-6.1-terra`), `codexReasoningEffort` (default `low`), `minPlanQuotaPercent` (default 20), `acceptedCodexVersions` (replaces the pinned Codex versions), `idleMinutes` (default 3), `idleMinutesWhileTasksRun` (default 20), `dailyBudgetUsd` (default 10) |
 | `t3-pairing.json` | T3 token (secret), the URL of the server that issued it, scopes, expiry |
 | `devices.json` | Paired iPhones: id, name, SHA-256 of the device token (and of a replacement not used yet), SHA-256 of the pairing code it used, dates. Never a token itself. Only `serve` writes it |
 | `revoked/<device id>.json` | One file per `t3-voice devices revoke`: the date. Only the CLI writes them. A damaged file still revokes its device |
 | `pairing-windows/<SHA-256 of the code>.json` | While `t3-voice pair` runs: the window's expiry. Never the code itself. Only `pair` writes them; each `pair` touches only its own |
-| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. The usage of each voice session: engine, day, start, minutes, estimated cost. Only `serve` opens it |
-| `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs but voice sessions are off |
+| `tasks.sqlite` | The followed tasks: thread id, project id, spoken name, origin (`voice` or `followed`), the last event announced (so none is told twice), and the summary of each finished run of a task, until the task is unfollowed. The usage of each voice session: engine, billing (`usd` or `plan_quota`), day, start, minutes, estimated cost. Only `serve` opens it |
+| `openai.env` | OpenAI key (secret): a line `OPENAI_API_KEY=sk-...`. Without it, `serve` runs, and voice sessions open on Codex only |
 
 Secrets are never printed or logged.
 
@@ -368,6 +412,26 @@ To support a new T3 version, once T3 has installed it in `~/.t3/runtime/versions
 To unblock one machine before a release, list the versions in `t3.acceptedServerVersions` in
 its `config.json`. The list replaces the pinned versions, so also list the ones still in use.
 
+## Supported Codex versions (fail closed)
+
+Codex's `thread/realtime/*` API is experimental: it changed between Codex 0.156 and 0.165.
+Each time the companion starts a `codex app-server`, it reads the Codex version (from the
+`userAgent` that `initialize` returns). It uses Codex only when the version is in
+`DEFAULT_CODEX_VERSIONS` (`src/adapters/codex-live/compatibility.ts`, currently `0.163.0`).
+Otherwise sessions open on GPT-Live. A version range is never accepted.
+
+To support a new Codex version:
+
+1. Add the version to `DEFAULT_CODEX_VERSIONS`.
+2. Open a session from the iPhone: it must open, the assistant must speak, and a tool action
+   with a spoken "oui" must run. Codex's log (`~/.codex/logs_2.sqlite`) must show the call to
+   `chatgpt.com/backend-api/codex/realtime/calls`.
+3. Keep the version if all of this works.
+
+No automated test runs the real Codex, because a session draws from the plan's quota. To
+unblock one machine before a release, list the versions in `voice.acceptedCodexVersions` in
+its `config.json`. The list replaces the pinned versions.
+
 ## Code map
 
 Hexagonal: the core and the CLI only know the ports; adapters implement them; `main.ts` is
@@ -382,7 +446,9 @@ src/
     deviceAuth.ts            DeviceAuth: which device a token belongs to; issuing tokens
     apiServer.ts             what `serve` needs to start and stop the HTTP API; activity;
                              voice sessions as the API opens and ends them
-    voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to
+    voiceEngine.ts           VoiceEngine: the speech model the phone streams audio to,
+                             billed in dollars or to a ChatGPT plan
+    planQuota.ts             PlanQuota: what is left of the ChatGPT plan's quota
     taskRegistry.ts          TaskRegistry: followed tasks, what was announced, summaries,
                              usage of voice sessions
     summarizer.ts            Summarizer: the text model that tells what an agent did
@@ -394,8 +460,10 @@ src/
     pairing.ts               pairing window, one-time codes, global limit on wrong codes
     awareness.ts             T3's awareness rule: running, finished or waiting for the user
     activity.ts              the running / finished list of GET /activity
-    voiceSessions.ts         one voice session per device; answers the voice model's tools;
-                             stops after a silence or at the daily budget; records usage
+    voiceSessions.ts         one voice session per device, on the engine picked when it
+                             opens; answers the voice model's tools; stops after a silence
+                             or at the daily budget; records usage
+    engineChoice.ts          whether the plan's quota lets a session open on Codex
     voiceConversation.ts     French instructions and tool definitions for the voice model
     voiceTasks.ts            the task tools: start, message, follow, details, cancel
     spokenNames.ts           short French names for tasks, and finding a task by name
@@ -415,6 +483,8 @@ src/
     http/                    the HTTP API: token check and rate limits on every route
     gpt-live/                VoiceEngine on OpenAI GPT-Live: session creation with the
                              phone's offer, control channel for tool calls and speech
+    codex-live/              VoiceEngine and PlanQuota on `codex app-server`: pinned
+                             version check, realtime over WebRTC, the Codex thread's tools
     task-registry/           TaskRegistry on SQLite (tasks.sqlite, node:sqlite)
     openai-summarizer/       Summarizer on OpenAI's Responses API
     log-push/                PushSender that only logs, until ntfy

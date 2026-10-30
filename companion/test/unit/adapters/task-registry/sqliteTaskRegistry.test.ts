@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, test } from "node:test";
 import { SqliteTaskRegistry } from "../../../../src/adapters/task-registry/sqliteTaskRegistry.ts";
 import { ConfigError } from "../../../../src/ports/configStore.ts";
+import type { UsageRecord } from "../../../../src/ports/taskRegistry.ts";
 import { followedTask } from "../../builders.ts";
 
 async function privateDir() {
@@ -89,9 +90,10 @@ describe("SQLite task registry", () => {
   test("a database written before the long summary was dropped keeps its short summaries", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
     SqliteTaskRegistry.open(path).close();
-    // The schema as it was then: version 3, with a "long" column.
+    // The schema as it was then: version 3, with a "long" column and no "billing" column.
     const db = new DatabaseSync(path);
-    db.exec(`DROP TABLE task_summaries;
+    db.exec(`ALTER TABLE usage_records DROP COLUMN billing;
+      DROP TABLE task_summaries;
       CREATE TABLE task_summaries (
         thread_id TEXT NOT NULL,
         event_key TEXT NOT NULL,
@@ -137,9 +139,10 @@ describe("SQLite task registry", () => {
   test("usage records are kept per day, and saving a session again replaces its record", async () => {
     const path = join(await privateDir(), "tasks.sqlite");
     const first = SqliteTaskRegistry.open(path);
-    const record = {
+    const record: UsageRecord = {
       sessionId: "s1",
       engine: "gpt-live-1",
+      billing: "usd",
       day: "2026-10-26",
       startedAt: "2026-10-26T10:00:00.000Z",
       minutes: 1,
@@ -157,6 +160,39 @@ describe("SQLite task registry", () => {
     ]);
     assert.equal(second.usageOn("2026-10-25").length, 1);
     second.close();
+  });
+
+  test("a usage record keeps whether its minutes were billed in dollars or to the plan", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    const registry = SqliteTaskRegistry.open(path);
+    const record: UsageRecord = {
+      sessionId: "s1",
+      engine: "gpt-live-1-codex",
+      billing: "plan_quota",
+      day: "2026-10-26",
+      startedAt: "2026-10-26T10:00:00.000Z",
+      minutes: 3,
+      estimatedCostUsd: 0,
+    };
+    registry.saveUsage(record);
+    assert.deepEqual(registry.usageOn("2026-10-26"), [record]);
+    registry.close();
+  });
+
+  test("usage records saved before plan engines existed were billed in dollars", async () => {
+    const path = join(await privateDir(), "tasks.sqlite");
+    SqliteTaskRegistry.open(path).close();
+    // As the registry of #39 left it: four migrations, no "billing" column.
+    const db = new DatabaseSync(path);
+    db.exec(`ALTER TABLE usage_records DROP COLUMN billing;
+      INSERT INTO usage_records (session_id, engine, day, started_at, minutes, estimated_cost_usd)
+      VALUES ('s0', 'gpt-live-1', '2026-10-25', '2026-10-25T10:00:00.000Z', 2, 0.1);
+      PRAGMA user_version = 4;`);
+    db.close();
+
+    const registry = SqliteTaskRegistry.open(path);
+    assert.equal(registry.usageOn("2026-10-25")[0]?.billing, "usd");
+    registry.close();
   });
 
   test("a registry made before usage records gets their table, and keeps its tasks", async () => {

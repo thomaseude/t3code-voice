@@ -44,10 +44,17 @@ export interface VoiceSession {
   close(): Promise<void>;
 }
 
+/**
+ * Who pays for the minutes: the OpenAI API key in dollars, or the quota of a ChatGPT plan
+ * (no money leaves, and the daily dollar budget does not count them).
+ */
+export type VoiceBilling = "usd" | "plan_quota";
+
 export interface VoiceEngine {
   /** The model sessions run on, for the usage records. */
   readonly model: string;
-  /** What one minute of open session costs, in US dollars, silence included. */
+  readonly billing: VoiceBilling;
+  /** What one minute of open session costs, in US dollars, silence included. 0 on a plan. */
   readonly usdPerMinute: number;
   /** Throws VoiceEngineError when the engine refuses or cannot be reached. */
   openSession(

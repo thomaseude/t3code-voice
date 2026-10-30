@@ -11,20 +11,35 @@ import type {
 } from "../ports/apiServer.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { SessionLimits } from "../ports/configStore.ts";
+import type { PlanQuota } from "../ports/planQuota.ts";
 import type { TaskRegistry, UsageRecord } from "../ports/taskRegistry.ts";
 import type { VoiceEngine, VoiceEvent, VoiceSession } from "../ports/voiceEngine.ts";
 import { allActivity, finishedSince24Hours } from "./activity.ts";
 import type { AnnouncementQueue } from "./announcementQueue.ts";
 import { awarenessOf } from "./awareness.ts";
 import { Confirmations } from "./confirmations.ts";
+import { planQuotaRefusal } from "./engineChoice.ts";
 import { errorKind, randomSecret, scrubSecrets } from "./secrets.ts";
 import type { ShellState } from "./shellState.ts";
 import { VOICE_TOOLS, voiceInstructions } from "./voiceConversation.ts";
 import type { ToolOutcome, Undo, VoiceTasks } from "./voiceTasks.ts";
 
+/** A voice engine that draws from a plan's quota instead of the API key (#56). */
+export interface PlanVoice {
+  engine: VoiceEngine;
+  quota: PlanQuota;
+  /** Below this share of the quota left (0 to 100), sessions open on the API engine. */
+  minPercentLeft: number;
+}
+
 export interface VoiceSessionManagerOptions {
-  /** Null when no engine is configured (no OpenAI key): every open answers "unavailable". */
+  /**
+   * The engine billed to the OpenAI API key. Null when no key is set up: sessions then
+   * open on the plan engine only, and answer "unavailable" when it cannot be used.
+   */
   engine: VoiceEngine | null;
+  /** Tried first when a session opens, while enough of its quota is left. */
+  plan?: PlanVoice;
   /** The current T3 state, or null while the companion is not connected to T3. */
   shell(): ShellState | null;
   /** The tools that start and steer T3 tasks. */
@@ -164,42 +179,65 @@ export class VoiceSessionManager implements VoiceSessions {
   }
 
   private async openNow(deviceId: string, request: OpenSessionRequest): Promise<OpenSessionResult> {
-    const engine = this.options.engine;
-    if (engine === null || this.stopping) return { status: "unavailable" };
+    const { engine: apiEngine, plan } = this.options;
+    if ((apiEngine === null && plan === undefined) || this.stopping) {
+      return { status: "unavailable" };
+    }
     // One session per device: a new start (after an app crash, say) replaces the old one,
     // which would otherwise keep costing until it ends on its own.
     const previous = this.byDevice.get(deviceId);
     if (previous !== undefined) await this.end(previous);
-    if (this.spentToday() >= this.options.limits.dailyBudgetUsd) {
-      this.options.log(`t3-voice: the daily voice budget is reached; no session for ${deviceId}.`);
-      return { status: "budget_reached" };
-    }
 
     const timeZone =
       request.timeZone !== null && isTimeZone(request.timeZone)
         ? request.timeZone
         : serverTimeZone();
-    // Events can only arrive once the engine answered, so `session` is set by then.
+    const voiceRequest = {
+      sdpOffer: request.sdpOffer,
+      instructions: voiceInstructions(this.projectNames()),
+      tools: VOICE_TOOLS,
+    };
+    // Events can only arrive once an engine answered, so `session` is set by then.
     let session: ActiveSession | null = null;
-    let engineSession: VoiceSession;
-    try {
-      engineSession = await engine.openSession(
-        {
-          sdpOffer: request.sdpOffer,
-          instructions: voiceInstructions(this.projectNames()),
-          tools: VOICE_TOOLS,
-        },
-        (event) => {
-          if (session !== null) this.onEvent(session, event);
-        },
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.options.log(
-        `t3-voice: voice session for device ${deviceId} failed to open: ${scrubSecrets(message)}`,
-      );
-      return { status: "failed" };
+    const onEvent = (event: VoiceEvent) => {
+      if (session !== null) this.onEvent(session, event);
+    };
+
+    // The engine is picked once, here: an open session stays on its engine.
+    let chosen: { engine: VoiceEngine; engineSession: VoiceSession } | null = null;
+    if (plan !== undefined && (await this.planAllows(deviceId, plan))) {
+      try {
+        chosen = {
+          engine: plan.engine,
+          engineSession: await plan.engine.openSession(voiceRequest, onEvent),
+        };
+      } catch (error) {
+        this.options.log(
+          `t3-voice: the plan engine failed to open a session for device ${deviceId}: ${scrubSecrets(messageOf(error))}`,
+        );
+      }
     }
+    if (chosen === null) {
+      if (apiEngine === null) return { status: "unavailable" };
+      if (this.spentToday() >= this.options.limits.dailyBudgetUsd) {
+        this.options.log(
+          `t3-voice: the daily voice budget is reached; no session for ${deviceId}.`,
+        );
+        return { status: "budget_reached" };
+      }
+      try {
+        chosen = {
+          engine: apiEngine,
+          engineSession: await apiEngine.openSession(voiceRequest, onEvent),
+        };
+      } catch (error) {
+        this.options.log(
+          `t3-voice: voice session for device ${deviceId} failed to open: ${scrubSecrets(messageOf(error))}`,
+        );
+        return { status: "failed" };
+      }
+    }
+    const { engine, engineSession } = chosen;
     const id = randomSecret(16);
     const openedAt = this.options.clock.now();
     const opened: ActiveSession = {
@@ -231,7 +269,7 @@ export class VoiceSessionManager implements VoiceSessions {
       timeZone,
     });
     this.saveUsage(opened);
-    this.options.log(`t3-voice: voice session opened for device ${deviceId}.`);
+    this.options.log(`t3-voice: voice session opened for device ${deviceId} on ${engine.model}.`);
     this.watchRevocations();
     this.watchLimits();
     return { status: "opened", sessionId: opened.id, sdpAnswer: engineSession.sdpAnswer };
@@ -247,6 +285,20 @@ export class VoiceSessionManager implements VoiceSessions {
     this.options.announcements.closeSession(session.id);
     session.confirmations.close();
     if (this.byDevice.get(session.deviceId) === session) this.byDevice.delete(session.deviceId);
+  }
+
+  /** Whether the plan's quota lets this session open on the plan engine. */
+  private async planAllows(deviceId: string, plan: PlanVoice): Promise<boolean> {
+    let refusal: string | null;
+    try {
+      refusal = planQuotaRefusal(await plan.quota.read(), plan.minPercentLeft);
+    } catch (error) {
+      refusal = `the quota is unreadable: ${scrubSecrets(messageOf(error))}`;
+    }
+    if (refusal !== null) {
+      this.options.log(`t3-voice: no plan engine for device ${deviceId}: ${refusal}.`);
+    }
+    return refusal === null;
   }
 
   /** While a session is open, checks every 30 s that no open session's device was revoked. */
@@ -298,6 +350,11 @@ export class VoiceSessionManager implements VoiceSessions {
     const today = this.dayOf(now);
     const silenceLimitMs = this.silenceLimitMs();
     for (const session of sessions) {
+      // A session on a plan spends no money: only the silence stops it.
+      if (session.engine.billing !== "usd") {
+        this.checkSilence(session, silenceLimitMs);
+        continue;
+      }
       // A session still open after midnight also counts against the day it started on.
       const spent = Math.max(this.spentOn(today), this.spentOn(session.day));
       if (spent >= budget) {
@@ -422,8 +479,12 @@ export class VoiceSessionManager implements VoiceSessions {
       this.saveUsage(session);
       const { minutes, estimatedCostUsd } = usageOf(session, this.options.clock.now());
       const budget = this.options.limits.dailyBudgetUsd;
+      const cost =
+        session.engine.billing === "usd"
+          ? ` (~$${estimatedCostUsd.toFixed(2)}; today ~$${this.spentToday().toFixed(2)} of the $${budget.toFixed(2)} budget)`
+          : " on the plan's quota";
       this.options.log(
-        `t3-voice: voice session of device ${session.deviceId} ${event.reason === "failed" ? "failed" : "ended"} after ${minutes.toFixed(1)} min (~$${estimatedCostUsd.toFixed(2)}; today ~$${this.spentToday().toFixed(2)} of the $${budget.toFixed(2)} budget).`,
+        `t3-voice: voice session of device ${session.deviceId} ${event.reason === "failed" ? "failed" : "ended"} after ${minutes.toFixed(1)} min${cost}.`,
       );
       return;
     }
@@ -592,11 +653,16 @@ export class VoiceSessionManager implements VoiceSessions {
   }
 }
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function usageOf(session: ActiveSession, now: number): UsageRecord {
   const minutes = (now - session.openedAt) / MINUTE_MS;
   return {
     sessionId: session.id,
     engine: session.engine.model,
+    billing: session.engine.billing,
     day: session.day,
     startedAt: new Date(session.openedAt).toISOString(),
     minutes,
