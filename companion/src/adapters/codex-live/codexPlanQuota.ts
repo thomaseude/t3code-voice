@@ -27,7 +27,11 @@ export class CodexPlanQuota implements PlanQuota {
         ANSWER_TIMEOUT_MS,
         rpc.request("account/rateLimits/read", { excludeResetCreditDetails: true }),
         "codex did not return the quota in time",
-      );
+      ).catch((error) => {
+        // Codex starts without a login, then refuses this read: its error only has a code.
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message}; is \`codex login\` done for this user?`);
+      });
       return readingOf(limits);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -73,6 +73,16 @@ describe("reading the plan's quota from Codex", () => {
     assert.equal(rpc.closed, true);
   });
 
+  test("a refused read points the operator to codex login", async () => {
+    const { rpc, quota } = setup();
+    rpc.limits = new Error("codex answered error -32600");
+    await assert.rejects(quota.read(), (error: Error) => {
+      assert.match(error.message, /codex answered error -32600/);
+      assert.match(error.message, /is `codex login` done for this user\?/);
+      return true;
+    });
+  });
+
   test("is unreadable when Codex fails to read it, and stops the app-server", async () => {
     const { rpc, quota } = setup();
     rpc.limits = new Error("not logged in");

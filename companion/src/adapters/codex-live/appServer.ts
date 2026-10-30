@@ -60,9 +60,10 @@ export function startCodexAppServer(): CodexRpc {
       const call = pending.get(message.id);
       pending.delete(message.id);
       // Codex's error text may quote the request, our prompt included: only its code is kept.
-      if (message.error)
-        call?.reject(new Error(`codex answered error ${Number(message.error.code)}`));
-      else call?.resolve(message.result);
+      if (message.error) {
+        const code = typeof message.error.code === "number" ? message.error.code : "with no code";
+        call?.reject(new Error(`codex answered error ${code}`));
+      } else call?.resolve(message.result);
       return;
     }
     if (typeof message.method === "string") {
