@@ -4,18 +4,20 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { CodexPlanQuota } from "../../../../src/adapters/codex-live/codexPlanQuota.ts";
+import { CodexRefusal } from "../../../../src/adapters/codex-live/codexRpc.ts";
 import { PlanQuotaError } from "../../../../src/ports/planQuota.ts";
-import { FakeClock } from "../../fakePorts.ts";
+import { FakeClock, settle } from "../../fakePorts.ts";
 import { FakeCodexRpc, rateLimits } from "./fakes.ts";
 
 function setup() {
   const rpc = new FakeCodexRpc();
+  const clock = new FakeClock();
   const quota = new CodexPlanQuota({
     startAppServer: () => rpc,
-    clock: new FakeClock(),
+    clock,
     acceptedVersions: ["0.163.0"],
   });
-  return { rpc, quota };
+  return { rpc, clock, quota };
 }
 
 describe("reading the plan's quota from Codex", () => {
@@ -75,10 +77,23 @@ describe("reading the plan's quota from Codex", () => {
 
   test("a refused read points the operator to codex login", async () => {
     const { rpc, quota } = setup();
-    rpc.limits = new Error("codex answered error -32600");
+    rpc.limits = new CodexRefusal(-32600);
     await assert.rejects(quota.read(), (error: Error) => {
       assert.match(error.message, /codex answered error -32600/);
       assert.match(error.message, /is `codex login` done for this user\?/);
+      return true;
+    });
+  });
+
+  test("a read that times out does not point to codex login", async () => {
+    const { rpc, clock, quota } = setup();
+    rpc.limits = new Promise(() => {});
+    const reading = quota.read();
+    await settle();
+    clock.advance(10_000);
+    await assert.rejects(reading, (error: Error) => {
+      assert.match(error.message, /did not return the quota in time/);
+      assert.doesNotMatch(error.message, /codex login/);
       return true;
     });
   });

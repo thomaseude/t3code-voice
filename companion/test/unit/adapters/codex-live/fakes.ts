@@ -46,7 +46,7 @@ export class FakeCodexRpc implements CodexRpc {
   answersThread = true;
   /** While false, `thread/realtime/stop` never answers. */
   answersStop = true;
-  /** What `account/rateLimits/read` answers, or an Error it fails with. */
+  /** What `account/rateLimits/read` answers (a promise that never settles: no answer), or an Error it fails with. */
   limits: WireJson | Error = rateLimits();
   closed = false;
   private notificationListeners: Array<(method: string, params: WireJson) => void> = [];
@@ -68,7 +68,7 @@ export class FakeCodexRpc implements CodexRpc {
         };
       case "account/rateLimits/read":
         if (this.limits instanceof Error) throw this.limits;
-        return this.limits;
+        return await this.limits;
       case "thread/start":
         if (!this.answersThread) return new Promise(() => {});
         return { thread: { id: THREAD } };

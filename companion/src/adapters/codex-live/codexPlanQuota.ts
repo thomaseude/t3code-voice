@@ -5,6 +5,7 @@ import { type PlanQuota, PlanQuotaError, type PlanQuotaReading } from "../../por
 import {
   ANSWER_TIMEOUT_MS,
   type CodexAppServerOptions,
+  CodexRefusal,
   type CodexRpc,
   startPinnedCodex,
   type WireJson,
@@ -27,15 +28,13 @@ export class CodexPlanQuota implements PlanQuota {
         ANSWER_TIMEOUT_MS,
         rpc.request("account/rateLimits/read", { excludeResetCreditDetails: true }),
         "codex did not return the quota in time",
-      ).catch((error) => {
-        // Codex starts without a login, then refuses this read: its error only has a code.
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`${message}; is \`codex login\` done for this user?`);
-      });
+      );
       return readingOf(limits);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new PlanQuotaError(`Codex cannot read the plan's quota: ${message}`);
+      // Codex starts without a login, then refuses the read with a code only.
+      const hint = error instanceof CodexRefusal ? "; is `codex login` done for this user?" : "";
+      throw new PlanQuotaError(`Codex cannot read the plan's quota: ${message}${hint}`);
     } finally {
       rpc?.close();
     }

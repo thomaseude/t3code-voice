@@ -9,7 +9,7 @@ export type WireJson = any;
 
 /** A JSON-RPC connection to one `codex app-server` process. */
 export interface CodexRpc {
-  /** Rejects with a message that holds no text from Codex: it is logged. */
+  /** Rejects with a CodexRefusal when Codex answers an error. No message holds Codex text: it is logged. */
   request(method: string, params: WireJson): Promise<WireJson>;
   /** A notification to Codex, which answers nothing. */
   notify(method: string, params?: WireJson): void;
@@ -20,6 +20,17 @@ export interface CodexRpc {
   ): void;
   onExit(listener: () => void): void;
   close(): void;
+}
+
+/**
+ * Codex answered a request with an error. Only its code is kept: Codex's text may quote the
+ * request, our prompt included, and the message is logged.
+ */
+export class CodexRefusal extends Error {
+  constructor(code: unknown) {
+    super(`codex answered error ${typeof code === "number" ? code : "with no code"}`);
+    this.name = "CodexRefusal";
+  }
 }
 
 export interface CodexAppServerOptions {
