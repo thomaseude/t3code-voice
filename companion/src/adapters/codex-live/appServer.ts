@@ -59,7 +59,9 @@ export function startCodexAppServer(): CodexRpc {
     if (message.id !== undefined) {
       const call = pending.get(message.id);
       pending.delete(message.id);
-      if (message.error) call?.reject(new Error(String(message.error.message ?? "error")));
+      // Codex's error text may quote the request, our prompt included: only its code is kept.
+      if (message.error)
+        call?.reject(new Error(`codex answered error ${Number(message.error.code)}`));
       else call?.resolve(message.result);
       return;
     }

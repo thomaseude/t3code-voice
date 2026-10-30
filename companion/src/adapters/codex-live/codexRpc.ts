@@ -9,6 +9,7 @@ export type WireJson = any;
 
 /** A JSON-RPC connection to one `codex app-server` process. */
 export interface CodexRpc {
+  /** Rejects with a message that holds no text from Codex: it is logged. */
   request(method: string, params: WireJson): Promise<WireJson>;
   /** A notification to Codex, which answers nothing. */
   notify(method: string, params?: WireJson): void;

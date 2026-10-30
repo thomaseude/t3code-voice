@@ -242,7 +242,7 @@ function speakableAnswer(item: WireJson): string | undefined {
   if (item?.type !== "agentMessage" || typeof item.text !== "string") return undefined;
   if (item.phase === "commentary") return undefined;
   const text = item.text.trim();
-  // A long answer is spoken whole too (decided by Thomas in #56).
+  // Every non-empty answer is spoken, however long (decided by Thomas in #56).
   if (text === "") return undefined;
   return text;
 }
