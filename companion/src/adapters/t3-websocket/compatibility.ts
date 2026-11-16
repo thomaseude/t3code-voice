@@ -16,7 +16,7 @@ export interface T3Pin {
 
 export const DEFAULT_T3_PIN: T3Pin = {
   // Add a version only after `T3_VERSION=<version> npm run test:integration` passes.
-  serverVersions: ["0.1.0", "0.1.1"],
+  serverVersions: ["0.1.0", "0.1.1", "0.1.9"],
   // No feature used so far is gated by a capability flag. Add a flag here as soon as one is.
   requiredCapabilities: [],
 };
