@@ -596,7 +596,7 @@ describe("failures and logs", () => {
     await sessions.close("d1", sessionId);
 
     assert.deepEqual(logs, [
-      "t3-voice: voice session opened for device d1.",
+      "t3-voice: voice session opened for device d1 on fake-live.",
       "t3-voice: voice session of device d1 ended after 1.5 min (~$0.07; today ~$0.07 of the $10.00 budget).",
     ]);
   });

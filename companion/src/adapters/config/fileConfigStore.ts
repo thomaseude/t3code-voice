@@ -83,7 +83,14 @@ export class FileConfigStore implements ConfigStore {
         `${path}: "server.publicUrl" must be an https:// address, e.g. "https://voice.example.com".`,
       );
     }
-    for (const field of ["model", "voice", "delegationModel", "summaryModel"] as const) {
+    for (const field of [
+      "model",
+      "voice",
+      "delegationModel",
+      "summaryModel",
+      "codexModel",
+      "codexReasoningEffort",
+    ] as const) {
       const value = data.voice?.[field];
       if (
         value !== undefined &&
@@ -108,6 +115,26 @@ export class FileConfigStore implements ConfigStore {
       throw new ConfigError(
         `${path}: "voice.dailyBudgetUsd" must be an amount in US dollars above 0, e.g. ${DEFAULT_SESSION_LIMITS.dailyBudgetUsd}.`,
       );
+    }
+    const minQuota = data.voice?.minPlanQuotaPercent;
+    if (
+      minQuota !== undefined &&
+      !(Number.isFinite(minQuota) && minQuota >= 0 && minQuota <= 100)
+    ) {
+      throw new ConfigError(
+        `${path}: "voice.minPlanQuotaPercent" must be a percent, 0 to 100, e.g. ${DEFAULT_VOICE.minPlanQuotaPercent}.`,
+      );
+    }
+    const codexVersions = data.voice?.acceptedCodexVersions;
+    if (
+      codexVersions !== undefined &&
+      !(
+        Array.isArray(codexVersions) &&
+        codexVersions.every((version) => typeof version === "string")
+      )
+    ) {
+      // A malformed list must never loosen the version check.
+      throw new ConfigError(`${path}: "voice.acceptedCodexVersions" must be a list of versions.`);
     }
     return data as CompanionConfig;
   }

@@ -4,6 +4,7 @@
 // It also keeps what each voice session cost, for the daily budget.
 
 import type { TaskSummary } from "./summarizer.ts";
+import type { VoiceBilling } from "./voiceEngine.ts";
 
 export interface FollowedTask {
   threadId: string;
@@ -27,13 +28,15 @@ export interface UsageRecord {
   sessionId: string;
   /** The engine's model, e.g. "gpt-live-1". */
   engine: string;
+  /** "plan_quota" minutes cost no money: the daily dollar budget counts "usd" ones only. */
+  billing: VoiceBilling;
   /** The calendar day the session started on, in the server's time zone: "2026-10-26". */
   day: string;
   /** ISO date. */
   startedAt: string;
   /** Minutes the session was open at the engine. */
   minutes: number;
-  /** Minutes × the engine's price. Tokens of the model GPT-Live delegates to are not counted. */
+  /** Minutes × the engine's price, 0 on a plan. Tokens of the model GPT-Live delegates to are not counted. */
   estimatedCostUsd: number;
 }
 

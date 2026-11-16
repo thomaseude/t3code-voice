@@ -483,6 +483,31 @@ describe("OpenAI key and voice settings", () => {
     );
   });
 
+  test("reads the Codex voice settings, and refuses a wrong one", async () => {
+    const dir = await privateDir();
+    const voice = {
+      codexModel: "gpt-6.1-terra",
+      codexReasoningEffort: "low",
+      minPlanQuotaPercent: 20,
+      acceptedCodexVersions: ["0.163.0"],
+    };
+    await new FileConfigStore(dir).saveConfig({ t3: { baseUrl: "http://127.0.0.1:3773" }, voice });
+    assert.deepEqual((await new FileConfigStore(dir).loadConfig())?.voice, voice);
+
+    for (const [field, value, message] of [
+      ["codexModel", "a b", /"voice.codexModel" must be a name, e.g. "gpt-6.1-terra"/],
+      ["codexReasoningEffort", 3, /"voice.codexReasoningEffort" must be a name, e.g. "low"/],
+      ["minPlanQuotaPercent", 120, /"voice.minPlanQuotaPercent" must be a percent, 0 to 100/],
+      ["minPlanQuotaPercent", "20", /"voice.minPlanQuotaPercent" must be a percent, 0 to 100/],
+      // A malformed list must never loosen the version check.
+      ["acceptedCodexVersions", "0.163.0", /"voice.acceptedCodexVersions" must be a list/],
+    ] as const) {
+      const config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { [field]: value } };
+      await writeFile(join(dir, "config.json"), JSON.stringify(config), { mode: 0o600 });
+      await assert.rejects(new FileConfigStore(dir).loadConfig(), message);
+    }
+  });
+
   test("reads the session limits, and refuses one that is not a positive number", async () => {
     const dir = await privateDir();
     const voice = { idleMinutes: 2, idleMinutesWhileTasksRun: 15, dailyBudgetUsd: 4.5 };

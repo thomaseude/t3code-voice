@@ -10,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ConfigError } from "../../ports/configStore.ts";
 import type { TaskSummary } from "../../ports/summarizer.ts";
 import type { FollowedTask, TaskRegistry, UsageRecord } from "../../ports/taskRegistry.ts";
+import type { VoiceBilling } from "../../ports/voiceEngine.ts";
 
 export const TASK_REGISTRY_FILE = "tasks.sqlite";
 
@@ -43,6 +44,9 @@ const MIGRATIONS = [
    CREATE INDEX usage_records_by_day ON usage_records (day)`,
   // Nothing reads the long summary since summarize_thread replaced get_task_details (#39).
   "ALTER TABLE task_summaries DROP COLUMN long",
+  // Minutes on a ChatGPT plan cost no money (#56); the records before were all in dollars.
+  `ALTER TABLE usage_records ADD COLUMN billing TEXT NOT NULL DEFAULT 'usd'
+     CHECK (billing IN ('usd', 'plan_quota'))`,
 ];
 
 interface Row {
@@ -59,6 +63,7 @@ interface Row {
 interface UsageRow {
   session_id: string;
   engine: string;
+  billing: VoiceBilling;
   day: string;
   started_at: string;
   minutes: number;
@@ -154,14 +159,16 @@ export class SqliteTaskRegistry implements TaskRegistry {
   saveUsage(record: UsageRecord): void {
     this.db
       .prepare(
-        `INSERT INTO usage_records (session_id, engine, day, started_at, minutes, estimated_cost_usd)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO usage_records
+           (session_id, engine, billing, day, started_at, minutes, estimated_cost_usd)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (session_id) DO UPDATE
          SET minutes = excluded.minutes, estimated_cost_usd = excluded.estimated_cost_usd`,
       )
       .run(
         record.sessionId,
         record.engine,
+        record.billing,
         record.day,
         record.startedAt,
         record.minutes,
@@ -176,6 +183,7 @@ export class SqliteTaskRegistry implements TaskRegistry {
     return rows.map((row) => ({
       sessionId: row.session_id,
       engine: row.engine,
+      billing: row.billing,
       day: row.day,
       startedAt: row.started_at,
       minutes: row.minutes,

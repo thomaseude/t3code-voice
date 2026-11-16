@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  type CodexVoiceSettings,
   runServe,
   type SummarizerSettings,
   type VoiceEngineSettings,
@@ -10,6 +11,7 @@ import { T3IncompatibleError } from "../../../../src/ports/t3Backend.ts";
 import { followedTask, pairedDevice, project, provider, thread } from "../../builders.ts";
 import {
   FakeClock,
+  FakePlanQuota,
   FakePushSender,
   FakeSummarizer,
   FakeT3Connector,
@@ -45,6 +47,15 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   const lines: string[] = [];
   const engines: VoiceEngineSettings[] = [];
   const engine = new FakeVoiceEngine();
+  const codexSettings: CodexVoiceSettings[] = [];
+  const codexEngine = new FakeVoiceEngine({
+    model: "gpt-live-1-codex",
+    billing: "plan_quota",
+    usdPerMinute: 0,
+  });
+  // Codex is not installed, unless a test says otherwise.
+  const planQuota = new FakePlanQuota();
+  planQuota.reading = "unreadable";
   const summarizers: SummarizerSettings[] = [];
   const push = new FakePushSender();
   const clock = new FakeClock(NOW.getTime());
@@ -69,6 +80,10 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
       engines.push(settings);
       return engine;
     },
+    codexVoice: (settings) => {
+      codexSettings.push(settings);
+      return { engine: codexEngine, quota: planQuota };
+    },
     summarizer: (settings) => {
       summarizers.push(settings);
       return new FakeSummarizer();
@@ -84,6 +99,9 @@ function serve(store: InMemoryConfigStore, t3 = new FakeT3Connector()) {
   return {
     lines,
     engines,
+    codexSettings,
+    codexEngine,
+    planQuota,
     summarizers,
     push,
     clock,
@@ -379,7 +397,64 @@ describe("voice sessions", () => {
     await run.done;
   });
 
-  test("without an OpenAI key, serve still starts, says so, and sessions are unavailable", async () => {
+  test("with enough of the plan's quota left, sessions open on Codex with the configured settings", async () => {
+    const store = setUpStore();
+    store.config = {
+      t3: { baseUrl: "http://127.0.0.1:3773" },
+      voice: { codexModel: "gpt-5.6-sol", acceptedCodexVersions: ["0.164.0"] },
+    };
+    const run = serve(store);
+    run.planQuota.reading = { fiveHourPercentLeft: 50, weekPercentLeft: 50, limitReached: false };
+    await settle();
+
+    const result = await run.started[0]?.voiceSessions.open("d1", {
+      sdpOffer: "v=0",
+      timeZone: null,
+    });
+
+    assert.equal(result?.status, "opened");
+    assert.equal(run.codexEngine.sessions.length, 1);
+    assert.deepEqual(run.codexSettings, [
+      { model: "gpt-5.6-sol", reasoningEffort: "low", acceptedVersions: ["0.164.0"] },
+    ]);
+    run.stop();
+    await run.done;
+  });
+
+  test("the share of the plan's quota sessions leave to the agents comes from the config", async () => {
+    const store = setUpStore();
+    store.config = { t3: { baseUrl: "http://127.0.0.1:3773" }, voice: { minPlanQuotaPercent: 60 } };
+    const run = serve(store);
+    run.planQuota.reading = { fiveHourPercentLeft: 50, weekPercentLeft: 90, limitReached: false };
+    await settle();
+
+    await run.started[0]?.voiceSessions.open("d1", { sdpOffer: "v=0", timeZone: null });
+
+    assert.equal(run.codexEngine.sessions.length, 0);
+    assert.equal(run.engine.sessions.length, 1);
+    run.stop();
+    await run.done;
+  });
+
+  test("without an OpenAI key, sessions open on Codex while the plan's quota allows", async () => {
+    const store = setUpStore();
+    store.openAiKey = null;
+    const run = serve(store);
+    run.planQuota.reading = { fiveHourPercentLeft: 50, weekPercentLeft: 50, limitReached: false };
+    await settle();
+
+    const result = await run.started[0]?.voiceSessions.open("d1", {
+      sdpOffer: "v=0",
+      timeZone: null,
+    });
+
+    assert.equal(result?.status, "opened");
+    assert.equal(run.codexEngine.sessions.length, 1);
+    run.stop();
+    await run.done;
+  });
+
+  test("without an OpenAI key or Codex, serve still starts, says so, and sessions are unavailable", async () => {
     const store = setUpStore();
     store.openAiKey = null;
     const run = serve(store);
@@ -394,7 +469,7 @@ describe("voice sessions", () => {
     assert.deepEqual(run.summarizers, []);
     assert.ok(
       run.lines.includes(
-        "No OpenAI key in /home/me/.config/t3voice/openai.env: voice sessions are off.",
+        "No OpenAI key in /home/me/.config/t3voice/openai.env: voice sessions open on Codex only, while 20 % of the plan's quota is left.",
       ),
     );
     run.stop();

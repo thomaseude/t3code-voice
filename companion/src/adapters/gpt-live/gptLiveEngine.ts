@@ -53,6 +53,7 @@ const USD_PER_MINUTE = 0.05;
 
 export class GptLiveEngine implements VoiceEngine {
   readonly model: string;
+  readonly billing = "usd";
   readonly usdPerMinute = USD_PER_MINUTE;
   private readonly options: GptLiveEngineOptions;
 

@@ -1,10 +1,13 @@
-# systemd user unit for `t3-voice serve`. The README shows how to fill @NODE@ and @MAIN@
-# and install it in ~/.config/systemd/user/.
+# systemd user unit for `t3-voice serve`. The README shows how to fill @NODE@, @MAIN@ and
+# @PATH@ and install it in ~/.config/systemd/user/.
 [Unit]
 Description=t3-voice companion (HTTP API for the T3 Voice app)
 
 [Service]
 ExecStart=@NODE@ @MAIN@ serve
+# The companion starts `codex app-server` for voice on the ChatGPT plan: the PATH must hold
+# `codex` and the `node` it runs with.
+Environment=PATH=@PATH@
 Restart=on-failure
 RestartSec=5
 # Files the companion creates are private to the user.
