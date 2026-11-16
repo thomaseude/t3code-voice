@@ -4,6 +4,8 @@
 
 import { join } from "node:path";
 import { runCli } from "./adapters/cli/cli.ts";
+import { startCodexAppServer } from "./adapters/codex-live/appServer.ts";
+import { CodexLiveEngine } from "./adapters/codex-live/codexLiveEngine.ts";
 import { defaultConfigDir, FileConfigStore } from "./adapters/config/fileConfigStore.ts";
 import { OpaqueTokenAuth } from "./adapters/device-auth/opaqueTokenAuth.ts";
 import { GptLiveEngine } from "./adapters/gpt-live/gptLiveEngine.ts";
@@ -35,8 +37,17 @@ process.exitCode = await runCli(process.argv.slice(2), {
   t3: new WebSocketT3Connector(),
   startServer: (options) =>
     startHttpApi({ ...options, auth, devicePairing: new DevicePairing({ store, auth }) }),
+  // SPIKE (research/codex-voice): T3VOICE_ENGINE=codex picks Codex's voice, on the Codex
+  // login of the user the service runs as.
   voiceEngine: ({ apiKey, ...settings }) =>
-    new GptLiveEngine({ transport: openAiTransport(apiKey), clock: systemClock, ...settings }),
+    process.env.T3VOICE_ENGINE === "codex"
+      ? new CodexLiveEngine({
+          startAppServer: startCodexAppServer,
+          clock: systemClock,
+          brainModel: process.env.T3VOICE_BRAIN_MODEL ?? "gpt-6.1-terra",
+          brainEffort: process.env.T3VOICE_BRAIN_EFFORT ?? "low",
+        })
+      : new GptLiveEngine({ transport: openAiTransport(apiKey), clock: systemClock, ...settings }),
   summarizer: ({ apiKey, model }) =>
     new OpenAiSummarizer({ transport: openAiResponsesTransport(apiKey), model }),
   pushSender: (log) => new LogPushSender(log),
