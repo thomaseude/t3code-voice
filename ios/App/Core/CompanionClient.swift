@@ -33,6 +33,9 @@ enum CompanionError: Error, Equatable {
     case voiceEngineFailed
     /// Today's sessions cost the companion's daily budget: no new one until tomorrow.
     case budgetReached
+    /// A proxy in front of the companion (the Cloudflare tunnel) answered for it: the
+    /// companion is down or out of reach.
+    case unreachable
     case limited(retryAfterSeconds: Int?)
     case unexpected(status: Int)
 }
@@ -73,7 +76,7 @@ struct CompanionClient {
         switch response.status {
         case 200:
             return try JSONDecoder().decode(Activity.self, from: response.body)
-        case 503:
+        case 503 where errorCode(response) == "t3_unavailable":
             throw CompanionError.t3Unavailable
         default:
             throw commonError(response)
@@ -92,9 +95,9 @@ struct CompanionClient {
             return OpenedSession(id: answer.sessionId, answer: answer.sdp, connection: connection)
         case 403:
             throw CompanionError.budgetReached
-        case 502:
+        case 502 where errorCode(response) == "voice_engine_failed":
             throw CompanionError.voiceEngineFailed
-        case 503:
+        case 503 where errorCode(response) == "voice_unavailable":
             throw CompanionError.voiceUnavailable
         default:
             throw commonError(response)
@@ -181,13 +184,25 @@ struct CompanionClient {
         switch response.status {
         case 401: .unauthorized
         case 429: .limited(retryAfterSeconds: retryAfter(response))
+        // Gateway answers: the tunnel is up but nothing answers behind it (530: the tunnel
+        // itself is down). The companion's own 502 and 503 carry an error code, checked above.
+        case 502, 503, 504, 530: .unreachable
         default: .unexpected(status: response.status)
         }
+    }
+
+    /// The `error` field of the companion's JSON answer. A proxy's answer has none.
+    private func errorCode(_ response: HTTPResponse) -> String? {
+        (try? JSONDecoder().decode(ErrorAnswer.self, from: response.body))?.error
     }
 
     private func retryAfter(_ response: HTTPResponse) -> Int? {
         response.headers["retry-after"].flatMap { Int($0) }
     }
+}
+
+private struct ErrorAnswer: Decodable {
+    let error: String
 }
 
 private struct PairAnswer: Decodable {

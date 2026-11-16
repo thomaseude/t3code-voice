@@ -193,6 +193,35 @@ final class CompanionClientTests: XCTestCase {
         }
     }
 
+    func testABadGatewayFromTheTunnelMeansTheCompanionIsDownNotOpenAI() async {
+        let transport = FakeTransport()
+        transport.responses = [response(502, json: "<html>Bad gateway</html>")]
+
+        await assertThrows(CompanionError.unreachable) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testAServiceUnavailableFromTheTunnelMeansTheCompanionIsDown() async {
+        let transport = FakeTransport()
+        transport.responses = [response(503, json: "<html>Service unavailable</html>")]
+
+        await assertThrows(CompanionError.unreachable) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired))
+                .openSession(offer: "v=0", timeZone: "Europe/Paris")
+        }
+    }
+
+    func testActivityThroughATunnelWithNoCompanionBehindIt() async {
+        let transport = FakeTransport()
+        transport.responses = [response(530, json: "error code: 1033")]
+
+        await assertThrows(CompanionError.unreachable) {
+            _ = try await CompanionClient(transport: transport, store: InMemoryConnectionStore(paired)).activity()
+        }
+    }
+
     func testOverTheDailyBudgetNoSessionOpens() async {
         let transport = FakeTransport()
         transport.responses = [response(403, json: #"{"error":"budget_reached"}"#)]
