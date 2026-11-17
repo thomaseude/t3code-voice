@@ -7,7 +7,7 @@
  * the assistant speaks, and a tool action with a spoken "oui" runs. `voice.acceptedCodexVersions`
  * in config.json replaces this list.
  */
-export const DEFAULT_CODEX_VERSIONS = ["0.163.0"];
+export const DEFAULT_CODEX_VERSIONS = ["0.163.0", "0.167.1"];
 
 /**
  * The version in the `userAgent` that `initialize` returns, e.g. "0.163.0" in
