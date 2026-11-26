@@ -2,8 +2,8 @@
 
 **Drive your coding agents by voice, hands-free, with the iPhone locked in your pocket.**
 
-T3 Voice is a voice companion for [T3 Code](https://github.com/pingdotgg/t3code), the
-self-hosted app that runs coding agents (Claude, Codex) on your own server. You put your
+T3 Voice is an **unofficial**, community-made voice companion for
+[T3 Code](https://github.com/pingdotgg/t3code), the app that runs coding agents (Claude, Codex) on your own server. You put your
 AirPods in, press the Action Button, and talk:
 
 > "What is running?"
@@ -93,5 +93,5 @@ need a Mac for the companion: it is plain TypeScript, tested on Linux.
 
 ## License
 
-[MIT](LICENSE). T3 Voice is an independent project, not affiliated with T3 Code or
-ping.gg.
+[MIT](LICENSE). T3 Voice is an unofficial project. It is not affiliated with, or endorsed
+by, T3 Tools, Inc. or the T3 Code team.
