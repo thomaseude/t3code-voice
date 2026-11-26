@@ -1,35 +1,51 @@
 # T3 Voice
 
-**Drive your coding agents by voice, hands-free, with the iPhone locked in your pocket.**
+**Go for a run. Your coding agents keep working, and you manage them by voice.**
 
-T3 Voice is an **unofficial**, community-made voice companion for
-[T3 Code](https://github.com/pingdotgg/t3code), the app that runs coding agents (Claude, Codex) on your own server. You put your
-AirPods in, press the Action Button, and talk:
+You are 5 km into your run. AirPods in, iPhone locked in your pocket. A voice in your ear:
 
-> "What is running?"
-> "Start Claude on my-shop to fix the checkout tests."
-> "Tell it to add a test for the empty cart."
-> "Follow that task."
+> 🎧 "The checkout tests task is finished. Claude fixed the three failing tests, and the
+> whole suite passes now."
 
-While you walk, cook or drive, the assistant tells you out loud when a task you follow
-finishes, fails, or waits for you. You never open T3 and never look at a screen.
+You answer without slowing down:
+
+> 🏃 "Good. Start Codex on the API project to add rate limiting to the login route."
+>
+> 🎧 "Started: Codex, on API, add rate limiting to the login route."
+
+You come home with a clear head and two tasks done.
 
 <!-- Demo video: drag the .mp4 file here in GitHub's web editor. -->
 
-> **Status: early MVP, French only.** It works end to end on the author's own T3 server. The assistant speaks French today, and the app UI is in French. English is
-> the most wanted contribution: see [Contributing](#contributing).
+## Why
+
+Coding agents changed the job. You no longer type the code: you give direction, then you
+wait, then you check. Giving direction does not need a screen. But today the tools keep
+you at the desk: you watch a terminal, in case an agent finishes or asks you something.
+
+T3 Voice cuts that cord. Your agents work on your server. You run, walk the dog, cook or
+drive, and you manage them the way you would manage a team on the phone: you ask what is
+going on, you hand out work, and you hear about it when something is done or blocked.
+
+T3 Voice is an **unofficial**, community-made companion for
+[T3 Code](https://github.com/pingdotgg/t3code), the app that runs coding agents (Claude,
+Codex) on your own server.
+
+> **Status: early MVP, French only.** It works end to end on the author's own T3 server.
+> The assistant speaks French today (the dialogue above is translated), and the app UI is
+> in French. English is the most wanted contribution: see [Contributing](#contributing).
 
 ## What it does today
 
-- **Start a conversation** with the Action Button, Siri, Control Center or the app.
-  Face ID is checked on every start.
-- **Keep talking with the screen locked**, with AirPods or the built-in mic. A Live
-  Activity shows that the mic is on.
+- **Start without looking**: press the Action Button or say "Hey Siri", pass Face ID, talk.
+- **Keep talking with the screen locked**, phone in your pocket, with AirPods or the
+  built-in mic. A Live Activity shows that the mic is on.
 - **Ask about your server**: what runs now, what finished today, your projects, the
   details of a task.
 - **Start and steer tasks**: start Claude or Codex on a project, send a follow-up, stop a
   task after a spoken "yes".
-- **Hear announcements** when a followed task finishes or fails, with a 2–3 sentence summary.
+- **Hear it when it happens**: the assistant tells you in your ear when a followed task
+  finishes or fails, with a 2–3 sentence summary.
 - **Control the cost**: mute, an automatic stop after a silence, and a daily budget.
   Voice runs on your ChatGPT plan (Codex) or on the OpenAI API (GPT-Live) when the plan's
   quota runs low.
