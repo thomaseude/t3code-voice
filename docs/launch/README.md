@@ -7,11 +7,24 @@ author, not a bot, and Hacker News asks for no AI-generated posts or comments.
 **Rewrite each draft in your own words before you post it.** The drafts give the facts and
 the structure. Readers spot generated text, and it costs trust.
 
+## The message
+
+One sentence, the same everywhere: **"Go for a run. Your coding agents keep working, and
+you manage them by voice."**
+
+- Open every post with the scene (out running, AirPods in, phone locked), not with the
+  architecture. The technical part comes second, for those who keep reading.
+- The idea behind it: with agents, the job is to give direction, wait and check. Giving
+  direction does not need a screen.
+- Running is the image. Walking the dog, cooking and driving are the same promise.
+
 ## Before any post
 
 - [ ] PR #61 merged (README, CONTRIBUTING, templates).
-- [ ] A 30–60 s demo video: phone locked in a pocket, AirPods, start a task by voice, hear
-      the "finished" announcement. Add it to the README.
+- [ ] A 30–60 s demo video, **filmed outdoors while you run** (a friend films, or a chest
+      strap): the phone stays in the pocket, you start a task by voice, you hear the
+      "finished" announcement. A screen recording at a desk does not show the idea. Add
+      it to the README.
 - [ ] Turn on the subtitles in the video (the assistant speaks French).
 - [ ] Two hours free after each post to answer the comments.
 

@@ -5,14 +5,19 @@ Rewrite it in your own voice before you publish. Add the demo video at the top. 
 
 ---
 
-# I drive my coding agents by voice, with the iPhone locked in my pocket
+# I go for a run, and my coding agents keep working
 
-I run coding agents, Claude Code and Codex, through [T3 Code](https://github.com/pingdotgg/t3code)
-on my own server. At the desk, it works well. Away from it, it does not: an agent finishes,
-asks a question or needs an approval, and it waits until I am back in front of a screen.
+Five kilometres into a run, a voice in my AirPods says: "The checkout tests task is
+finished. Claude fixed the three failing tests." I answer without slowing down: "Good.
+Start Codex on the API project to add rate limiting." The phone never leaves my pocket.
 
-So I built **T3 Voice**, an unofficial, open-source voice companion. I put my AirPods in,
-press the Action Button, pass Face ID, and talk:
+Coding agents changed my job. I no longer type most of the code: I give direction, I
+wait, I check. Giving direction does not need a screen. But I was still sitting in front
+of a terminal, in case an agent finished or asked me something.
+
+I run my agents, Claude Code and Codex, through [T3 Code](https://github.com/pingdotgg/t3code)
+on my own server. So I built **T3 Voice**, an unofficial, open-source voice companion for
+it. I put my AirPods in, press the Action Button, pass Face ID, and talk:
 
 - "What is running?"
 - "Start Claude on my-shop to fix the checkout tests."
@@ -21,7 +26,7 @@ press the Action Button, pass Face ID, and talk:
 When a task I follow finishes or fails, the assistant tells me out loud, with a summary
 of two or three sentences. I never unlock the phone.
 
-This post is about four problems that were harder than they looked.
+The idea is simple. Four problems behind it were harder than they looked.
 
 ## 1. Talking to an iPhone that is locked
 

@@ -5,16 +5,20 @@ the GitHub repository. Stay two hours to answer. Do not ask anyone to upvote.
 
 ## Title (80 characters max)
 
-Show HN: Drive your coding agents by voice with the iPhone locked in your pocket
+Show HN: I manage my coding agents by voice while I'm out running
 
 ## First comment (post it yourself, right after the submission)
 
-Hi HN, I run coding agents (Claude Code and Codex) through T3 Code, an open-source app,
-on my own server. My problem was everything that happens away from the desk: an agent
-finishes or asks a question while I walk or cook, and it waits until I'm back.
+Hi HN, I wanted to go for a run without my coding agents stopping.
 
-T3 Voice is an unofficial, MIT-licensed voice companion for it. With the iPhone locked
-and AirPods in, I press the Action Button, pass Face ID, and talk: "what's running?",
+With agents (I run Claude Code and Codex through T3 Code, an open-source app, on my own
+server), my job is mostly to give direction, wait, and check. Giving direction doesn't
+need a screen, yet I was sitting in front of a terminal in case an agent finished or
+asked something.
+
+T3 Voice is an unofficial, MIT-licensed voice companion for T3 Code. On a run, with the
+iPhone locked in my pocket and AirPods in, I press the Action Button, pass Face ID, and
+talk: "what's running?",
 "start Claude on my-shop to fix the checkout tests", "tell it to add a test". When a task
 I follow finishes or fails, the assistant says so out loud, with a two-sentence summary.
 

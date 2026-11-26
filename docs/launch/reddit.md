@@ -5,10 +5,11 @@ with the video, and adapt the angle to the subreddit.
 
 ## r/selfhosted (angle: self-hosted, security)
 
-**Title:** I made an open-source voice companion to drive my self-hosted coding agents from a locked iPhone
+**Title:** I go running while my self-hosted coding agents work, and I manage them by voice (open source)
 
 I self-host T3 Code (an app that runs Claude Code / Codex agents on my own box). I wanted
-to drive it hands-free, so I built T3 Voice (unofficial, MIT):
+to leave the desk, go for a run, and still hand out work and hear when it's done. So I
+built T3 Voice (unofficial, MIT). AirPods in, iPhone locked in the pocket. The setup:
 
 - A small Node service runs next to T3 and talks to it on loopback only.
 - The iPhone pairs with a one-time QR code (5-minute window, single-use code), and every
@@ -23,9 +24,9 @@ Happy to answer questions about the setup. Contributions welcome.
 
 ## r/ClaudeAI or r/ChatGPTCoding (angle: agent workflow)
 
-**Title:** I start and follow my Claude/Codex coding tasks by voice while walking — open source
+**Title:** I manage my Claude/Codex agents by voice while I'm out running (open source)
 
-[2–3 lines on the workflow, the example phrases, the announcement when a task finishes,
+[Open with the run: what you said, what you heard back. Then the example phrases, the announcement when a task finishes,
 then the link. Check whether the subreddit has a weekly self-promotion thread.]
 
 ## r/iOSProgramming (angle: iOS engineering)

@@ -5,11 +5,12 @@ showcases if one exists; otherwise ask a moderator where it fits. Attach the dem
 
 ---
 
-Hey all 👋 I built an **unofficial** voice companion for T3 Code, open source (MIT):
+Hey all 👋 I wanted to go for a run and keep my T3 agents working, so I built an
+**unofficial** voice companion for T3 Code, open source (MIT):
 https://github.com/thomaseude/t3code-voice
 
-The idea: drive your T3 agents hands-free, with the iPhone locked in your pocket and
-AirPods in. Press the Action Button (Face ID), then talk:
+AirPods in, iPhone locked in my pocket, and I manage my agents the way I'd manage a team
+on the phone. Press the Action Button (Face ID), then talk:
 - "what's running?" / "what finished today?"
 - "start Claude on <project> to fix the checkout tests"
 - "tell it to add a test" (follow-up in the same thread)
