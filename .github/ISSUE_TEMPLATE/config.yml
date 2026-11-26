@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/thomaseude/t3code-voice/discussions
+    about: Ask a question or discuss an idea before you open an issue.
