@@ -14,7 +14,7 @@ AirPods in, press the Action Button, and talk:
 While you walk, cook or drive, the assistant tells you out loud when a task you follow
 finishes, fails, or waits for you. You never open T3 and never look at a screen.
 
-<!-- Demo video: the link of the uploaded .mp4 goes here. -->
+https://github.com/user-attachments/assets/d106c9c4-7c14-4b84-953e-bb87429b6266
 
 > **Status: early MVP, French only.** It works end to end on the author's own T3 server. The assistant speaks French today, and the app UI is in French. English is
 > the most wanted contribution: see [Contributing](#contributing).
