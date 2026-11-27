@@ -14,9 +14,7 @@ AirPods in, press the Action Button, and talk:
 While you walk, cook or drive, the assistant tells you out loud when a task you follow
 finishes, fails, or waits for you. You never open T3 and never look at a screen.
 
-[![T3 Voice teaser: a developer runs, cooks and vacuums while managing coding agents by voice](docs/media/teaser.gif)](docs/media/teaser.mp4)
-
-*44-second teaser. Click it for the full-quality video with sound.*
+https://github.com/user-attachments/assets/d106c9c4-7c14-4b84-953e-bb87429b6266
 
 > **Status: early MVP, French only.** It works end to end on the author's own T3 server. The assistant speaks French today, and the app UI is in French. English is
 > the most wanted contribution: see [Contributing](#contributing).
