@@ -29,7 +29,9 @@ going on, you hand out work, and you hear about it when something is done or blo
 
 T3 Voice is an **unofficial**, community-made companion for
 [T3 Code](https://github.com/pingdotgg/t3code), the app that runs coding agents (Claude,
-Codex) on your own server.
+Codex) on your own server. It is not made or endorsed by the T3 Code team. The dream is
+that voice becomes a part of T3 Code itself one day: if the team wants this work, it is
+MIT-licensed for that reason.
 
 > **Status: early MVP, French only.** It works end to end on the author's own T3 server.
 > The assistant speaks French today (the dialogue above is translated), and the app UI is
